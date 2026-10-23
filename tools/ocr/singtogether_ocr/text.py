@@ -129,7 +129,8 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
             r = recognize(tiled, ("en-US",), correction=False, custom_words=words, min_side=128)
             if r:
                 best = max(r, key=lambda b: b.conf)
-                return TextBox(_untile(best.text.replace(" ", ""), reps), best.conf, best.x0, best.y0, best.x1, best.y1)
+                first = best.text.split()[0] if best.text.split() else best.text    # 띄어 읽혔으면 첫 조각이 원본
+                return TextBox(_untile(first, reps), best.conf, best.x0, best.y0, best.x1, best.y1)
         return None
 
     root = ocr(main, CHORD_VOCAB, reps=3) or ocr(main, CHORD_VOCAB, reps=5)
