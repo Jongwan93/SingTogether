@@ -4,9 +4,14 @@
 
 ```
 PDF/이미지 → 1 ingest(보정·확대·이진화) → 2 layout(오선·코드띠·가사띠) → 3 engines(멜로디 OMR)
-          → notes(음표 머리·마디줄 좌표) → 4 text(Apple Vision 코드 OCR) → 5 assemble → MusicXML
+          → notes(음표 머리·마디줄 좌표) → 4 text(Apple Vision 코드 OCR) + lyrics(한글 가사 OCR·정렬·제목)
+          → 5 assemble(마디 배정, 오선 위치로 음높이 보정) + key(코드로 조표·박자 추론) → MusicXML
           → 6 singtogether-transpose(Swift) → 7 render(Verovio SVG → rsvg-convert PDF)
 ```
+
+M2(가사): 가사 띠를 Vision(ko+en)으로 읽어 글자 단위 좌표를 얻고, 한글은 글자마다·영어는 붙임표 조각마다 한 음절로 삼아
+x좌표 순서를 지키는 DP로 음표에 짝짓는다. `-`/`_` 멜리스마 표시는 자리 표시자로 음표 하나를 차지한다.
+글줄은 y로 묶어 절(1절, 2절, 영어 줄)을 나누고, 다음 오선의 코드 줄·잡음 줄은 걸러낸다. 제목·작곡자는 첫 오선 위에서 읽는다.
 
 ## 설치
 
@@ -30,8 +35,9 @@ brew install librsvg                     # PDF 출력용 rsvg-convert
 - `--engine homr|oemer|audiveris|claude` (기본 homr). audiveris·claude는 비교용.
   - audiveris: `SINGTOGETHER_AUDIVERIS=/path/Audiveris.app`, 가사 OCR은 `TESSDATA_PREFIX`
   - claude: 로그인된 Claude Code CLI 사용. 모델은 `SINGTOGETHER_CLAUDE_MODEL` (기본 sonnet)
-- `--debug DIR`: 단계별 오버레이 `<이름>-1-ingest.png`, `-2-layout`, `-3-symbols`, `-4-chords`, `-5-assembled`
+- `--debug DIR`: 단계별 오버레이 `<이름>-1-ingest.png`, `-2-layout`, `-3-symbols`, `-4-chords`, `-4-lyrics`, `-5-assembled`
   (오선=파랑, 음표=초록, 코드=주황, 가사=보라, 영역=회색)
+- `--no-chords` / `--no-lyrics`: 코드 / 가사 OCR 생략
 - `--interline PX`: 확대 목표 오선 간격 (기본 24. homr는 폭 ≈1920px 입력에서 가장 좋았다)
 - 출력: `<이름>.musicxml`과 사람이 읽고 고칠 수 있는 `<이름>.txt` (압축 텍스트 형식, 아래)
 
