@@ -1,0 +1,20 @@
+# ./build.sh 결과물
+build/
+
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# tools/ocr (Python)
+.venv*/
+__pycache__/
+*.egg-info/
+tools/ocr/out/
+
+# Example data
+music_scores/
+
+.DS_Store
