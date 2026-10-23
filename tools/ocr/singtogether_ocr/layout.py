@@ -44,10 +44,12 @@ def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     H = page.binary.shape[0]
     systems = []
     for k, s in enumerate(staves):
-        above = (staves[k - 1].bottom + s.top) // 2 if k else 0
-        below = (s.bottom + staves[k + 1].top) // 2 if k + 1 < len(staves) else H
-        chord_band = (max(above, int(s.top - 5 * il)), int(s.top - 0.3 * il))
-        lyric_band = (int(s.bottom + 0.3 * il), min(below, int(s.bottom + 5 * il)))
+        # 코드 기호는 오선 위 0.3–3il 안에 있다. 가사는 그 아래부터 다음 오선의 코드 띠 직전까지 (절이 여럿이면 길다).
+        chord_top = max(staves[k - 1].bottom + int(0.3 * il) if k else 0, int(s.top - 3 * il))
+        chord_band = (chord_top, int(s.top - 0.3 * il))
+        # 가사 띠는 다음 오선 직전까지. 다음 오선의 코드 줄이 섞이는데, 그건 lyrics.read_lyrics가 글줄 단위로 걸러낸다.
+        lyric_bottom = min(int(staves[k + 1].top - 0.3 * il), int(s.bottom + 9 * il)) if k + 1 < len(staves) else min(H, int(s.bottom + 9 * il))
+        lyric_band = (int(s.bottom + 0.3 * il), max(int(s.bottom + 0.3 * il) + int(il), lyric_bottom))
         systems.append(System(s, chord_band, lyric_band))
     if debug_dir:
         img = debug.canvas(page.gray)
@@ -60,18 +62,19 @@ def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     return systems
 
 
-def find_staff_lines(binary: np.ndarray) -> list[int]:
-    """폭의 상당 부분을 가로지르는 검정 행 = 오선. 붙어 있는 행은 한 줄로 합친다."""
+def find_staff_lines(binary: np.ndarray, max_thickness: int = 6) -> list[int]:
+    """폭의 60% 이상을 가로지르는 얇은 검정 행 = 오선. 붙어 있는 행은 한 줄로 합친다.
+    가사 글줄도 폭을 꽤 채우지만 두껍고(글자 높이) 성기므로, 두께 제한과 높은 비율로 걸러낸다."""
     ink = binary < 128
     proj = ink.sum(axis=1)
-    thr = max(proj.max() * 0.3, ink.shape[1] * 0.2)
+    thr = max(proj.max() * 0.5, ink.shape[1] * 0.6)
     groups: list[list[int]] = []
     for y in np.flatnonzero(proj >= thr):
         if groups and y - groups[-1][-1] <= 1:
             groups[-1].append(int(y))
         else:
             groups.append([int(y)])
-    return [int(np.mean(g)) for g in groups]
+    return [int(np.mean(g)) for g in groups if len(g) <= max_thickness]
 
 
 def fit_staves(binary: np.ndarray, lines: list[int], interline: float) -> list[Staff]:
