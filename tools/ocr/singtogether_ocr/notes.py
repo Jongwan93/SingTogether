@@ -61,15 +61,49 @@ def find_noteheads(region: np.ndarray, il: float) -> list[Notehead]:
     filled = _head_blobs(cv2.morphologyEx(ink, cv2.MORPH_OPEN, open_k), il)
     closed = cv2.morphologyEx(cv2.morphologyEx(ink, cv2.MORPH_CLOSE, close_k), cv2.MORPH_OPEN, open_k)
     hollow = []
-    for h in _head_blobs(closed, il):
-        x0, y0 = int(h.x - h.w / 2), int(h.y - h.h / 2)
-        fill = ink[max(0, y0):y0 + h.h, max(0, x0):x0 + h.w].mean()
-        if fill < 0.55 and all(abs(h.x - f.x) > 0.5 * il for f in filled):
+    for h in _head_blobs(closed, il, median_filter=False):   # 닫힘으로 커진 꽉 찬 머리들이 중앙값을 끌어올리므로 크기 범위만 본다
+        inner, ring = hollow_stats(ink, h)
+        if inner < 0.6 and ring > HOLLOW_RING_MIN and has_stem(ink, h, il) \
+                and all(abs(h.x - f.x) > 0.5 * il for f in filled):
             hollow.append(h)
     return sorted(filled + hollow, key=lambda h: h.x)
 
 
-def _head_blobs(mask: np.ndarray, il: float) -> list[Notehead]:
+HOLLOW_RING_MIN = 0.45
+
+
+def hollow_stats(ink: np.ndarray, h: Notehead) -> tuple[float, float]:
+    """속 빈 머리 판정 재료: (가운데 창의 잉크 비율, 그 바깥 고리의 잉크 비율).
+    진짜 2분음표는 가운데가 희고 고리가 검다. 붙임줄·이음줄이 닫힘 연산으로 뭉친 가짜는 고리가 듬성듬성하다."""
+    cx, cy = int(h.x), int(h.y)
+    wx, wy = max(1, int(h.w * 0.2)), max(1, int(h.h * 0.2))
+    x0, y0 = max(0, int(h.x - h.w / 2)), max(0, int(h.y - h.h / 2))
+    box = ink[y0:y0 + h.h, x0:x0 + h.w]
+    core = ink[max(0, cy - wy):cy + wy, max(0, cx - wx):cx + wx]
+    if box.size == 0 or core.size == 0 or box.size == core.size:
+        return 1.0, 0.0
+    inner = float(core.mean())
+    ring = float((box.sum() - core.sum()) / (box.size - core.size))
+    return inner, ring
+
+
+def has_stem(ink: np.ndarray, h: Notehead, il: float) -> bool:
+    """머리의 왼쪽 또는 오른쪽 가장자리에서 위나 아래로 뻗는 세로선(2il 창 안에 1.5il 이상 잉크)이 있으면 기둥.
+    이음줄·붙임줄이 닫힘 연산으로 뭉친 가짜 속 빈 머리를 걸러낸다. (온음표는 기둥이 없어 놓친다)"""
+    H, W = ink.shape
+    cy = int(h.y)
+    # 점(D4/2.)이나 붙임줄이 닫힘 연산으로 머리에 붙어 덩어리가 넓어질 수 있으니 덩어리 폭 전체를 훑는다
+    for x in range(int(h.x - h.w / 2) - 3, int(h.x + h.w / 2) + 4):
+        if not 0 <= x < W:
+            continue
+        for ya, yb in ((cy - int(2.5 * il), cy - int(0.5 * il)), (cy + int(0.5 * il), cy + int(2.5 * il))):
+            seg = ink[max(0, ya):max(0, yb), x]
+            if seg.size and seg.sum() >= 1.5 * il:
+                return True
+    return False
+
+
+def _head_blobs(mask: np.ndarray, il: float, median_filter: bool = True) -> list[Notehead]:
     """머리 크기 범위의 덩어리를 모은 뒤, 중앙값 크기에서 40% 넘게 벗어난 것(조표 조각, 빔 토막)은 버린다."""
     n, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     out = []
@@ -77,7 +111,7 @@ def _head_blobs(mask: np.ndarray, il: float) -> list[Notehead]:
         x, y, w, h, _ = stats[i]
         if 0.8 * il <= w <= 2.4 * il and 0.7 * il <= h <= 1.8 * il and 0.8 <= w / h <= 2.2:
             out.append(Notehead(float(centroids[i][0]), float(centroids[i][1]), int(w), int(h)))
-    if len(out) < 3:
+    if len(out) < 3 or not median_filter:
         return out
     mw, mh = np.median([h.w for h in out]), np.median([h.h for h in out])
     return [h for h in out if abs(h.w - mw) <= 0.4 * mw and abs(h.h - mh) <= 0.4 * mh]
