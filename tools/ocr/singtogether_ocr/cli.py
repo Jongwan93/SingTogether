@@ -1,0 +1,112 @@
+"""singtogether-ocr: 악보 이미지/PDF → MusicXML (+ 압축 텍스트). 선택: 이조, 렌더링, 단계별 오버레이.
+
+    singtogether-ocr input.pdf --out output.musicxml
+    singtogether-ocr score.jpg --engine homr --debug dbg/ --transpose -2 --render
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from . import assemble, engines, ingest, key, layout, notes, text, textfmt
+from .model import Transcription, rekey
+from .musicxml_out import to_musicxml
+
+REPO = Path(__file__).resolve().parents[3]
+
+
+def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
+              chords: bool = True, interline: float = ingest.TARGET_INTERLINE) -> Transcription:
+    """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다."""
+    work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
+    if debug_dir:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+    eng = engines.get(engine_name)
+    merged: Transcription | None = None
+    t0 = time.time()
+    for page in ingest.prepare(src, target_interline=interline, debug_dir=debug_dir):
+        systems = layout.find_systems(page, debug_dir)
+        t = eng.transcribe(page, work, debug_dir)
+        if systems and not t.has_chords:
+            symbols = notes.find_symbols(page, systems, debug_dir)
+            assemble.place_notes(t, systems, symbols)
+            if chords:
+                assemble.attach_chords(t, text.read_chords(page, systems, debug_dir), page.interline)
+                inferred = key.infer_key([n.chord for n in t.notes if n.chord])
+                if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode):
+                    rekey(t, inferred[0], inferred[1])
+            key.infer_time(t)
+            if debug_dir:
+                assemble.overlay(page, t, debug_dir)
+        if merged is None:
+            merged = t
+        else:
+            merged.measures += t.measures
+            merged.has_chords |= t.has_chords
+            merged.has_lyrics |= t.has_lyrics
+    if merged is None:
+        raise RuntimeError("쪽이 없어요")
+    merged.seconds = time.time() - t0
+    return merged
+
+
+def write_outputs(t: Transcription, out: Path) -> tuple[Path, Path]:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(to_musicxml(t))
+    txt = out.with_suffix(".txt")
+    txt.write_text(textfmt.to_text(t))
+    return out, txt
+
+
+def transpose(musicxml: Path, semitones: int) -> Path:
+    """Swift CLI(singtogether-transpose)로 이조본을 만든다."""
+    binary = os.environ.get("SINGTOGETHER_TRANSPOSE") or next(
+        (p for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose") if p.exists()), None)
+    if not binary:
+        raise RuntimeError("singtogether-transpose가 없어요. 저장소 루트에서 ./build.sh 를 먼저 실행하세요")
+    p = subprocess.run([str(binary), str(musicxml), str(semitones)], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.strip())
+    keys, path = p.stdout.strip().splitlines()[:2]
+    print(f"이조: {keys}")
+    return Path(path)
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(prog="singtogether-ocr", description="악보 이미지/PDF → MusicXML")
+    ap.add_argument("input", type=Path)
+    ap.add_argument("--out", type=Path, help="출력 MusicXML (기본: 입력 옆 <이름>.musicxml)")
+    ap.add_argument("--engine", default="homr", choices=engines.NAMES)
+    ap.add_argument("--debug", type=Path, metavar="DIR", help="단계별 오버레이 이미지를 저장할 폴더")
+    ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
+    ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
+    ap.add_argument("--interline", type=float, default=ingest.TARGET_INTERLINE, metavar="PX",
+                    help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
+    ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
+    ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
+    a = ap.parse_args(argv)
+
+    t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline)
+    out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
+    n_chords = sum(1 for n in t.notes if n.chord)
+    print(f"{a.engine}: {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, 음표 {len(t.notes)}, 코드 {n_chords}, {t.seconds:.0f}초")
+    print(f"→ {out}\n→ {txt}")
+
+    targets = [out]
+    if a.transpose:
+        targets.append(transpose(out, a.transpose))
+        print(f"→ {targets[-1]}")
+    if a.render:
+        from .render import render
+        for p in targets:
+            for f in render(p, p.with_suffix("")):
+                print(f"→ {f}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
