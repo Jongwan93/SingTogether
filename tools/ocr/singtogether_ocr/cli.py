@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import assemble, engines, ingest, key, layout, notes, text, textfmt
+from . import assemble, engines, ingest, key, layout, lyrics, notes, text, textfmt
 from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
-              chords: bool = True, interline: float = ingest.TARGET_INTERLINE) -> Transcription:
+              chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True) -> Transcription:
     """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다."""
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
@@ -41,6 +41,10 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode):
                     rekey(t, inferred[0], inferred[1])
             key.infer_time(t)
+            if lyrics_:
+                lyrics.attach_lyrics(t, lyrics.read_lyrics(page, systems, debug_dir), page.interline)
+                if not t.title:
+                    t.title, t.composer = lyrics.read_title(page, systems)
             if debug_dir:
                 assemble.overlay(page, t, debug_dir)
         if merged is None:
@@ -85,16 +89,19 @@ def main(argv=None) -> None:
     ap.add_argument("--debug", type=Path, metavar="DIR", help="단계별 오버레이 이미지를 저장할 폴더")
     ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
     ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
+    ap.add_argument("--no-lyrics", action="store_true", help="가사 OCR 생략")
     ap.add_argument("--interline", type=float, default=ingest.TARGET_INTERLINE, metavar="PX",
                     help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
     ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
     a = ap.parse_args(argv)
 
-    t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline)
+    t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics)
     out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
     n_chords = sum(1 for n in t.notes if n.chord)
-    print(f"{a.engine}: {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, 음표 {len(t.notes)}, 코드 {n_chords}, {t.seconds:.0f}초")
+    n_lyr = sum(1 for n in t.notes if n.lyrics and n.lyrics[0])
+    print(f"{a.engine}: {t.title or '(제목 없음)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, "
+          f"음표 {len(t.notes)}, 코드 {n_chords}, 가사 {n_lyr}음절, {t.seconds:.0f}초")
     print(f"→ {out}\n→ {txt}")
 
     targets = [out]
