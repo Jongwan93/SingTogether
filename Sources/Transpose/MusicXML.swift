@@ -22,7 +22,46 @@ package enum MusicXML {
     }
 
     static func load(_ url: URL) throws -> XMLDocument {
-        try XMLDocument(contentsOf: url, options: [.nodePreserveAll])
+        var data = try Data(contentsOf: url)
+        if let s = String(data: data, encoding: .utf8), s.contains("<elision>") || s.contains("<text>") {
+            data = Data(protectWhitespaceOnlyText(s).utf8)
+        }
+        return try XMLDocument(data: data, options: [.nodePreserveAll])
+    }
+
+    /// Foundation은 공백만 든 텍스트 노드(`<elision> </elision>`, 가사 이음 기호)를 버린다.
+    /// 문자 참조(`&#32;`)로 바꿔 두면 그대로 보존되어 다시 써진다.
+    private static let whitespaceOnlyText = try! NSRegularExpression(
+        pattern: "<(elision|text)(\\s[^>]*)?>([ \\t\\u00A0\\u2009]+)</\\1>")
+
+    static func protectWhitespaceOnlyText(_ s: String) -> String {
+        let ns = s as NSString
+        var out = s
+        for m in whitespaceOnlyText.matches(in: s, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let tag = ns.substring(with: m.range(at: 1))
+            let attrs = m.range(at: 2).location == NSNotFound ? "" : ns.substring(with: m.range(at: 2))
+            let refs = ns.substring(with: m.range(at: 3)).unicodeScalars.map { "&#\($0.value);" }.joined()
+            out = (out as NSString).replacingCharacters(in: m.range, with: "<\(tag)\(attrs)>\(refs)</\(tag)>")
+        }
+        return out
+    }
+
+    /// 저장용 직렬화. Foundation의 xmlData는 DOCTYPE을 두 번째 직렬화에서 닫는 `>` 없이 써서(`…dtd"<score-partwise`)
+    /// 그 결과를 다시 읽을 수 없다. 선언과 DOCTYPE은 직접 쓰고 루트 요소만 Foundation에 맡긴다.
+    static func serialize(_ doc: XMLDocument) -> Data {
+        var s = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        if let dtd = doc.dtd, let name = dtd.name {
+            s += "<!DOCTYPE \(name)"
+            if let pub = dtd.publicID {
+                s += " PUBLIC \"\(pub)\" \"\(dtd.systemID ?? "")\""
+            } else if let sys = dtd.systemID {
+                s += " SYSTEM \"\(sys)\""
+            }
+            s += ">\n"
+        }
+        s += doc.rootElement()?.xmlString(options: [.nodePreserveAll]) ?? ""
+        s += "\n"
+        return Data(s.utf8)
     }
 
     static func firstKey(_ doc: XMLDocument) -> KeySig? {
@@ -76,7 +115,12 @@ package enum MusicXML {
         for pitch in elements(doc, "//note/pitch") {
             guard let st = text(pitch, "step"), let i = steps.firstIndex(of: st),
                   let oct = Int(text(pitch, "octave") ?? "") else { continue }
-            let alterD = Double(text(pitch, "alter") ?? "0") ?? 0
+            // <alter>가 없는데 <accidental>만 있는 (규격에 어긋나지만 흔한) 파일은 임시표를 실제 음으로 본다 (music21과 같은 해석)
+            let note = pitch.parent as? XMLElement
+            let accidentalAlter: [String: Double] = ["sharp": 1, "flat": -1, "natural": 0, "double-sharp": 2, "flat-flat": -2,
+                                                     "sharp-sharp": 2, "natural-sharp": 1, "natural-flat": -1]
+            let fromAccidental = note.flatMap { text($0, "accidental") }.flatMap { accidentalAlter[$0] } ?? 0
+            let alterD = Double(text(pitch, "alter") ?? "") ?? fromAccidental
             let alterI = Int(alterD.rounded())
             let frac = alterD - Double(alterI)                // 미분음 보존
 

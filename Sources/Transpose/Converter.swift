@@ -80,19 +80,28 @@ package enum Converter {
         case .musicxml:
             let doc = try MusicXML.load(url)
             MusicXML.transpose(doc, semitones: s)
-            try doc.xmlData(options: [.nodePreserveAll]).write(to: out, options: .withoutOverwriting)
+            try MusicXML.serialize(doc).write(to: out, options: .withoutOverwriting)
         case .mxl:
             try withUnzippedMXL(url) { (dir: URL, score: URL) -> Void in
-                let doc = try MusicXML.load(score)
-                MusicXML.transpose(doc, semitones: s)
-                try doc.xmlData(options: [.nodePreserveAll]).write(to: score, options: .atomic)
+                // 컨테이너가 가리키는 본 악보뿐 아니라 안에 든 악보 파일을 전부 옮긴다 (파트별 파일을 같이 넣는 프로그램이 있다)
+                let fm = FileManager.default
+                let scores = (fm.enumerator(at: dir, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? [])
+                    .filter { ["xml", "musicxml"].contains($0.pathExtension.lowercased()) && !$0.path.contains("META-INF") }
+                for file in scores.isEmpty ? [score] : scores {
+                    guard let doc = try? MusicXML.load(file), doc.rootElement()?.name == "score-partwise" else { continue }
+                    MusicXML.transpose(doc, semitones: s)
+                    try MusicXML.serialize(doc).write(to: file, options: .atomic)
+                }
                 let tmpZip = dir.deletingLastPathComponent().appendingPathComponent("out.mxl")
-                // mimetype은 무압축으로 맨 앞에 와야 함
-                if FileManager.default.fileExists(atPath: dir.appendingPathComponent("mimetype").path) {
+                // 항목 순서: mimetype(무압축) → 본 악보 → 나머지. music21 등은 container.xml을 무시하고
+                // 첫 악보 파일을 읽으므로, 파트별 파일(p1.musicxml)이 앞에 오면 본 악보 대신 그걸 읽는다.
+                let rootRel = String(score.path.dropFirst(dir.path.count + 1))
+                if fm.fileExists(atPath: dir.appendingPathComponent("mimetype").path) {
                     try run("/usr/bin/zip", ["-X", "-0", "-q", tmpZip.path, "mimetype"], cwd: dir)
                 }
-                try run("/usr/bin/zip", ["-X", "-r", "-q", tmpZip.path, ".", "-x", "mimetype"], cwd: dir)
-                try FileManager.default.moveItem(at: tmpZip, to: out)
+                try run("/usr/bin/zip", ["-X", "-q", tmpZip.path, rootRel], cwd: dir)
+                try run("/usr/bin/zip", ["-X", "-r", "-q", tmpZip.path, ".", "-x", "mimetype", rootRel], cwd: dir)
+                try fm.moveItem(at: tmpZip, to: out)
             }
         case nil:
             throw ConvertError.unreadable
