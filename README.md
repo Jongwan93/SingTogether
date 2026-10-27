@@ -36,6 +36,20 @@ build.sh                build/SingTogether.app 만들기
 Package.swift           Xcode / SwiftPM용
 ```
 
+## 이조 정확도 검증
+
+MusicXML 경로는 계산이라 100%여야 한다. `tests/transpose_check.py`가 music21을 기준으로 확인한다.
+
+```bash
+./build.sh                                                  # singtogether-transpose
+tools/ocr/.venv/bin/python tests/transpose_check.py --quick  # 조표·코드·가사 케이스 + 코퍼스 일부
+tools/ocr/.venv/bin/python tests/transpose_check.py          # 전체 (Lilypond MusicXML 테스트 스위트 142 + 코퍼스 60 + OCR 출력)
+```
+
+- 왕복: +n 뒤 −n 하면 원본과 음·코드가 같다
+- 오라클: music21이 같은 조로 이조한 결과와 음·철자·조표·코드 근음/베이스가 같고, 가사·리듬은 원본 그대로다
+- 결과는 `tests/transpose_report.md`. 하드 실패(음이 틀리거나 내용이 빠짐)가 있으면 종료 코드 1.
+
 ## 지원 형식
 
 | 형식 | 바뀌는 것 |
