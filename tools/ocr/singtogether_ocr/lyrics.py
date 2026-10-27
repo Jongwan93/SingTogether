@@ -175,7 +175,9 @@ def attach_lyrics(t: Transcription, lyrics: list[list[list[Syllable]]], interlin
         for v, sylls in enumerate(verses):
             if not sylls:
                 continue
-            pairs = _align([s.x for s in sylls], [n.x for n in notes], gap=2.0 * interline)
+            # 글자 있는 음절을 건너뛰면 비싸고(2il), 자리 표시자는 싸게(0.3il) 건너뛴다: 자리가 모자라면 표시자가 양보
+            pairs = _align([s.x for s in sylls], [n.x for n in notes],
+                           gap=[2.0 * interline if s.text else 0.3 * interline for s in sylls])
             for si_, ni in pairs:
                 n = notes[ni]
                 while len(n.lyrics) <= v:
@@ -186,9 +188,10 @@ def attach_lyrics(t: Transcription, lyrics: list[list[list[Syllable]]], interlin
                 t.has_lyrics = True
 
 
-def _align(xs: list[float], ns: list[float], gap: float) -> list[tuple[int, int]]:
-    """순서를 지키는 1:1 짝짓기 (음절 i → 음표 j). 비용 = |x 차이|, 음표를 건너뛰면 0, 음절을 건너뛰면 gap."""
+def _align(xs: list[float], ns: list[float], gap: float | list[float]) -> list[tuple[int, int]]:
+    """순서를 지키는 1:1 짝짓기 (음절 i → 음표 j). 비용 = |x 차이|, 음표를 건너뛰면 0, 음절 i를 건너뛰면 gap[i]."""
     I, J = len(xs), len(ns)
+    gaps = gap if isinstance(gap, list) else [gap] * I
     INF = float("inf")
     cost = [[INF] * (J + 1) for _ in range(I + 1)]
     back = [[None] * (J + 1) for _ in range(I + 1)]
@@ -205,7 +208,7 @@ def _align(xs: list[float], ns: list[float], gap: float) -> list[tuple[int, int]
                 if cost[i][j] < cost[i][j + 1]:
                     cost[i][j + 1], back[i][j + 1] = cost[i][j], (i, j, False)
             if i < I:                             # 음절 건너뜀 (오인식)
-                c = cost[i][j] + gap
+                c = cost[i][j] + gaps[i]
                 if c < cost[i + 1][j]:
                     cost[i + 1][j], back[i + 1][j] = c, (i, j, False)
     pairs, i, j = [], I, J
