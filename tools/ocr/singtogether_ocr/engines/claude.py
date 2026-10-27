@@ -47,6 +47,11 @@ class engine:
         if not Path(self.binary).exists():
             raise RuntimeError("claude CLI가 없어요 (Claude Code 설치 필요)")
         out_dir = work_dir / "claude"
+        cached = out_dir / f"{page.name}.txt"
+        if cached.exists():                         # 같은 작업 폴더면 다시 묻지 않는다 (40초·구독 사용량 절약)
+            t = from_text(cached.read_text(), self.name)
+            t.engine = self.name
+            return t
         # 이미지 파일은 원본 그대로 (확대본보다 낫다), PDF는 렌더링한 쪽을 넘긴다
         image = page.source if page.source.suffix.lower() != ".pdf" else save_png(page.gray, out_dir / f"{page.name}.png")
         cmd = [self.binary, "-p", PROMPT.format(image=image.resolve()), "--model", self.model,
@@ -57,7 +62,7 @@ class engine:
             raise RuntimeError(f"claude 실패: {result.get('result')}")
         text = result["result"]
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / f"{page.name}.txt").write_text(text)
+        cached.write_text(text)
         t = from_text(text, f"{self.name}:{self.model}")
         t.engine, t.seconds = self.name, seconds
         return t

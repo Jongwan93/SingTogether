@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import assemble, engines, ingest, key, layout, lyrics, notes, text, textfmt
+from . import assemble, engines, hybrid, ingest, key, layout, lyrics, notes, text, textfmt
 from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
@@ -26,7 +26,9 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
         debug_dir.mkdir(parents=True, exist_ok=True)
-    eng = engines.get(engine_name)
+    text_from_claude = engine_name == "hybrid"
+    eng = engines.get("homr" if text_from_claude else engine_name)
+    claude_eng = engines.get("claude") if text_from_claude else None
     merged: Transcription | None = None
     t0 = time.time()
     for page in ingest.prepare(src, target_interline=interline, debug_dir=debug_dir):
@@ -35,14 +37,25 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)
+            claude_t = claude_eng.transcribe(page, work, debug_dir) if claude_eng else None
             if chords:
-                assemble.attach_chords(t, text.read_chords(page, systems, debug_dir), page.interline)
+                chord_boxes = text.read_chords(page, systems, debug_dir)
+                if claude_t:
+                    chord_boxes, ratio = hybrid.merge_chords(chord_boxes, claude_t, systems, page.interline)
+                    print(f"하이브리드 코드: Claude {sum(1 for n in claude_t.notes if n.chord)}개, 앵커 {ratio:.0%}")
+                assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord])
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode):
                     rekey(t, inferred[0], inferred[1])
             key.infer_time(t)
             if lyrics_:
-                lyrics.attach_lyrics(t, lyrics.read_lyrics(page, systems, debug_dir), page.interline)
+                sylls = lyrics.read_lyrics(page, systems, debug_dir)
+                if claude_t:
+                    sylls, ratio = hybrid.merge_lyrics(sylls, claude_t, systems, page.interline)
+                    print(f"하이브리드 가사: 앵커 {ratio:.0%}")
+                lyrics.attach_lyrics(t, sylls, page.interline)
+                if claude_t and claude_t.title:
+                    t.title, t.composer = claude_t.title, claude_t.composer
                 if not t.title:
                     t.title, t.composer = lyrics.read_title(page, systems)
             if debug_dir:
