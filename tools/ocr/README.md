@@ -32,9 +32,12 @@ brew install librsvg                     # PDF 출력용 rsvg-convert
 .venv/bin/singtogether-ocr score.pdf --engine homr --debug dbg/ --transpose -2 --render
 ```
 
-- `--engine homr|oemer|audiveris|claude` (기본 homr). audiveris·claude는 비교용.
+- `--engine homr|oemer|audiveris|claude|hybrid` (기본 homr). audiveris·claude는 비교용.
   - audiveris: `SINGTOGETHER_AUDIVERIS=/path/Audiveris.app`, 가사 OCR은 `TESSDATA_PREFIX`
   - claude: 로그인된 Claude Code CLI 사용. 모델은 `SINGTOGETHER_CLAUDE_MODEL` (기본 sonnet)
+  - **hybrid (권장)**: 음표·음높이·위치는 homr + 오선 위치, 코드·가사·제목 글자는 Claude CLI.
+    Vision이 찾은 코드/음절 *자리*와 Claude가 받아 적은 *글자* 열을 글자 일치를 앵커로 DP 정렬해 합친다 (`hybrid.py`).
+    Claude 결과는 `<work>/claude/<이름>-p1.txt`에 캐시되어 같은 작업 폴더면 다시 묻지 않는다.
 - `--debug DIR`: 단계별 오버레이 `<이름>-1-ingest.png`, `-2-layout`, `-3-symbols`, `-4-chords`, `-4-lyrics`, `-5-assembled`
   (오선=파랑, 음표=초록, 코드=주황, 가사=보라, 영역=회색)
 - `--no-chords` / `--no-lyrics`: 코드 / 가사 OCR 생략
