@@ -40,26 +40,44 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
             m.x0, m.x1 = bars[min(k, len(bars) - 2)], bars[min(k + 1, len(bars) - 1)]
         st = sys_.staff
         heads = syms.noteheads
-        # 머리 수가 엔진 음표 수와 같으면(오선 전체 → 안 되면 마디별) 음높이를 오선 위치에서 다시 읽는다. 엔진보다 정확하다.
-        # 엔진이 같은 음이름·옥타브를 냈으면 엔진 것을 둔다 (임시표 보존). 수가 다르면 x만 비율로 배정.
+        il = st.interline
+
+        def read_pitch(n, h):
+            """오선 위치에서 음높이를 다시 읽는다 (엔진보다 정확하다). 엔진이 같은 음이름·옥타브면 엔진 것을 둔다 (임시표 보존)."""
+            step = round((st.bottom - h.y) / (il / 2))
+            letter, octave = "EFGABCD"[step % 7], 4 + (step + 2) // 7
+            if (n.step, n.octave) != (letter, octave):
+                n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
+
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]
-        groups = [(all_pitched, heads)] if len(all_pitched) == len(heads) else [
-            ([n for n in m.notes if not n.is_rest], [h for h in heads if m.x0 <= h.x < m.x1] if bars_ok else heads)
-            for m in measures]
-        for pitched, hs in groups:
-            if not pitched or not hs:
-                continue
-            if len(hs) == len(pitched):
-                for n, h in zip(pitched, hs):
+        if all_pitched and len(all_pitched) == len(heads):     # 오선 전체가 딱 맞으면 그대로 짝
+            for n, h in zip(all_pitched, heads):
+                n.x, n.y = h.x, h.y
+                read_pitch(n, h)
+        else:
+            # 음표의 기대 x = 그 마디 범위 안에서 시간 비율 (악보는 대체로 시간에 비례해 배치된다).
+            # 오선 전체의 기대 x 열과 머리 열을 한 번에 순서대로 DP 짝짓기 → 머리를 두 음표가 나눠 갖지 않고 x가 단조롭다.
+            # 짝이 된 음표는 머리 좌표를 쓰고(수가 비슷하거나 기대 자리와 가까우면 음높이도), 나머지는 기대 x.
+            exp: dict[int, float] = {}
+            for m in measures:
+                if m.x0 is None or not m.length:
+                    continue
+                pos = 0
+                for n in m.notes:
+                    exp[id(n)] = m.x0 + (m.x1 - m.x0) * float((pos + n.duration / 2) / m.length)
+                    pos += n.duration
+            pitched = [n for n in all_pitched if id(n) in exp]
+            for n in pitched:
+                n.x = exp[id(n)]
+            if pitched and heads:
+                pairs = _align_x([exp[id(n)] for n in pitched], [h.x for h in heads], gap=1.5 * il)
+                trust_all = abs(len(heads) - len(pitched)) <= 3
+                for a, b in pairs:
+                    n, h = pitched[a], heads[b]
+                    near = abs(exp[id(n)] - h.x) < 1.0 * il
                     n.x, n.y = h.x, h.y
-                    step = round((st.bottom - h.y) / (st.interline / 2))
-                    letter, octave = "EFGABCD"[step % 7], 4 + (step + 2) // 7
-                    if (n.step, n.octave) != (letter, octave):
-                        n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
-            else:
-                for k, n in enumerate(pitched):
-                    h = hs[round(k * (len(hs) - 1) / max(1, len(pitched) - 1))]
-                    n.x, n.y = h.x, h.y
+                    if trust_all or near:
+                        read_pitch(n, h)
         for m in measures:                                   # 쉼표는 마디 안에서 시간 비율로
             if m.x0 is not None and m.length:
                 pos = 0
@@ -72,14 +90,23 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
 
 
 def attach_chords(t: Transcription, chords: list[list[TextBox]], interline: float) -> None:
-    """코드 글자의 왼쪽 끝이 음표 머리 근처에 온다. 가장 가까운 음표에 단다."""
+    """코드 글자의 왼쪽 끝이 음표 머리 근처에 온다. 가장 가까운 음표에 달되, 한 음표에 코드 둘이 겹치면
+    (앞 코드를 덮어써 잃지 않도록) 뒤 코드는 오른쪽의 비어 있는 다음 음표로 보낸다."""
     for si, boxes in enumerate(chords):
-        notes = [n for m in t.measures if m.system == si for n in m.notes if n.x is not None]
+        notes = sorted((n for m in t.measures if m.system == si for n in m.notes if n.x is not None), key=lambda n: n.x)
         if not notes:
             continue
-        for c in boxes:
-            best = min(notes, key=lambda n: abs(n.x - (c.x0 + 0.3 * interline)))
-            best.chord = c.text
+        for c in sorted(boxes, key=lambda b: b.x0):
+            x = c.x0 + 0.3 * interline
+            k = min(range(len(notes)), key=lambda i: abs(notes[i].x - x))
+            while k < len(notes) and notes[k].chord:
+                k += 1
+            if k < len(notes):
+                notes[k].chord = c.text
+            else:                                  # 오른쪽에 자리가 없으면 왼쪽의 빈 음표
+                free = [i for i in range(len(notes)) if not notes[i].chord]
+                if free:
+                    notes[free[-1]].chord = c.text
     t.has_chords = True
 
 
@@ -100,6 +127,33 @@ def overlay(page: Page, t: Transcription, debug_dir: Path) -> None:
                 debug.text(img, [((n.x - 0.6 * il, y - il), n.chord)], "chord", size=13)
     debug.caption(img, f"{page.name}  {t.engine}  measures {len(t.measures)}  chords {sum(1 for n in t.notes if n.chord)}")
     debug.save(debug_dir / f"{page.name}-5-assembled.png", img)
+
+
+def _align_x(xs: list[float], hs: list[float], gap: float) -> list[tuple[int, int]]:
+    """순서를 지키는 1:1 짝짓기 (음표 i → 머리 j). 비용 = |x 차이|, 어느 쪽이든 건너뛰면 gap."""
+    I, J = len(xs), len(hs)
+    INF = float("inf")
+    cost = [[INF] * (J + 1) for _ in range(I + 1)]
+    back = [[None] * (J + 1) for _ in range(I + 1)]
+    cost[0][0] = 0.0
+    for i in range(I + 1):
+        for j in range(J + 1):
+            cur = cost[i][j]
+            if cur == INF:
+                continue
+            if i < I and j < J and cur + abs(xs[i] - hs[j]) < cost[i + 1][j + 1]:
+                cost[i + 1][j + 1], back[i + 1][j + 1] = cur + abs(xs[i] - hs[j]), (i, j, True)
+            if i < I and cur + gap < cost[i + 1][j]:
+                cost[i + 1][j], back[i + 1][j] = cur + gap, (i, j, False)
+            if j < J and cur + gap < cost[i][j + 1]:
+                cost[i][j + 1], back[i][j + 1] = cur + gap, (i, j, False)
+    pairs, i, j = [], I, J
+    while (i, j) != (0, 0):
+        pi, pj, matched = back[i][j]
+        if matched:
+            pairs.append((pi, pj))
+        i, j = pi, pj
+    return pairs[::-1]
 
 
 def _split_by_heads(notes_per_measure: list[int], heads_per_system: list[int]) -> list[int]:
