@@ -18,6 +18,8 @@ def _root_pc(chord: str) -> int | None:
 
 def infer_time(t) -> None:
     """마디 길이의 최빈값으로 박자표를 바로잡는다 (엔진이 2/2·3/4로 잘못 읽는 경우). 60% 이상 마디가 같은 길이일 때만."""
+    if (t.beats, t.beat_type) == (2, 2):          # 찬양 악보에 2/2는 사실상 없다. 엔진이 4/4를 2/2로 읽은 것 (리듬은 같다)
+        t.beats, t.beat_type = 4, 4
     lengths = Counter(m.length for m in t.measures if m.notes)
     if not lengths:
         return

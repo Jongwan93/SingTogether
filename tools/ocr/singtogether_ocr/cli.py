@@ -20,7 +20,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-28"           # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-28b"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -57,7 +57,7 @@ def cache_put(key: str, files: list[Path]) -> None:
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
               chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True,
-              mask_text: bool = False) -> Transcription:
+              mask_text: bool = True) -> Transcription:
     """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다."""
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
@@ -157,8 +157,7 @@ def main(argv=None) -> None:
     ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
     ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
     ap.add_argument("--no-lyrics", action="store_true", help="가사 OCR 생략")
-    ap.add_argument("--mask-text", action="store_true",
-                    help="엔진에 주기 전 코드·가사 글자를 지운다 (homr 원본 인식은 오르지만 최종 결과는 아직 비슷해 기본 꺼짐)")
+    ap.add_argument("--no-mask", action="store_true", help="엔진에 주기 전 코드·가사 글자를 지우는 단계를 생략")
     ap.add_argument("--interline", type=float, default=ingest.TARGET_INTERLINE, metavar="PX",
                     help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
@@ -169,7 +168,7 @@ def main(argv=None) -> None:
     a = ap.parse_args(argv)
 
     key_ = cache_key(a.input, a.engine, a.llm, "chords" if not a.no_chords else "", "lyrics" if not a.no_lyrics else "",
-                     f"il{a.interline:g}", "mask" if a.mask_text else "")
+                     f"il{a.interline:g}", "" if a.no_mask else "mask")
     out_base = a.out or a.input.with_suffix(".musicxml")
     if not a.no_cache and (hit := cache_get(key_, out_base)):
         print(f"캐시에서 가져옴 ({key_})")
@@ -193,7 +192,7 @@ def main(argv=None) -> None:
         return
 
     t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics,
-                  mask_text=a.mask_text)
+                  mask_text=not a.no_mask)
     out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
     n_chords = sum(1 for n in t.notes if n.chord)
     n_lyr = sum(1 for n in t.notes if n.lyrics and n.lyrics[0])
