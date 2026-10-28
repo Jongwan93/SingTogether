@@ -31,6 +31,7 @@ class TextBox:
     y0: int
     x1: int
     y1: int
+    src: str = "vision"                  # "both" / "vision" / "claude" (hybrid.merge_chords가 채움)
 
     @property
     def cx(self) -> float: return (self.x0 + self.x1) / 2

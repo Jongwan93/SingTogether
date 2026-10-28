@@ -17,6 +17,7 @@ COLORS = {            # BGR
     "lyric": (200, 60, 200),
     "low": (0, 0, 230),
     "band": (160, 160, 160),
+    "flag": (0, 0, 220),
 }
 _FONT_PATHS = ["/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/AppleGothic.ttf"]
 

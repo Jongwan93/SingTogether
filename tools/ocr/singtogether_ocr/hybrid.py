@@ -134,7 +134,7 @@ def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: 
     placed, ratio = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= 0.75)
     out: list[list[TextBox]] = [[] for _ in systems]
     for p in placed:
-        out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il)))
+        out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il), p.source))
     return out, ratio
 
 
@@ -172,7 +172,7 @@ def merge_lyrics(vision: list[list[list[Syllable]]], claude_t: Transcription, sy
             while len(row) <= v:
                 row.append([])
         for p in placed:
-            out[p.system][v].append(Syllable(p.text, p.x, p.y, p.conf))
+            out[p.system][v].append(Syllable(p.text, p.x, p.y, p.conf, p.source))
     for si in range(len(systems)):                 # Claude 절이 없거나 못 합친 절은 Vision 것을 둔다
         for v, sylls in enumerate(vision[si]):
             if v >= len(out[si]):

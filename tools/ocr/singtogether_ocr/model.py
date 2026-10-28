@@ -27,9 +27,16 @@ class Note:
     tie_stop: bool = False
     x: float | None = None               # 음표 머리 중심 (페이지 픽셀)
     y: float | None = None
-    conf: float | None = None            # 0–1, 모르면 None
+    conf: float | None = None            # 0–1, 모르면 None (review.assess가 채운다)
     chord: str | None = None             # 이 음표 위의 코드 기호
     lyrics: list[str] = field(default_factory=list)   # 절별 음절. '' = 새 음절 없음
+    # 확인·수정 단계(M3)용 근거. 조립 단계가 채우고 review.assess가 신뢰도로 바꾼다.
+    reasons: list[str] = field(default_factory=list)  # 의심 근거 ("머리 못 찾음", "Claude와 다름: G4" …)
+    head: bool = False                   # 오선에서 찾은 음표 머리와 짝지어졌나
+    chord_conf: float | None = None      # 코드 글자 확신도 (0–1)
+    chord_src: str = ""                  # "both"(Vision·Claude 일치) / "vision" / "claude"
+    lyric_conf: float | None = None      # 1절 음절 확신도
+    lyric_src: str = ""
 
     @property
     def is_rest(self) -> bool:
@@ -56,6 +63,8 @@ class Measure:
     system: int | None = None            # 몇 번째 오선에 있는지
     x0: float | None = None
     x1: float | None = None
+    head_match: bool | None = None       # 마디 안 머리 수 == 음표 수 (조립 단계가 채움)
+    rhythm_ok: bool | None = None        # 박자 합이 박자표와 맞나 (review가 채움)
 
     @property
     def length(self) -> Fraction:
@@ -75,6 +84,7 @@ class Transcription:
     has_chords: bool = False             # 엔진이 코드 기호까지 읽었는가
     has_lyrics: bool = False
     seconds: float = 0.0
+    claude_match: float | None = None    # 하이브리드: 엔진 음표 열과 Claude 전사의 일치 비율 (review.mark_claude)
 
     @property
     def notes(self) -> list[Note]:

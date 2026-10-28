@@ -59,13 +59,16 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
             if (n.step, n.octave) != (letter, octave):
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
                     print(f"    덮어씀[{why}] 오선{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
+                n.reasons.append(f"오선 위치로 고침 (엔진은 {n.name})")
                 n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
 
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]
         if all_pitched and len(all_pitched) == len(heads):     # 오선 전체가 딱 맞으면 그대로 짝
             for n, h in zip(all_pitched, heads):
-                n.x, n.y = h.x, h.y
+                n.x, n.y, n.head = h.x, h.y, True
                 read_pitch(n, h, "오선수일치")
+            for m in measures:
+                m.head_match = True
         else:
             # 음표의 기대 x = 그 마디 범위 안에서 시간 비율 (악보는 대체로 시간에 비례해 배치된다).
             # 오선 전체의 기대 x 열과 머리 열을 한 번에 순서대로 DP 짝짓기 → 머리를 두 음표가 나눠 갖지 않고 x가 단조롭다.
@@ -99,12 +102,17 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                 sure_ids = {(a, b) for a, b in sure}
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
                     print(f"  오선{si}: 음표 {len(pitched)} 머리 {len(heads)} 확실한 짝 {len(sure)} 일치율 {agree if agree is None else round(agree, 2)} trust_all {trust_all}")
+                for m in measures:
+                    m.head_match = exact[id(m)]
                 for a, b in pairs:
                     n, h = pitched[a], heads[b]
                     near = abs(exp[id(n)] - h.x) < 1.0 * il
-                    n.x, n.y = h.x, h.y
+                    n.x, n.y, n.head = h.x, h.y, True
                     if (a, b) in sure_ids or near or trust_all:
                         read_pitch(n, h, "확실" if (a, b) in sure_ids else ("근접" if near else "전체신뢰"))
+                for n in pitched:
+                    if not n.head:
+                        n.reasons.append("머리 못 찾음")
         for m in measures:                                   # 쉼표는 마디 안에서 시간 비율로
             if m.x0 is not None and m.length:
                 pos = 0
@@ -129,11 +137,11 @@ def attach_chords(t: Transcription, chords: list[list[TextBox]], interline: floa
             while k < len(notes) and notes[k].chord:
                 k += 1
             if k < len(notes):
-                notes[k].chord = c.text
+                notes[k].chord, notes[k].chord_conf, notes[k].chord_src = c.text, c.conf, c.src
             else:                                  # 오른쪽에 자리가 없으면 왼쪽의 빈 음표
                 free = [i for i in range(len(notes)) if not notes[i].chord]
                 if free:
-                    notes[free[-1]].chord = c.text
+                    notes[free[-1]].chord, notes[free[-1]].chord_conf, notes[free[-1]].chord_src = c.text, c.conf, c.src
     t.has_chords = True
 
 

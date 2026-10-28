@@ -18,6 +18,10 @@ _KINDS = {"": "major", "m": "minor", "min": "minor", "7": "dominant", "maj7": "m
           "2": "major", "add2": "major", "add9": "major", "7sus4": "dominant"}
 
 
+FLAG = 0.6                 # 이보다 낮은 신뢰도 = 확인 필요 (review.FLAG와 같은 값)
+FLAG_COLOR = "#D00000"
+
+
 def to_musicxml(t: Transcription) -> bytes:
     divisions = max(1, lcm(*(n.duration.denominator for n in t.notes)) if t.notes else 1)
     root = ET.Element("score-partwise", version="4.0")
@@ -57,8 +61,12 @@ def to_musicxml(t: Transcription) -> bytes:
                 open_ending = m.ending
         for n in m.notes:
             if n.chord:
-                _harmony(me, n.chord)
+                h = _harmony(me, n.chord)
+                if n.chord_conf is not None and n.chord_conf < FLAG:
+                    h.set("color", FLAG_COLOR)
             ne = ET.SubElement(me, "note")
+            if n.conf is not None and n.conf < FLAG:          # 확인이 필요한 음표는 빨갛게 (Verovio가 그대로 그린다)
+                ne.set("color", FLAG_COLOR)
             if n.is_rest:
                 ET.SubElement(ne, "rest")
             else:
@@ -87,6 +95,8 @@ def to_musicxml(t: Transcription) -> bytes:
             for v, text in enumerate(n.lyrics, 1):
                 if text:
                     ly = ET.SubElement(ne, "lyric", number=str(v))
+                    if v == 1 and n.lyric_conf is not None and n.lyric_conf < FLAG:
+                        ly.set("color", FLAG_COLOR)
                     ET.SubElement(ly, "syllabic").text = "single"
                     ET.SubElement(ly, "text").text = text
         is_last = i == len(t.measures) - 1
@@ -107,14 +117,14 @@ def _ending(me: ET.Element, location: str, number: int, type_: str) -> None:
     ET.SubElement(bl, "ending", number=str(number), type=type_)
 
 
-def _harmony(me: ET.Element, chord: str) -> None:
+def _harmony(me: ET.Element, chord: str) -> ET.Element:
     m = CHORD_RE.match(chord)
     h = ET.SubElement(me, "harmony")
     root = ET.SubElement(h, "root")
     if not m:
         ET.SubElement(root, "root-step").text = "C"
         ET.SubElement(h, "kind", text=chord).text = "other"
-        return
+        return h
     step, acc, quality, bass, bacc = m.groups()
     ET.SubElement(root, "root-step").text = step
     if acc:
@@ -127,6 +137,7 @@ def _harmony(me: ET.Element, chord: str) -> None:
         ET.SubElement(b, "bass-step").text = bass
         if bacc:
             ET.SubElement(b, "bass-alter").text = "1" if bacc in "#♯" else "-1"
+    return h
 
 
 def _type(d: Fraction) -> tuple[str, int]:

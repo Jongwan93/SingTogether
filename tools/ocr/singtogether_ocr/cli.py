@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -15,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import assemble, chordsheet, engines, hybrid, ingest, key, layout, lyrics, notes, text, textfmt
+from . import assemble, chordsheet, engines, hybrid, ingest, key, layout, lyrics, notes, review, text, textfmt
 from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
@@ -57,8 +58,8 @@ def cache_put(key: str, files: list[Path]) -> None:
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
               chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True,
-              mask_text: bool = True) -> Transcription:
-    """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다."""
+              mask_text: bool = True, review_dir: Path | None = None) -> Transcription:
+    """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다. review_dir을 주면 쪽마다 <이름>.review.png(확인할 곳 표시)를 남긴다."""
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -97,8 +98,13 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                     t.title, t.composer = claude_t.title, claude_t.composer
                 if not t.title:
                     t.title, t.composer = lyrics.read_title(page, systems)
+            review.check_rhythm(t)
+            if claude_t:
+                review.mark_claude(t, claude_t)
             if debug_dir:
                 assemble.overlay(page, t, debug_dir)
+            if review_dir:
+                review.overlay(page, t, review.assess(t), review_dir / f"{page.name}.review.png")
         if merged is None:
             merged = t
         else:
@@ -179,6 +185,22 @@ def main(argv=None) -> None:
             print(f"→ {transpose(main_out, a.transpose)}")
         return
 
+    if a.input.suffix.lower() == ".txt" and "key:" in a.input.read_text()[:400]:
+        # 사람이 고친 압축 텍스트 → MusicXML (+이조·렌더링). 확인·수정 단계의 마지막 걸음
+        t = textfmt.from_text(a.input.read_text())
+        out, _ = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
+        print(f"→ {out}")
+        targets = [out]
+        if a.transpose:
+            targets.append(transpose(out, a.transpose))
+            print(f"→ {targets[-1]}")
+        if a.render:
+            from .render import render
+            for p in targets:
+                for f in render(p, p.with_suffix("")):
+                    print(f"→ {f}")
+        return
+
     if chart := recognize_chordsheet(a.input, a.llm, a.work):
         out = (a.out.with_suffix(".txt") if a.out else a.input.with_suffix(".txt"))
         out.write_text(chart)
@@ -191,16 +213,22 @@ def main(argv=None) -> None:
             print("코드 차트는 렌더링하지 않아요 (.txt 그대로 쓰세요)")
         return
 
+    out_base = a.out or a.input.with_suffix(".musicxml")
     t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics,
-                  mask_text=not a.no_mask)
-    out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
+                  mask_text=not a.no_mask, review_dir=out_base.parent)
+    rev = review.assess(t)
+    out, txt = write_outputs(t, out_base)
+    rev_path = out.with_suffix(".review.json")
+    rev_path.write_text(json.dumps(rev, ensure_ascii=False, indent=1))
+    s_ = rev["summary"]
+    print(f"확인 필요: 음표 {s_['notes_flagged']}/{s_['notes']}, 코드 {s_['chords_flagged']}/{s_['chords']}, 가사 {s_['lyrics_flagged']}/{s_['lyrics']} → {rev_path}")
     n_chords = sum(1 for n in t.notes if n.chord)
     n_lyr = sum(1 for n in t.notes if n.lyrics and n.lyrics[0])
     print(f"{a.engine}: {t.title or '(제목 없음)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, "
           f"음표 {len(t.notes)}, 코드 {n_chords}, 가사 {n_lyr}음절, {t.seconds:.0f}초")
     print(f"→ {out}\n→ {txt}")
     if not a.no_cache:
-        cache_put(key_, [out, txt])
+        cache_put(key_, [out, txt, rev_path])
 
     targets = [out]
     if a.transpose:

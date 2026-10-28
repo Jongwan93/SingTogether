@@ -30,6 +30,7 @@ class Syllable:
     x: float          # 글자 중심 (페이지 픽셀)
     y: float
     conf: float
+    src: str = "vision"   # "both" / "vision" / "claude"
 
 
 def recognize_lines(gray: np.ndarray, langs=("ko-KR", "en-US"), correction: bool = True):
@@ -184,6 +185,8 @@ def attach_lyrics(t: Transcription, lyrics: list[list[list[Syllable]]], interlin
                     n.lyrics.append("")
                 if sylls[si_].text:
                     n.lyrics[v] = sylls[si_].text
+                    if v == 0:
+                        n.lyric_conf, n.lyric_src = sylls[si_].conf, sylls[si_].src
             if any(s.text for s in sylls):
                 t.has_lyrics = True
 
