@@ -19,13 +19,13 @@ class engine:
 
     def transcribe(self, page: Page, work_dir: Path, debug_dir: Path | None = None) -> Transcription:
         if not self.binary.exists():
-            raise RuntimeError(f"oemer가 없어요: {self.binary}  (tools/ocr에서 uv venv --python 3.11 .venv-oemer 뒤 설치)")
+            raise RuntimeError(f"oemer not found: {self.binary}  (in tools/ocr: uv venv --python 3.11 .venv-oemer, then install)")
         out_dir = work_dir / "oemer"
         png = save_png(page.gray, out_dir / f"{page.name}.png")
         seconds, _ = run([str(self.binary), "-o", str(out_dir), str(png)])
         xml = next(out_dir.glob(f"{page.name}*.musicxml"), None) or next(out_dir.glob("*.musicxml"), None)
         if xml is None:
-            raise RuntimeError("oemer가 MusicXML을 만들지 않았어요")
+            raise RuntimeError("oemer did not produce MusicXML")
         t = from_musicxml(xml, self.name)
         t.seconds = seconds
         return t

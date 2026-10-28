@@ -9,7 +9,7 @@ package enum SheetOCR {
         package var text: URL?              // 사람이 고칠 수 있는 압축 텍스트
         package var reviewPNGs: [URL]       // 원본 위에 확인할 곳을 표시한 그림 (쪽마다)
         package var keys: String?           // "G -> A"
-        package var summary: String         // "확인 필요: 음표 31/118, 코드 2/25, 가사 2/80"
+        package var summary: String         // "To check: notes 31/118, chords 2/25, lyrics 2/80"
         package var isChordSheet: Bool
         package var engine: String
     }
@@ -18,7 +18,7 @@ package enum SheetOCR {
         case notInstalled, failed(String)
         package var errorDescription: String? {
             switch self {
-            case .notInstalled: return "악보 인식 도구(singtogether-ocr)를 찾지 못했어요. tools/ocr에서 uv sync를 하거나 SINGTOGETHER_OCR에 경로를 지정하세요"
+            case .notInstalled: return "The score reader (singtogether-ocr) was not found. Run uv sync in tools/ocr or set SINGTOGETHER_OCR to its path."
             case .failed(let s): return s
             }
         }
@@ -50,7 +50,7 @@ package enum SheetOCR {
 
     static func readerName(_ method: String) -> String {
         method.replacingOccurrences(of: "claude", with: "Claude").replacingOccurrences(of: "gemini", with: "Gemini").replacingOccurrences(of: "vision", with: "Apple Vision")
-            .replacingOccurrences(of: "none", with: "Apple Vision").replacingOccurrences(of: "실패", with: "못 씀")
+            .replacingOccurrences(of: "none", with: "Apple Vision")
     }
 
     package static func locate() -> URL? {
@@ -116,22 +116,22 @@ package enum SheetOCR {
         guard let line = stdout.split(separator: "\n").last(where: { $0.hasPrefix("JSON ") }),
               let data = line.dropFirst(5).data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw Failure.failed("결과를 읽지 못했어요:\n" + String(stdout.suffix(400)))
+            throw Failure.failed("Could not read the result:\n" + String(stdout.suffix(400)))
         }
         func url(_ k: String) -> URL? { (dict[k] as? String).map { URL(fileURLWithPath: $0) } }
-        var summary = "확인 자료 없음"
+        var summary = "No review data"
         if let s = dict["summary"] as? [String: Any] {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }
-            summary = "확인 필요: 음표 \(pair("notes_flagged", "notes")), 코드 \(pair("chords_flagged", "chords")), 가사 \(pair("lyrics_flagged", "lyrics"))"
+            summary = "To check: notes \(pair("notes_flagged", "notes")), chords \(pair("chords_flagged", "chords")), lyrics \(pair("lyrics_flagged", "lyrics"))"
         } else if dict["chordsheet"] as? Bool == true {
             if let chart = dict["chart"] as? [String: Any] {
                 let notes = (chart["notes"] as? [String]) ?? []
-                summary = "코드 차트: 원본 위의 코드 \(chart["replaced"] ?? 0)개를 바꿨어요" + (notes.isEmpty ? "" : " · ⚠︎ " + notes.joined(separator: " · "))
-                if let by = dict["read_by"] as? String { summary += " · 읽기: " + readerName(by) }
+                summary = "Chord chart: rewrote \(chart["replaced"] ?? 0) chords on the original" + (notes.isEmpty ? "" : " · ⚠︎ " + notes.joined(separator: " · "))
+                if let by = dict["read_by"] as? String { summary += " · read by " + readerName(by) }
             } else if let err = dict["overlay_error"] as? String {
-                summary = "코드 차트: 그림은 못 만들고 텍스트로 만들었어요 (\(err))"
+                summary = "Chord chart: made a text version only, the image failed (\(err))"
             } else {
-                summary = "코드 차트: 코드와 가사를 텍스트로 만들었어요"
+                summary = "Chord chart: made a text version of chords and lyrics"
             }
         }
         return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"),
@@ -145,7 +145,7 @@ package enum SheetOCR {
         let src: URL
         if let pdf = r.transposedPDF { src = pdf }
         else if let t = r.transposed { src = t }
-        else { throw Failure.failed("이조된 파일이 없어요") }
+        else { throw Failure.failed("No transposed file was produced") }
         let sign = semitones > 0 ? "+\(semitones)" : "\(semitones)"
         let newKey = r.keys?.components(separatedBy: " -> ").last.map { ", \($0)" } ?? ""
         let base = original.deletingPathExtension().lastPathComponent

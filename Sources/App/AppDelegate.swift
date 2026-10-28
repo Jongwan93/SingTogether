@@ -20,10 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "SingTogether")
 
         let menu = NSMenu()
-        let info = NSMenuItem(title: "악보 파일을 드래그하면서 Shift를 누르세요", action: nil, keyEquivalent: "")
+        let info = NSMenuItem(title: "Hold Shift while dragging a score file", action: nil, keyEquivalent: "")
         info.isEnabled = false
         menu.addItem(info)
-        let formats = NSMenuItem(title: "지원: .txt .cho .chordpro .musicxml .xml .mxl · 이미지/PDF(인식)", action: nil, keyEquivalent: "")
+        let formats = NSMenuItem(title: "Supports .txt .cho .chordpro .musicxml .xml .mxl · images and PDF", action: nil, keyEquivalent: "")
         formats.isEnabled = false
         menu.addItem(formats)
         menu.addItem(.separator())
@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         readerItem.target = self
         menu.addItem(readerItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "SingTogether 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit SingTogether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
         panel.contentView = ring
@@ -94,29 +94,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             catch { errors.append("\(url.lastPathComponent): \(error.localizedDescription)") }
         }
         if errors.isEmpty && !made.isEmpty {
-            ring.message = "만들었어요\n\(made[0])" + (made.count > 1 ? "\n외 \(made.count - 1)개" : "")
+            ring.message = "Created\n\(made[0])" + (made.count > 1 ? "\nand \(made.count - 1) more" : "")
             NSSound(named: "Glass")?.play()
         } else if !errors.isEmpty {
-            ring.message = "변환 실패\n" + errors.joined(separator: "\n")
+            ring.message = "Transposition failed\n" + errors.joined(separator: "\n")
             NSSound(named: "Basso")?.play()
         } else {
-            ring.message = "지원하지 않는 파일이에요"
+            ring.message = "This file type is not supported"
         }
         scheduleHide(after: errors.isEmpty ? 1.6 : 3.5)
     }
 
     /// 이미지·PDF: 인식에 10초~1분이 걸리므로 링에 진행 중 표시를 두고 백그라운드로 돌린 뒤 확인 창을 띄운다.
     private func handleSheetDrop(semis: Int, url: URL) {
-        guard !busy else { ring.message = "앞 악보를 아직 인식 중이에요"; scheduleHide(after: 2); return }
+        guard !busy else { ring.message = "Still reading the previous score"; scheduleHide(after: 2); return }
         guard SheetOCR.locate() != nil else {
-            ring.message = "악보 인식 도구가 없어요\n(tools/ocr에서 uv sync)"
+            ring.message = "Score reader not installed\n(run uv sync in tools/ocr)"
             NSSound(named: "Basso")?.play()
             scheduleHide(after: 4)
             return
         }
         busy = true
         hideWork?.cancel()
-        ring.message = "악보를 읽는 중…\n\(url.lastPathComponent)\n(10초~1분)"
+        ring.message = "Reading the score…\n\(url.lastPathComponent)\n(10 s to 1 min)"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let r = try SheetOCR.run(url, semitones: semis)
@@ -124,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.busy = false
-                    self.ring.message = "만들었어요\n\(made.lastPathComponent)\n\(r.summary)"
+                    self.ring.message = "Created\n\(made.lastPathComponent)\n\(r.summary)"
                     NSSound(named: "Glass")?.play()
                     self.scheduleHide(after: 2.5)
                     let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made)
@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.busy = false
-                    self.ring.message = "인식 실패\n\(error.localizedDescription)"
+                    self.ring.message = "Could not read the score\n\(error.localizedDescription)"
                     NSSound(named: "Basso")?.play()
                     self.scheduleHide(after: 5)
                 }
@@ -166,11 +166,11 @@ extension AppDelegate {
         let choices = SheetOCR.llmChoices
         let installed = choices.map { SheetOCR.isInstalled($0.id) }
         let alert = NSAlert()
-        alert.messageText = "악보 글자를 어느 AI로 읽을까요?"
-        alert.informativeText = "이미지 악보의 코드와 가사를 이 Mac에 로그인된 AI로 읽어요. 나중에 ♪ 메뉴에서 바꿀 수 있어요."
-            + (installed.contains(false) ? "\n설치되지 않은 것은 고를 수 없어요." : "")
+        alert.messageText = "Which AI should read your scores?"
+        alert.informativeText = "Chords and lyrics in image scores are read by an AI that is signed in on this Mac. You can change this later from the ♪ menu."
+            + (installed.contains(false) ? "\nOptions that are not installed are disabled." : "")
         for (c, ok) in zip(choices, installed) {
-            let button = alert.addButton(withTitle: c.label + (ok ? "" : " (설치 안 됨)"))
+            let button = alert.addButton(withTitle: c.label + (ok ? "" : " (not installed)"))
             button.isEnabled = ok
             button.keyEquivalent = c.id == SheetOCR.llm ? "\r" : ""
         }
@@ -182,6 +182,6 @@ extension AppDelegate {
 
     func updateReaderItem() {
         let name = SheetOCR.llmChoices.first { $0.id == SheetOCR.llm }?.label ?? "Apple Vision"
-        readerItem.title = "글자 읽기: \(name) — 바꾸기…"
+        readerItem.title = "Reading with \(name) — Change…"
     }
 }

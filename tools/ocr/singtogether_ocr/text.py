@@ -236,7 +236,7 @@ def recognize(gray: np.ndarray, langs=("ko-KR", "en-US"), correction: bool = Tru
         req.setCustomWords_(list(custom_words))
     ok, err = handler.performRequests_error_([req], None)
     if not ok:
-        raise RuntimeError(f"Vision 실패: {err}")
+        raise RuntimeError(f"Vision failed: {err}")
     out = []
     for obs in req.results() or []:
         cands = obs.topCandidates_(1)

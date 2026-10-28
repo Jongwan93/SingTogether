@@ -60,7 +60,7 @@ def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
     """그림 한 장과 지시문을 주고 답 글을 받는다. 지시문의 {image}는 그림의 절대 경로로 바뀐다."""
     found = binary(provider)
     if not found:
-        raise RuntimeError(f"{LABELS.get(provider, provider)} CLI를 찾지 못했어요")
+        raise RuntimeError(f"{LABELS.get(provider, provider)} CLI not found")
     name, path = found
     image = image.resolve()
     prompt = prompt.format(image=image)
@@ -70,7 +70,7 @@ def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
                       "--output-format", "json"], timeout=timeout)
         result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
         if result.get("is_error"):
-            raise RuntimeError(f"claude 실패: {result.get('result')}")
+            raise RuntimeError(f"claude failed: {result.get('result')}")
         return result["result"]
     if name == "agy":
         # 헤드리스 모드에서는 프롬프트를 플래그에 붙여야 하고, 셸 명령을 쓰려 하면 권한을 못 받아 빈 결과가 나온다 (프롬프트로 막음)
@@ -81,5 +81,5 @@ def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
     _, out = run([path, "--approval-mode", "plan", "--skip-trust", "--include-directories", str(image.parent),
                   "-p", prompt + f" @{image}"], timeout=timeout)
     if re.search(r"IneligibleTierError|Error authenticating", out):
-        raise RuntimeError("Gemini CLI 로그인이 안 돼요 (GEMINI_API_KEY가 필요하거나 agy를 쓰세요)")
+        raise RuntimeError("Gemini CLI is not signed in (set GEMINI_API_KEY or use agy)")
     return "\n".join(l for l in out.splitlines() if not re.match(r"(Warning:|\[STARTUP\]|Loaded cached)", l))

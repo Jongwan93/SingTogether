@@ -65,9 +65,9 @@ def run_one(engine: str, name: str, img: Path, cached: bool, interline: float) -
         except Exception as e:
             (out_dir / f"{name}.error.txt").parent.mkdir(parents=True, exist_ok=True)
             (out_dir / f"{name}.error.txt").write_text(traceback.format_exc())
-            return None, f"실패: {str(e).splitlines()[0][:60]}"
+            return None, f"failed: {str(e).splitlines()[0][:60]}"
     if not txt.exists():
-        return None, "결과 없음"
+        return None, "no result"
     t = from_text(txt.read_text())
     # 캐시에서 읽으면 시간을 모르므로 musicxml 옆 .sec 파일에서 가져온다
     sec = out_dir / f"{name}.sec"
@@ -96,7 +96,7 @@ def chordsheet_eval(llm: str, names: list[str] | None) -> str:
 
     folder = SCORES / "english"
     images = {_nfc(p.stem): p for p in folder.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".pdf")} if folder.exists() else {}
-    lines = [f"| 샘플 | 방법 | 코드 재현율 | 엉뚱 | 빠짐 | 초 |", "|---|---|---|---|---|---|"]
+    lines = [f"| sample | method | chord recall | extra | missing | sec |", "|---|---|---|---|---|---|"]
     for truth_file in sorted((TRUTH / "chordsheets").glob("*.txt")):
         name = _nfc(truth_file.stem)
         if (names and name not in {_nfc(n) for n in names}) or name not in images:
@@ -123,7 +123,7 @@ def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> str:
 
     from ..render import render
 
-    lines = ["| 샘플 | 렌더 폭 | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
+    lines = ["| sample | render width | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
     for truth_file in sorted(TRUTH.glob("*.txt")):
         name = _nfc(truth_file.stem)
         if names and name not in {_nfc(n) for n in names}:
@@ -142,40 +142,40 @@ def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> str:
                 row = score(t, truth).row()
             except Exception as e:
                 row = {c: "" for c in COLUMNS}
-                row["notes"] = f"실패: {str(e).splitlines()[0][:50]}"
+                row["notes"] = f"failed: {str(e).splitlines()[0][:50]}"
             lines.append(f"| {name} | {w}px | " + " | ".join(row[c] for c in COLUMNS) + " |")
             print(lines[-1], flush=True)
     return "\n".join(lines) + "\n"
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(prog="singtogether-eval", description="엔진별 인식 정확도 비교")
+    ap = argparse.ArgumentParser(prog="singtogether-eval", description="Compare recognition accuracy against hand-checked truth")
     ap.add_argument("--engines", nargs="+", default=DEFAULT_ENGINES)
-    ap.add_argument("--samples", nargs="+", help="샘플 이름 (truth/<이름>.txt)")
-    ap.add_argument("--cached", action="store_true", help="이미 돌린 결과만 다시 채점")
+    ap.add_argument("--samples", nargs="+", help="sample names (truth/<name>.txt)")
+    ap.add_argument("--cached", action="store_true", help="re-score existing results only")
     ap.add_argument("--interline", type=float, default=24.0)
-    ap.add_argument("--chordsheets", action="store_true", help="코드 차트(music_scores/english, truth/chordsheets) 평가")
-    ap.add_argument("--rendered", action="store_true", help="정답을 Verovio로 그려 넣는 상한·조립 회귀 검사 → out/rendered.md")
-    ap.add_argument("--llm", default="auto", help="코드 차트 글자 읽기: auto|claude|gemini|none")
+    ap.add_argument("--chordsheets", action="store_true", help="evaluate chord charts (music_scores/english, truth/chordsheets)")
+    ap.add_argument("--rendered", action="store_true", help="render the truth with Verovio and recognize it (assembly regression test) → out/rendered.md")
+    ap.add_argument("--llm", default="auto", help="AI for chords and lyrics: auto|claude|gemini|none")
     a = ap.parse_args(argv)
 
     if a.rendered:
         report = rendered_eval(a.samples)
         OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / "rendered.md").write_text("# 깨끗한 렌더링 입력\n\n" + report)
+        (OUT / "rendered.md").write_text("# Clean rendered input\n\n" + report)
         print("\n" + report)
         return
     if a.chordsheets:
         report = chordsheet_eval(a.llm, a.samples)
         OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / "chordsheets.md").write_text("# 코드 차트\n\n" + report)
+        (OUT / "chordsheets.md").write_text("# Chord charts\n\n" + report)
         print("\n" + report)
         return
 
     items = samples(a.samples)
     if not items:
-        sys.exit("정답 파일(truth/*.txt)과 같은 이름의 악보가 music_scores/에 없어요")
-    lines = ["# 엔진 비교", "", "| 샘플 | 엔진 | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
+        sys.exit("No score in music_scores/ matches a truth file (truth/*.txt)")
+    lines = ["# Engine comparison", "", "| sample | engine | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
     for name, img in items:
         for engine in a.engines:
             print(f"{name} × {engine} ...", flush=True)
@@ -185,8 +185,8 @@ def main(argv=None) -> None:
                 row["notes"] = err
             lines.append(f"| {name} | {engine} | " + " | ".join(row[c] for c in COLUMNS) + " |")
             print("   ", err or row)
-    report = "\n".join(lines) + "\n\nnotes = 음높이·길이 둘 다 맞은 비율, pitch = 음높이만, 마디 경계가 달라도 순서가 맞으면 인정.\n" \
-             "review = 검토 표시(신뢰도 < 0.6)의 정밀도 P(표시한 것 중 실제 오류)·재현율 R(실제 오류 중 표시된 것). 방금 돌린 결과에만.\n"
+    report = "\n".join(lines) + "\n\nnotes = pitch and length both right, pitch = pitch only; counted in order even if measure boundaries differ.\n" \
+             "review = review flags (confidence < 0.6): precision P (flagged that are wrong), recall R (wrong that are flagged). Fresh runs only.\n"
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "report.md").write_text(report)
     print("\n" + report)

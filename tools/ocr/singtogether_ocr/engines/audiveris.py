@@ -24,7 +24,7 @@ class engine:
     def transcribe(self, page: Page, work_dir: Path, debug_dir: Path | None = None) -> Transcription:
         binary = self.app / "Contents" / "MacOS" / "Audiveris"
         if not binary.exists():
-            raise RuntimeError(f"Audiveris가 없어요: {self.app}")
+            raise RuntimeError(f"Audiveris not found: {self.app}")
         out_dir = work_dir / "audiveris"
         png = save_png(page.gray, out_dir / f"{page.name}.png")
         cmd = [str(binary), "-batch", "-export", "-output", str(out_dir)]
@@ -34,7 +34,7 @@ class engine:
         seconds, log = run(cmd)
         mxl = next(out_dir.glob(f"{page.name}*.mxl"), None)
         if mxl is None:
-            raise RuntimeError("Audiveris가 MXL을 만들지 않았어요:\n" + log[-1500:])
+            raise RuntimeError("Audiveris did not produce MXL:\n" + log[-1500:])
         t = from_musicxml(mxl, self.name)
         t.seconds = seconds
         return t

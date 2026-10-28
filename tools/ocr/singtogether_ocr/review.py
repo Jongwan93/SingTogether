@@ -39,7 +39,7 @@ def check_rhythm(t: Transcription) -> None:
         m.rhythm_ok = length == expected or short_ok or not m.notes
         if not m.rhythm_ok:
             for n in m.notes:
-                n.reasons.append(f"박자 합 {length}/{expected}")
+                n.reasons.append(f"beats add up to {length}/{expected}")
 
 
 def mark_claude(t: Transcription, claude_t: Transcription) -> None:
@@ -59,14 +59,14 @@ def mark_claude(t: Transcription, claude_t: Transcription) -> None:
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for n in a[i1:i2]:
-                n.reasons.append("AI 일치")
+                n.reasons.append("matches AI")
         elif tag == "replace":
             for k, n in enumerate(a[i1:i2]):
                 other = b[j1 + k] if j1 + k < j2 else None
-                n.reasons.append(f"AI와 다름: {other.name}/{other.duration}" if other else "AI에 없음")
+                n.reasons.append(f"AI read {other.name}/{other.duration}" if other else "not in AI reading")
         elif tag == "delete":
             for n in a[i1:i2]:
-                n.reasons.append("AI에 없음")
+                n.reasons.append("not in AI reading")
 
 
 def assess(t: Transcription) -> dict:
@@ -84,36 +84,36 @@ def assess(t: Transcription) -> dict:
                 c *= W_NO_HEAD
             if m.head_match is False:
                 c *= W_HEAD_MISMATCH
-                why.append("마디 머리 수 불일치")
+                why.append("notehead count differs in measure")
             if m.rhythm_ok is False:
                 c *= W_RHYTHM
             for r in n.reasons:
-                if r.startswith("오선 위치로 고침"):
+                if r.startswith("pitch fixed from staff position"):
                     c *= W_OVERRIDE
-                elif r.startswith("AI와 다름") or r == "AI에 없음":
+                elif r.startswith("AI read ") or r == "not in AI reading":
                     c *= W_CLAUDE_DIFF if claude_ok else W_CLAUDE_DIFF_WEAK
-                elif r == "AI 일치":
+                elif r == "matches AI":
                     c = min(1.0, c * W_CLAUDE_SAME)
             n.conf = round(c, 2)
             notes.append({"measure": m.number, "index": i, "note": n.name, "duration": str(n.duration), "conf": n.conf,
-                          "reasons": [r for r in why if r != "AI 일치"], "x": n.x, "y": n.y})
+                          "reasons": [r for r in why if r != "matches AI"], "x": n.x, "y": n.y})
             if n.chord:
                 cc = n.chord_conf if n.chord_conf is not None else 0.5
                 cc = {"both": max(cc, 0.9), "claude": 0.5}.get(n.chord_src, cc)
                 why = []
                 if n.chord_src == "claude":
-                    why.append("AI만 읽음 (자리 추정)")
+                    why.append("only AI read it (position guessed)")
                 elif n.chord_src == "vision" and cc < 0.9:
-                    why.append("Vision만 읽음")
+                    why.append("only Vision read it")
                 if canon(n.chord) not in common:
                     cc *= 0.7
-                    why.append(f"{t.key_name}에서 드문 코드")
+                    why.append(f"unusual chord in {t.key_name}")
                 n.chord_conf = round(min(1.0, cc), 2)
                 chords.append({"measure": m.number, "index": i, "chord": n.chord, "conf": n.chord_conf, "reasons": why, "x": n.x, "y": n.y})
             if n.lyrics and n.lyrics[0]:
                 lc = n.lyric_conf if n.lyric_conf is not None else 0.5
                 lc = {"both": max(lc, 0.9), "claude": 0.5}.get(n.lyric_src, lc)
-                why = {"claude": ["AI만 읽음 (자리 추정)"], "vision": ["Vision만 읽음"] if lc < 0.9 else []}.get(n.lyric_src, [])
+                why = {"claude": ["only AI read it (position guessed)"], "vision": ["only Vision read it"] if lc < 0.9 else []}.get(n.lyric_src, [])
                 n.lyric_conf = round(min(1.0, lc), 2)
                 lyrics.append({"measure": m.number, "index": i, "syllable": n.lyrics[0], "conf": n.lyric_conf, "reasons": why, "x": n.x, "y": n.y})
     flagged = lambda items: [it for it in items if it["conf"] < FLAG]
@@ -152,6 +152,6 @@ def overlay(page: Page, t: Transcription, review: dict, path: Path) -> Path:
         y = (it["y"] if it["y"] is not None else 0) + 2.5 * il
         debug.boxes(img, [(it["x"] - 0.6 * il, y - 0.6 * il, it["x"] + 0.6 * il, y + 0.6 * il)], "lyric", thickness=2)
     s = review["summary"]
-    debug.caption(img, f"{page.name}  확인 필요: 음표 {s['notes_flagged']}/{s['notes']}, 코드 {s['chords_flagged']}/{s['chords']}, "
-                       f"가사 {s['lyrics_flagged']}/{s['lyrics']}  (신뢰도 < {FLAG})")
+    debug.caption(img, f"{page.name}  to check: notes {s['notes_flagged']}/{s['notes']}, chords {s['chords_flagged']}/{s['chords']}, "
+                       f"lyrics {s['lyrics_flagged']}/{s['lyrics']}  (confidence < {FLAG})")
     return debug.save(path, img)

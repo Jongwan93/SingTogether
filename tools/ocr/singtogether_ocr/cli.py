@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-28b"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-28c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -85,12 +85,12 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                 try:
                     claude_t = claude_eng.transcribe(page, work, debug_dir)
                 except Exception as e:        # 로그인 만료, 가사 저작권 필터 등 → AI 없이 계속
-                    print(f"{who} 읽기 실패, Apple Vision만 사용: {str(e).strip().splitlines()[-1][:200]}")
+                    print(f"{who} reading failed, using Apple Vision only: {str(e).strip().splitlines()[-1][:200]}")
             if chords:
                 chord_boxes = text.read_chords(page, systems, debug_dir)
                 if claude_t:
                     chord_boxes, ratio = hybrid.merge_chords(chord_boxes, claude_t, systems, page.interline)
-                    print(f"하이브리드 코드: {who} {sum(1 for n in claude_t.notes if n.chord)}개, 앵커 {ratio:.0%}")
+                    print(f"hybrid chords: {who} {sum(1 for n in claude_t.notes if n.chord)}, anchored {ratio:.0%}")
                 assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord])
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
@@ -101,7 +101,7 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                 sylls = lyrics.read_lyrics(page, systems, debug_dir)
                 if claude_t:
                     sylls, ratio = hybrid.merge_lyrics(sylls, claude_t, systems, page.interline)
-                    print(f"하이브리드 가사: 앵커 {ratio:.0%}")
+                    print(f"hybrid lyrics: anchored {ratio:.0%}")
                 lyrics.attach_lyrics(t, sylls, page.interline)
                 if claude_t and claude_t.title:
                     t.title, t.composer = claude_t.title, claude_t.composer
@@ -121,7 +121,7 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
             merged.has_chords |= t.has_chords
             merged.has_lyrics |= t.has_lyrics
     if merged is None:
-        raise RuntimeError("쪽이 없어요")
+        raise RuntimeError("no pages")
     merged.seconds = time.time() - t0
     return merged
 
@@ -136,7 +136,7 @@ def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None,
     for page in pages:
         text, method, seconds = chordsheet.transcribe(src, page, work, llm)
         n = sum(1 for line in text.splitlines() if chordsheet.is_chord_line(line))
-        print(f"코드 차트 ({method}): {page.name} 코드 줄 {n}개, {seconds:.0f}초")
+        print(f"chord chart ({method}): {page.name} {n} chord lines, {seconds:.0f}s")
         texts.append(text)
         if info is not None:
             info["read_by"] = method
@@ -152,13 +152,13 @@ def chart_overlay(src: Path, chart_text: str, semitones: int, transposed_txt: Pa
     try:
         r = chordoverlay.overlay(src, chart_text, semitones, out, review_png)
     except Exception as e:                          # 그림을 못 만들어도 .txt는 있다
-        print(f"코드 그림 실패 (텍스트는 있음): {e}")
+        print(f"chord image failed (text is there): {e}")
         result["overlay_error"] = str(e)
         return None
     if r.image is None:
         result["overlay_error"] = "; ".join(r.notes)
         return None
-    print(f"→ {r.image}  (코드 {r.replaced}개 바꿈, 글꼴 {r.font})")
+    print(f"→ {r.image}  ({r.replaced} chords rewritten, font {r.font})")
     for n in r.notes:
         print(f"   ! {n}")
     result.update({"transposed_txt": result.get("transposed"), "transposed": str(r.image),
@@ -180,36 +180,36 @@ def transpose(musicxml: Path, semitones: int, result: dict | None = None) -> Pat
     binary = os.environ.get("SINGTOGETHER_TRANSPOSE") or next(
         (p for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose") if p.exists()), None)
     if not binary:
-        raise RuntimeError("singtogether-transpose가 없어요. 저장소 루트에서 ./build.sh 를 먼저 실행하세요")
+        raise RuntimeError("singtogether-transpose not found. Run ./build.sh in the repository root first")
     p = subprocess.run([str(binary), str(musicxml), str(semitones)], capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip())
     keys, path = p.stdout.strip().splitlines()[:2]
-    print(f"이조: {keys}")
+    print(f"transposed: {keys}")
     if result is not None:
         result["transposed"], result["keys"] = path, keys
     return Path(path)
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(prog="singtogether-ocr", description="악보 이미지/PDF → MusicXML")
+    ap = argparse.ArgumentParser(prog="singtogether-ocr", description="Score image/PDF → MusicXML, transposed copy, review files")
     ap.add_argument("input", type=Path)
-    ap.add_argument("--out", type=Path, help="출력 MusicXML (기본: 입력 옆 <이름>.musicxml)")
+    ap.add_argument("--out", type=Path, help="output MusicXML (default: <name>.musicxml next to the input)")
     ap.add_argument("--engine", default="homr", choices=list(engines.NAMES) + ["auto"],
-                    help="auto = AI CLI(--llm)가 있으면 hybrid, 없으면 homr")
-    ap.add_argument("--debug", type=Path, metavar="DIR", help="단계별 오버레이 이미지를 저장할 폴더")
-    ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
-    ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
-    ap.add_argument("--no-lyrics", action="store_true", help="가사 OCR 생략")
-    ap.add_argument("--no-mask", action="store_true", help="엔진에 주기 전 코드·가사 글자를 지우는 단계를 생략")
+                    help="auto = hybrid when an AI CLI (--llm) is available, otherwise homr")
+    ap.add_argument("--debug", type=Path, metavar="DIR", help="folder for one overlay image per pipeline stage")
+    ap.add_argument("--work", type=Path, metavar="DIR", help="folder for intermediate files (default: a temporary folder)")
+    ap.add_argument("--no-chords", action="store_true", help="skip chord OCR")
+    ap.add_argument("--no-lyrics", action="store_true", help="skip lyrics OCR")
+    ap.add_argument("--no-mask", action="store_true", help="do not erase chord and lyric text before the note engine")
     ap.add_argument("--interline", type=float, default=ingest.TARGET_INTERLINE, metavar="PX",
-                    help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
-    ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
-    ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
+                    help=f"target staff-line spacing after scaling (default {ingest.TARGET_INTERLINE:.0f})")
+    ap.add_argument("--transpose", type=int, metavar="N", help="semitones; also writes a transposed copy (needs ./build.sh)")
+    ap.add_argument("--render", action="store_true", help="render SVG/PDF (the transposed copy too)")
     ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
-                    help="글자를 읽을 AI CLI: claude(Claude Code) / gemini(agy·Gemini CLI) / none(Apple Vision만) / auto(설치된 것)")
-    ap.add_argument("--no-cache", action="store_true", help="인식 결과 캐시(~/Library/Caches/SingTogether/ocr)를 읽지도 쓰지도 않는다")
-    ap.add_argument("--json", action="store_true", help="마지막 줄에 결과 파일 경로·요약을 JSON 한 줄로 (앱 연동용)")
+                    help="AI CLI that reads chords and lyrics: claude (Claude Code) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
+    ap.add_argument("--no-cache", action="store_true", help="neither read nor write the result cache (~/Library/Caches/SingTogether/ocr)")
+    ap.add_argument("--json", action="store_true", help="print result paths and summary as one JSON line at the end (used by the app)")
     a = ap.parse_args(argv)
     if a.engine == "auto":
         a.engine = "hybrid" if llm.pick(a.llm) != "none" else "homr"
@@ -224,7 +224,7 @@ def main(argv=None) -> None:
                      f"il{a.interline:g}", "" if a.no_mask else "mask")
     out_base = a.out or a.input.with_suffix(".musicxml")
     if not a.no_cache and (hit := cache_get(key_, out_base)):
-        print(f"캐시에서 가져옴 ({key_})")
+        print(f"from cache ({key_})")
         for f in hit:
             print(f"→ {f}")
         result["cached"] = True
@@ -290,11 +290,11 @@ def main(argv=None) -> None:
     rev_path = out.with_suffix(".review.json")
     rev_path.write_text(json.dumps(rev, ensure_ascii=False, indent=1))
     s_ = rev["summary"]
-    print(f"확인 필요: 음표 {s_['notes_flagged']}/{s_['notes']}, 코드 {s_['chords_flagged']}/{s_['chords']}, 가사 {s_['lyrics_flagged']}/{s_['lyrics']} → {rev_path}")
+    print(f"to check: notes {s_['notes_flagged']}/{s_['notes']}, chords {s_['chords_flagged']}/{s_['chords']}, lyrics {s_['lyrics_flagged']}/{s_['lyrics']} → {rev_path}")
     n_chords = sum(1 for n in t.notes if n.chord)
     n_lyr = sum(1 for n in t.notes if n.lyrics and n.lyrics[0])
-    print(f"{a.engine}: {t.title or '(제목 없음)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, "
-          f"음표 {len(t.notes)}, 코드 {n_chords}, 가사 {n_lyr}음절, {t.seconds:.0f}초")
+    print(f"{a.engine}: {t.title or '(no title)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)} measures, "
+          f"{len(t.notes)} notes, {n_chords} chords, {n_lyr} syllables, {t.seconds:.0f}s")
     print(f"→ {out}\n→ {txt}")
     result.update({"musicxml": str(out), "txt": str(txt), "review_json": str(rev_path), "summary": s_, "key": t.key_name,
                    "review_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.review.png"))]})

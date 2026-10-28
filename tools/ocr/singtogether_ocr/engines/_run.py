@@ -22,5 +22,5 @@ def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None, timeou
     p = subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, timeout=timeout)
     out = p.stdout + p.stderr
     if p.returncode != 0:
-        raise RuntimeError(f"{Path(cmd[0]).name} 실패 (exit {p.returncode}):\n{out[-2000:]}")
+        raise RuntimeError(f"{Path(cmd[0]).name} failed (exit {p.returncode}):\n{out[-2000:]}")
     return time.time() - t0, out

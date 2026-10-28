@@ -85,8 +85,8 @@ final class NoteEditorController: NSViewController {
     private let heading = NSTextField(labelWithString: "")
     enum NoteEdit { case step(Int), accidental(Int), length(String), rest, delete }
 
-    private static let lengths: [(String, String)] = [("온음표", "1"), ("2분", "2"), ("점2분", "2."), ("4분", "4"), ("점4분", "4."),
-                                                      ("8분", "8"), ("점8분", "8."), ("16분", "16")]
+    private static let lengths: [(String, String)] = [("whole", "1"), ("half", "2"), ("dotted half", "2."), ("quarter", "4"), ("dotted quarter", "4."),
+                                                      ("eighth", "8"), ("dotted eighth", "8."), ("16th", "16")]
 
     init(spot: ReviewImageView.Spot, apply: @escaping (NoteEdit) -> String?) {
         self.spot = spot
@@ -98,23 +98,23 @@ final class NoteEditorController: NSViewController {
     override func loadView() {
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         setTitle(spot.name)
-        let conf = NSTextField(labelWithString: String(format: "신뢰도 %.2f", spot.conf))
+        let conf = NSTextField(labelWithString: String(format: "confidence %.2f", spot.conf))
         conf.font = .systemFont(ofSize: 11); conf.textColor = .secondaryLabelColor
 
-        let up = NSButton(title: "▲ 한 칸 위", target: self, action: #selector(stepUp))
-        let down = NSButton(title: "▼ 한 칸 아래", target: self, action: #selector(stepDown))
+        let up = NSButton(title: "▲ Step up", target: self, action: #selector(stepUp))
+        let down = NSButton(title: "▼ Step down", target: self, action: #selector(stepDown))
         let acc = NSSegmentedControl(labels: ["♭", "♮", "♯"], trackingMode: .selectOne, target: self, action: #selector(accidental(_:)))
         acc.selectedSegment = spot.name.contains("#") ? 2 : (spot.name.dropFirst().contains("b") ? 0 : 1)
         let length = NSPopUpButton(frame: .zero, pullsDown: false)
         length.addItems(withTitles: Self.lengths.map { $0.0 })
         if let i = Self.lengths.firstIndex(where: { Self.lengthToken(spot.duration) == $0.1 }) { length.selectItem(at: i) }
         length.target = self; length.action = #selector(lengthChanged(_:))
-        let rest = NSButton(title: "쉼표로", target: self, action: #selector(toRest))
-        let del = NSButton(title: "삭제", target: self, action: #selector(delete))
+        let rest = NSButton(title: "Make rest", target: self, action: #selector(toRest))
+        let del = NSButton(title: "Delete", target: self, action: #selector(delete))
         del.contentTintColor = .systemRed
 
         let row1 = NSStackView(views: [up, down, acc]); row1.spacing = 8
-        let row2 = NSStackView(views: [NSTextField(labelWithString: "길이"), length, rest, del]); row2.spacing = 8
+        let row2 = NSStackView(views: [NSTextField(labelWithString: "Length"), length, rest, del]); row2.spacing = 8
         let stack = NSStackView(views: [heading, conf, row1, row2])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -124,7 +124,7 @@ final class NoteEditorController: NSViewController {
     }
 
     private func setTitle(_ name: String) {
-        heading.stringValue = "마디 \(spot.measure) · \(spot.index + 1)번째 음: \(name)"
+        heading.stringValue = "Measure \(spot.measure) · note \(spot.index + 1): \(name)"
     }
     private func did(_ e: NoteEdit) {
         if let name = apply(e) { setTitle(name) } else { view.window?.close() }

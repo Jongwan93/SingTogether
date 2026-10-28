@@ -75,7 +75,7 @@ def load_color(src: Path) -> np.ndarray:
             return np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3).copy()
     bgr = cv2.imdecode(np.fromfile(src, np.uint8), cv2.IMREAD_COLOR)
     if bgr is None:
-        raise ValueError(f"이미지를 읽을 수 없어요: {src}")
+        raise ValueError(f"Cannot read image: {src}")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
@@ -284,7 +284,7 @@ def _transpose_tokens(tokens: list[str], semitones: int) -> tuple[list[str], str
     binary = os.environ.get("SINGTOGETHER_TRANSPOSE") or next(
         (str(p) for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose") if p.exists()), None)
     if not binary:
-        raise RuntimeError("singtogether-transpose가 없어요. 저장소 루트에서 ./build.sh 를 먼저 실행하세요")
+        raise RuntimeError("singtogether-transpose not found. Run ./build.sh in the repository root first")
     with tempfile.TemporaryDirectory() as d:
         src, out = Path(d) / "chords.txt", Path(d) / "out.txt"
         src.write_text("\n".join(tokens) + "\n")
@@ -471,7 +471,7 @@ def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review
     chords, missed, lh = find_chords(gray, chart_text)
     r = Result()
     if not chords:
-        r.notes.append("코드를 하나도 찾지 못했어요")
+        r.notes.append("no chords found in the image")
         return r
     pieces = [p for c in chords for p in c.text.split("-")]
     moved, r.keys = _transpose_tokens(pieces, semitones)
@@ -485,12 +485,12 @@ def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review
     r.font = pick_font(ink, chords)
     result = draw(rgb, ink, chords, r.font, getattr(find_chords, "obstacles", ()))
     for line in getattr(find_chords, "lost_lines", []):
-        r.notes.append(f"이미지에서 못 찾은 코드 줄: {line}")
+        r.notes.append(f"chord line not found in the image: {line}")
     r.replaced = sum(len(c.text.split("-")) for c in chords if c.new)
     r.missed = len(missed)
     r.missed += len(getattr(find_chords, "lost_lines", []))
     if missed:
-        r.notes.append(f"코드 줄에 바꾸지 못한 글자 {len(missed)}곳 (확인 그림에 빨간 상자)")
+        r.notes.append(f"{len(missed)} spots on chord lines not rewritten (red boxes in the review image)")
     out.parent.mkdir(parents=True, exist_ok=True)
     ext = out.suffix.lower()
     if ext == ".pdf":

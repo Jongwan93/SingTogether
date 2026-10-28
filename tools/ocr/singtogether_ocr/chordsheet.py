@@ -221,7 +221,7 @@ def transcribe(src: Path, page: ingest.Page, work: Path, llm: str = "auto") -> t
     """(텍스트, 방법 이름, 걸린 초). 같은 작업 폴더에 캐시가 있으면 다시 읽지 않는다.
 
     AI가 가사 출력을 거부하거나 실패하면 코드 줄만 받아 Vision의 가사 줄과 합치고,
-    그것도 실패하면 Vision만 쓴다. 방법 이름에 그 사실이 남는다 ("gemini+vision", "vision (gemini 실패)")."""
+    그것도 실패하면 Vision만 쓴다. 방법 이름에 그 사실이 남는다 ("gemini+vision", "vision (gemini failed)")."""
     method = llm_mod.pick(llm)
     out_dir = work / "chordsheet"
     cached = out_dir / f"{page.name}-{method}.txt"
@@ -242,17 +242,17 @@ def transcribe(src: Path, page: ingest.Page, work: Path, llm: str = "auto") -> t
         try:
             text = _clean(llm_mod.ask(method, PROMPT, image))
             if not any(is_chord_line(l) for l in text.splitlines()):
-                raise RuntimeError("코드 줄이 없는 답")
+                raise RuntimeError("answer has no chord lines")
         except Exception as e:
-            print(f"{method}: 전체 받아 적기 실패 ({str(e).strip().splitlines()[-1][:160]}) → 코드 줄만 다시 요청")
+            print(f"{method}: full transcription failed ({str(e).strip().splitlines()[-1][:160]}), asking for chord lines only")
             try:
                 chords = [l.rstrip() for l in _clean(llm_mod.ask(method, CHORDS_ONLY, image)).splitlines() if is_chord_line(l)]
                 if not chords:
-                    raise RuntimeError("코드 줄이 없는 답")
+                    raise RuntimeError("answer has no chord lines")
                 text, label = _merge_chords(_vision(gray), chords), f"{method}+vision"
             except Exception as e2:
-                print(f"{method}: 코드 줄도 실패 ({str(e2).strip().splitlines()[-1][:160]}) → Apple Vision만 사용")
-                text, label = _vision(gray), f"vision ({method} 실패)"
+                print(f"{method}: chord lines failed too ({str(e2).strip().splitlines()[-1][:160]}), using Apple Vision only")
+                text, label = _vision(gray), f"vision ({method} failed)"
     out_dir.mkdir(parents=True, exist_ok=True)
     cached.write_text(f"#method {label}\n{text}" if label != method else text)
     return text, label, time.time() - t0

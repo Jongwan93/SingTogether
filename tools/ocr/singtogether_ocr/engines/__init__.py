@@ -21,5 +21,5 @@ class Engine(Protocol):
 
 def get(name: str) -> Engine:
     if name not in NAMES or name == "hybrid":
-        raise ValueError(f"모르는 엔진: {name} (가능: {', '.join(n for n in NAMES if n != 'hybrid')})")
+        raise ValueError(f"Unknown engine: {name} (choose from: {', '.join(n for n in NAMES if n != 'hybrid')})")
     return importlib.import_module(f".{name}", __name__).engine()

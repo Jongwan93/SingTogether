@@ -83,7 +83,7 @@ final class RingView: NSView {
         NSColor(white: 0.08, alpha: 0.9).setFill(); hub.fill()
         drawText(keyInfo?.originalName ?? "♪", at: NSPoint(x: mid.x, y: mid.y + 6),
                  font: .monospacedSystemFont(ofSize: 17, weight: .bold), alpha: 1)
-        drawText("여기 놓으면 취소", at: NSPoint(x: mid.x, y: mid.y - 14),
+        drawText("Drop here to cancel", at: NSPoint(x: mid.x, y: mid.y - 14),
                  font: .systemFont(ofSize: 9), alpha: 0.6)
     }
 

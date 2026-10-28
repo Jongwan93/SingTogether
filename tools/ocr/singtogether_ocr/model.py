@@ -119,7 +119,7 @@ def read_musicxml_bytes(path: Path) -> bytes:
         except KeyError:
             pass
         if not names:
-            raise ValueError(f"MXL 안에 악보가 없어요: {path}")
+            raise ValueError(f"No score inside MXL: {path}")
         return z.read(names[0])
 
 
@@ -155,7 +155,7 @@ def from_musicxml(src: Path | bytes, engine: str, key_implied_alters: bool = Fal
     data = read_musicxml_bytes(src) if isinstance(src, Path) else src
     root = ET.fromstring(data)
     if root.tag != "score-partwise":
-        raise ValueError(f"score-partwise만 지원해요: {root.tag}")
+        raise ValueError(f"Only score-partwise is supported: {root.tag}")
     parts = root.findall("part")
     if not parts:
         return Transcription(engine)

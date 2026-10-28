@@ -57,7 +57,7 @@ def load_pages(path: Path, dpi: int = 300) -> list[np.ndarray]:
         return pages
     img = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_GRAYSCALE)   # 한글 경로 대응
     if img is None:
-        raise ValueError(f"이미지를 읽을 수 없어요: {path}")
+        raise ValueError(f"Cannot read image: {path}")
     return [img]
 
 

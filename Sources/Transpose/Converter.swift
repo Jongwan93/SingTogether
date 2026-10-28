@@ -4,9 +4,9 @@ enum ConvertError: LocalizedError {
     case unreadable, toolFailed(String), noScore
     var errorDescription: String? {
         switch self {
-        case .unreadable: return "파일을 읽을 수 없어요 (텍스트 인코딩 확인)"
-        case .toolFailed(let t): return "\(t) 실행에 실패했어요"
-        case .noScore: return "MXL 안에서 악보 파일을 찾지 못했어요"
+        case .unreadable: return "Cannot read the file (check the text encoding)"
+        case .toolFailed(let t): return "\(t) failed to run"
+        case .noScore: return "No score file found inside the MXL"
         }
     }
 }

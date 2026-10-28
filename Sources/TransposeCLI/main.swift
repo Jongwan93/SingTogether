@@ -13,11 +13,11 @@ func fail(_ message: String, code: Int32) -> Never {
 let args = Array(CommandLine.arguments.dropFirst())
 if args.first == "--selftest" { exit(SelfTest.run()) }
 guard args.count >= 2, let semitones = Int(args[1]) else {
-    fail("사용법: singtogether-transpose <악보 파일> <반음> [--out <출력 파일>]", code: 2)
+    fail("usage: singtogether-transpose <score file> <semitones> [--out <output file>]", code: 2)
 }
 let input = URL(fileURLWithPath: args[0])
 guard Converter.kind(of: input) != nil else {
-    fail("지원하지 않는 형식: \(input.lastPathComponent)", code: 1)
+    fail("unsupported file type: \(input.lastPathComponent)", code: 1)
 }
 
 var output: URL?
@@ -34,11 +34,11 @@ do {
         // 이미지·PDF는 인식 뒤에야 키를 안다. 결과 파일 이름의 "(−2, F)"에서 새 키를 보여 준다
         let name = made.deletingPathExtension().lastPathComponent
         let newKey = name.split(separator: ",").last.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " )")) } ?? "?"
-        print("(인식) -> \(newKey)")
+        print("(recognized) -> \(newKey)")
     } else {
         print("\(info?.originalName ?? "?") -> \(info?.name(shiftedBy: semitones) ?? "?")")
     }
     print(made.path)
 } catch {
-    fail("변환 실패: \(error.localizedDescription)", code: 1)
+    fail("transposition failed: \(error.localizedDescription)", code: 1)
 }

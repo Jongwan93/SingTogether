@@ -34,7 +34,7 @@ class Score:
         tp, flagged, wrong = self.flags
         p = f"{100 * tp / flagged:.0f}%" if flagged else "–"
         r = f"{100 * tp / wrong:.0f}%" if wrong else "–"
-        return f"P {p} R {r} ({flagged}표시/{wrong}오류)"
+        return f"P {p} R {r} ({flagged} flagged/{wrong} wrong)"
 
     def row(self) -> dict:
         def pct(p):

@@ -58,15 +58,15 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
             letter, octave = position_pitch(h)
             if (n.step, n.octave) != (letter, octave):
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
-                    print(f"    덮어씀[{why}] 오선{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
-                n.reasons.append(f"오선 위치로 고침 (엔진은 {n.name})")
+                    print(f"    override[{why}] staff{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
+                n.reasons.append(f"pitch fixed from staff position (engine read {n.name})")
                 n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
 
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]
         if all_pitched and len(all_pitched) == len(heads):     # 오선 전체가 딱 맞으면 그대로 짝
             for n, h in zip(all_pitched, heads):
                 n.x, n.y, n.head = h.x, h.y, True
-                read_pitch(n, h, "오선수일치")
+                read_pitch(n, h, "count match")
             for m in measures:
                 m.head_match = True
         else:
@@ -101,7 +101,7 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                 trust_all = abs(len(heads) - len(pitched)) <= 3 and (agree is None or agree < 0.93)
                 sure_ids = {(a, b) for a, b in sure}
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
-                    print(f"  오선{si}: 음표 {len(pitched)} 머리 {len(heads)} 확실한 짝 {len(sure)} 일치율 {agree if agree is None else round(agree, 2)} trust_all {trust_all}")
+                    print(f"  staff{si}: notes {len(pitched)} heads {len(heads)} sure pairs {len(sure)} agreement {agree if agree is None else round(agree, 2)} trust_all {trust_all}")
                 for m in measures:
                     m.head_match = exact[id(m)]
                 for a, b in pairs:
@@ -109,10 +109,10 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                     near = abs(exp[id(n)] - h.x) < 1.0 * il
                     n.x, n.y, n.head = h.x, h.y, True
                     if (a, b) in sure_ids or near or trust_all:
-                        read_pitch(n, h, "확실" if (a, b) in sure_ids else ("근접" if near else "전체신뢰"))
+                        read_pitch(n, h, "sure" if (a, b) in sure_ids else ("near" if near else "trust all"))
                 for n in pitched:
                     if not n.head:
-                        n.reasons.append("머리 못 찾음")
+                        n.reasons.append("notehead not found")
         for m in measures:                                   # 쉼표는 마디 안에서 시간 비율로
             if m.x0 is not None and m.length:
                 pos = 0

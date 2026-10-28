@@ -12,7 +12,7 @@ def render(musicxml: Path, out_prefix: Path, pdf: bool = True) -> list[Path]:
     tk = verovio.toolkit()
     tk.setOptions(OPTIONS)
     if not tk.loadFile(str(musicxml)):
-        raise RuntimeError(f"Verovio가 읽지 못했어요: {musicxml}")
+        raise RuntimeError(f"Verovio could not read {musicxml}")
     svgs = []
     for i in range(1, tk.getPageCount() + 1):
         p = out_prefix.with_name(f"{out_prefix.name}-{i}.svg")
@@ -22,7 +22,7 @@ def render(musicxml: Path, out_prefix: Path, pdf: bool = True) -> list[Path]:
         try:
             svgs.append(svg_to_pdf(svgs, out_prefix.with_suffix(".pdf")))
         except Exception as e:                       # PDF는 덤. SVG만 있어도 된다
-            print(f"PDF 변환 실패 (SVG는 있음): {e}")
+            print(f"PDF conversion failed (SVG is there): {e}")
     return svgs
 
 
@@ -51,6 +51,6 @@ def svg_to_pdf(svgs: list[Path], out: Path) -> Path:
 
     tool = shutil.which("rsvg-convert")
     if not tool:
-        raise RuntimeError("rsvg-convert가 없어요 (brew install librsvg)")
+        raise RuntimeError("rsvg-convert not found (brew install librsvg)")
     subprocess.run([tool, "-f", "pdf", "-o", str(out), *map(str, svgs)], check=True, capture_output=True)
     return out

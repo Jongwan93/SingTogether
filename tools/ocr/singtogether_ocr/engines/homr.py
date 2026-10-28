@@ -18,14 +18,14 @@ class engine:
 
     def transcribe(self, page: Page, work_dir: Path, debug_dir: Path | None = None) -> Transcription:
         if not self.binary.exists():
-            raise RuntimeError(f"homr가 없어요: {self.binary}")
+            raise RuntimeError(f"homr not found: {self.binary}")
         out_dir = work_dir / "homr"
         png = save_png(page.gray, out_dir / f"{page.name}.png")
         cmd = [str(self.binary), str(png)] + (["--debug"] if debug_dir else [])
         seconds, log = run(cmd, timeout=1800)
         xml = png.with_suffix(".musicxml")
         if not xml.exists():
-            raise RuntimeError("homr가 MusicXML을 만들지 않았어요:\n" + log[-1500:])
+            raise RuntimeError("homr did not produce MusicXML:\n" + log[-1500:])
         if debug_dir:
             for p in out_dir.glob(f"{page.name}_*.png"):       # homr 자체 디버그 이미지
                 shutil.copy(p, debug_dir / f"{page.name}-3-homr-{p.name[len(page.name) + 1:]}")

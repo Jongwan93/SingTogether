@@ -45,7 +45,7 @@ brew install librsvg            # rsvg-convert, used to write the PDF
 
 - Chords and lyrics are read much more accurately with an AI command-line tool that is installed and logged in on the Mac:
   [Claude Code](https://claude.com/claude-code) (`claude`) or Google [Antigravity](https://antigravity.google) (`agy`).
-  When the app starts it asks which one to use, with a button for each. Change it later from the ♪ menu. Without either, the app uses Apple Vision only.
+  When the app starts it asks *Which AI should read your scores?* with a button for each. Change it later with **Reading with … — Change…** in the ♪ menu. Without either, the app uses Apple Vision only.
 - The app looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 - To start at login: System Settings → General → Login Items → add SingTogether.
 - macOS may ask once for permission to access the Desktop or Documents folder.
@@ -57,7 +57,7 @@ Recognition is never perfect, so every image score opens a review window:
 - **Left:** the original with suspicious spots marked. Red boxes are notes, orange are chords, purple are lyric syllables. Each note is labeled with its measure number and what was read.
 - **Right:** the transposed score. Notes that need checking are drawn in red.
 - **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete. The PDF is rebuilt right away. Fixed notes get a green outline.
-- For bigger changes use **Edit text…**, which opens the score as plain text (format below), then **Rebuild from text**.
+- For bigger changes use **Edit Text…**, which opens the score as plain text (format below), then **Rebuild from Text**.
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
 To try it without dragging: `open build/SingTogether.app --args --sheet score.png -2`
@@ -86,11 +86,14 @@ If you can get the original PDF from the publisher, use that: the engine reads c
 Recognized scores are also written as a `.txt` you can read and edit. Chord charts use the same idea with chords above lyrics.
 
 ```
-title: 주님의 임재 앞에서
+title: Amazing Grace
 key: G major
-time: 4/4
-1: r/8 [G] G4/8 G4/8 G4/8 [D/F#] F#4/8 F#4/8 F#4/8 E4/8~ | 주 님 의 임 재 앞 에 _
-2: [C2] E4/8 D4/8 D4/2. | _ 서 _
+time: 3/4
+1: D4/4 | A
+2: [G] G4/2 B4/8 G4/8 | maz ing _
+3: B4/2 A4/4 | grace how
+4: [C] G4/2 E4/4 | sweet the
+5: [G] D4/2 D4/4 | sound that
 ```
 
 Notes are `<name><#|b><octave>/<length>[.][~]` (C4 is middle C, `~` ties to the next note), rests are `r/8`, chords are `[G]`,

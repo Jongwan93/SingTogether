@@ -26,7 +26,7 @@ final class ReviewWindowController: NSWindowController {
         self.delivered = delivered
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        w.title = "확인: \(original.lastPathComponent) → \(delivered.lastPathComponent)"
+        w.title = "Review: \(original.lastPathComponent) → \(delivered.lastPathComponent)"
         w.minSize = NSSize(width: 800, height: 500)
         super.init(window: w)
         build()
@@ -48,23 +48,23 @@ final class ReviewWindowController: NSWindowController {
         imageScroll.allowsMagnification = true
         imageScroll.minMagnification = 0.25
         imageScroll.maxMagnification = 4
-        let left = labeled("원본 — 빨강: 확인할 음표, 주황: 코드, 보라: 가사 · 음표를 클릭하면 고칠 수 있어요 (초록: 고친 것)", imageScroll)
+        let left = labeled("Original — red: notes to check, orange: chords, purple: lyrics · click a note to fix it (green: fixed)", imageScroll)
         imageView.onPick = { [weak self] spot, rect in self?.pick(spot, at: rect) }
 
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
-        let right = labeled("이조 결과 — 의심스러운 곳은 빨간 음표", pdfView)
+        let right = labeled("Transposed — doubtful notes are red", pdfView)
 
         split.addArrangedSubview(left)
         split.addArrangedSubview(right)
 
         summary.font = .systemFont(ofSize: 13, weight: .medium)
         summary.lineBreakMode = .byTruncatingTail
-        let fix = NSButton(title: "텍스트 고치기…", target: self, action: #selector(openText))
-        fix.toolTip = "압축 텍스트(.txt)를 기본 편집기로 엽니다. 마디 번호로 찾아 고치세요"
-        let redo = NSButton(title: "고친 텍스트로 다시 만들기", target: self, action: #selector(rebuild))
+        let fix = NSButton(title: "Edit Text…", target: self, action: #selector(openText))
+        fix.toolTip = "Opens the score as text (.txt) in your default editor. Find lines by measure number."
+        let redo = NSButton(title: "Rebuild from Text", target: self, action: #selector(rebuild))
         redo.keyEquivalent = "\r"
-        let reveal = NSButton(title: "결과 파일 보기", target: self, action: #selector(revealResult))
+        let reveal = NSButton(title: "Show Result in Finder", target: self, action: #selector(revealResult))
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isHidden = true
@@ -198,7 +198,7 @@ final class ReviewWindowController: NSWindowController {
         guard let t = result.text else { NSSound.beep(); return }
         spinner.isHidden = false
         spinner.startAnimation(nil)
-        summary.stringValue = "다시 만드는 중…"
+        summary.stringValue = "Rebuilding…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             do {
@@ -211,13 +211,13 @@ final class ReviewWindowController: NSWindowController {
                     self.result = r
                     self.delivered = made
                     self.load()
-                    self.summary.stringValue = "고친 텍스트로 다시 만들었어요 → \(made.lastPathComponent)"
+                    self.summary.stringValue = "Rebuilt from the edited text → \(made.lastPathComponent)"
                     self.spinner.stopAnimation(nil); self.spinner.isHidden = true
                     NSSound(named: "Glass")?.play()
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.summary.stringValue = "실패: \(error.localizedDescription)"
+                    self.summary.stringValue = "Failed: \(error.localizedDescription)"
                     self.spinner.stopAnimation(nil); self.spinner.isHidden = true
                     NSSound(named: "Basso")?.play()
                 }
