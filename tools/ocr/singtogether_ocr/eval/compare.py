@@ -108,6 +108,38 @@ def chordsheet_eval(llm: str, names: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> str:
+    """정답 악보를 Verovio로 깨끗하게 그려 파이프라인에 넣는다 = 입력이 좋을 때의 상한이자 조립 단계의 회귀 검사.
+    엔진(homr)은 이 입력을 100% 읽으므로, 최종 점수가 100%에서 모자란 만큼이 조립 단계의 손실이다."""
+    import subprocess
+
+    from ..render import render
+
+    lines = ["| 샘플 | 렌더 폭 | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
+    for truth_file in sorted(TRUTH.glob("*.txt")):
+        name = _nfc(truth_file.stem)
+        if names and name not in {_nfc(n) for n in names}:
+            continue
+        truth = from_text(truth_file.read_text())
+        d = OUT / "rendered" / name
+        d.mkdir(parents=True, exist_ok=True)
+        xml, _ = write_outputs(truth, d / "truth.musicxml")
+        svg = next(p for p in render(xml, d / "page", pdf=False) if p.suffix == ".svg")
+        for w in widths:
+            png = d / f"w{w}.png"
+            subprocess.run(["rsvg-convert", "-w", str(w), "-b", "white", "-o", str(png), str(svg)], check=True)
+            try:
+                t = recognize(png, "homr", d / f"work-{w}", None)
+                write_outputs(t, d / f"w{w}-result.musicxml")
+                row = score(t, truth).row()
+            except Exception as e:
+                row = {c: "" for c in COLUMNS}
+                row["notes"] = f"실패: {str(e).splitlines()[0][:50]}"
+            lines.append(f"| {name} | {w}px | " + " | ".join(row[c] for c in COLUMNS) + " |")
+            print(lines[-1], flush=True)
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="singtogether-eval", description="엔진별 인식 정확도 비교")
     ap.add_argument("--engines", nargs="+", default=DEFAULT_ENGINES)
@@ -115,9 +147,16 @@ def main(argv=None) -> None:
     ap.add_argument("--cached", action="store_true", help="이미 돌린 결과만 다시 채점")
     ap.add_argument("--interline", type=float, default=24.0)
     ap.add_argument("--chordsheets", action="store_true", help="코드 차트(music_scores/english, truth/chordsheets) 평가")
+    ap.add_argument("--rendered", action="store_true", help="정답을 Verovio로 그려 넣는 상한·조립 회귀 검사 → out/rendered.md")
     ap.add_argument("--llm", default="auto", help="코드 차트 글자 읽기: auto|claude|gemini|none")
     a = ap.parse_args(argv)
 
+    if a.rendered:
+        report = rendered_eval(a.samples)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / "rendered.md").write_text("# 깨끗한 렌더링 입력\n\n" + report)
+        print("\n" + report)
+        return
     if a.chordsheets:
         report = chordsheet_eval(a.llm, a.samples)
         OUT.mkdir(parents=True, exist_ok=True)
