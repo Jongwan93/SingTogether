@@ -1,6 +1,6 @@
 """코드 차트(오선 없이 코드 줄 + 가사 줄) → 텍스트 악보(.txt). 앱의 텍스트 이조(ChordText)가 그대로 읽는다.
 
-글자는 LLM CLI(Claude Code `claude`, Gemini `agy`)가 가장 정확하고(코드 97~100%), 없으면 Apple Vision으로 읽는다(78~96%).
+글자는 AI CLI(Claude, Gemini — llm.py)가 가장 정확하고(코드 97~100%), 없으면 Apple Vision으로 읽는다(78~96%).
 Vision은 외따로 선 한 글자 코드(C, G, D)를 자주 놓치므로 배율을 바꿔 여러 번 읽어 합치고, 어떤 글상자에도 안 든
 잉크 덩어리는 하나씩 잘라 다시 읽는다. 결과는 <work>/chordsheet/<이름>-<방법>.txt 에 캐시된다.
 """
@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from . import ingest, layout
+from . import llm as llm_mod
 from .text import CHORD_VOCAB, QUALITY_RE, recognize
 from .lyrics import recognize_lines
 
@@ -25,7 +26,6 @@ PROMPT = ("Read the image file at {image} (a chord chart: chord symbols on one l
           "(left column fully before right column if there are two columns). Keep chord symbols verbatim "
           "(e.g. F#m7, Eb/G, Dsus4, C2). Output only the transcription. Do not run shell commands; just view the image.")
 
-LLMS = ("auto", "claude", "gemini", "none")
 _CHORD = re.compile(r"^([A-G])([#b♯♭]?)([^\s/]*)(?:/([A-G])([#b♯♭]?))?$")
 _NEUTRAL = re.compile(r"^(\||\|\||-+|\(?x\d+\)?|\(?\d+x\)?|N\.?C\.?|%|/)$", re.I)
 
@@ -63,36 +63,6 @@ def is_chord_line(line: str) -> bool:
 
 
 # ---------- LLM 전사 ----------
-
-def _claude(image: Path) -> str:
-    binary = shutil.which("claude") or "/opt/homebrew/bin/claude"
-    model = os.environ.get("SINGTOGETHER_CLAUDE_MODEL", "sonnet")
-    from .engines._run import run
-    _, out = run([binary, "-p", PROMPT.format(image=image), "--model", model,
-                  "--tools", "Read", "--allowedTools", "Read", "--output-format", "json"], timeout=600)
-    result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
-    if result.get("is_error"):
-        raise RuntimeError(f"claude 실패: {result.get('result')}")
-    return result["result"]
-
-
-def _gemini(image: Path) -> str:
-    binary = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
-    from .engines._run import run
-    # 헤드리스 모드에서는 프롬프트를 플래그에 붙여야 하고, 셸 명령을 쓰려 하면 권한을 못 받아 빈 결과가 나온다 (프롬프트로 막음)
-    _, out = run([binary, "--add-dir", str(image.parent), "--print-timeout", "240s", "-p=" + PROMPT.format(image=image)], timeout=300)
-    return out
-
-
-def _available(llm: str) -> str:
-    if llm == "auto":
-        for name, binary in (("claude", shutil.which("claude") or "/opt/homebrew/bin/claude"),
-                             ("gemini", shutil.which("agy") or str(Path.home() / ".local/bin/agy"))):
-            if Path(binary).exists():
-                return name
-        return "none"
-    return llm
-
 
 def _clean(text: str) -> str:
     """LLM이 본문 일부를 ``` 울타리로 감싸기도 한다. 울타리 줄만 빼고 나머지는 그대로."""
@@ -220,21 +190,69 @@ def _vision(gray: np.ndarray) -> str:
 
 # ---------- 진입점 ----------
 
+CHORDS_ONLY = ("Look at the image file at {image} (a chord chart: chord symbols on one line, lyrics on the next). "
+               "List ONLY the chord lines, one output line per chord line in the image, in reading order "
+               "(left column fully before right column if there are two columns). Keep chord symbols verbatim "
+               "(e.g. F#m7, Eb/G, Dsus4, C2, Bb9-Dm7-Eb-F) and keep their order within the line. "
+               "Include every chord line of every verse and chorus, even when a progression repeats; never summarize or skip. "
+               "Do not write any lyrics, titles or other words. Output only the chord lines. "
+               "Do not run shell commands; just view the image.")
+
+
+def _merge_chords(vision_text: str, chord_lines: list[str]) -> str:
+    """Vision이 읽은 악보(가사 줄 포함)의 코드 줄을 AI가 읽은 코드 줄로 바꾼다. 줄 수가 다르면 AI 코드 줄만."""
+    lines = vision_text.splitlines()
+    slots = [i for i, l in enumerate(lines) if is_chord_line(l)]
+    if len(slots) != len(chord_lines):
+        return "\n".join(chord_lines) + "\n"
+    for i, c in zip(slots, chord_lines):
+        old, new = list(re.finditer(r"\S+", lines[i])), c.split()
+        if len(old) == len(new):            # 토큰 수가 같으면 Vision이 잡은 칸 위치를 살린다 (가사와의 정렬)
+            line = ""
+            for m, tok in zip(old, new):
+                line += " " * max(1 if line else 0, m.start() - len(line)) + tok
+            lines[i] = line
+        else:
+            lines[i] = c
+    return "\n".join(lines) + "\n"
+
+
 def transcribe(src: Path, page: ingest.Page, work: Path, llm: str = "auto") -> tuple[str, str, float]:
-    """(텍스트, 방법 이름, 걸린 초). 같은 작업 폴더에 캐시가 있으면 다시 읽지 않는다."""
-    method = _available(llm)
+    """(텍스트, 방법 이름, 걸린 초). 같은 작업 폴더에 캐시가 있으면 다시 읽지 않는다.
+
+    AI가 가사 출력을 거부하거나 실패하면 코드 줄만 받아 Vision의 가사 줄과 합치고,
+    그것도 실패하면 Vision만 쓴다. 방법 이름에 그 사실이 남는다 ("gemini+vision", "vision (gemini 실패)")."""
+    method = llm_mod.pick(llm)
     out_dir = work / "chordsheet"
     cached = out_dir / f"{page.name}-{method}.txt"
     if cached.exists():
+        lines = cached.read_text().split("\n", 1)
+        if lines[0].startswith("#method "):
+            return lines[1], lines[0][8:], 0.0
         return cached.read_text(), method, 0.0
     t0 = time.time()
+    gray = (page.gray if page.scale == 1.0 or src.suffix.lower() == ".pdf"
+            else cv2.imdecode(np.fromfile(src, np.uint8), cv2.IMREAD_GRAYSCALE))
+    label = method
     if method == "none":
-        text = _vision(page.gray if page.scale == 1.0 else cv2.imdecode(np.fromfile(src, np.uint8), cv2.IMREAD_GRAYSCALE)
-                       if src.suffix.lower() != ".pdf" else page.gray)
+        text = _vision(gray)
     else:
         from .engines._run import save_png
         image = src.resolve() if src.suffix.lower() != ".pdf" else save_png(page.gray, out_dir / f"{page.name}.png")
-        text = _clean(_claude(image) if method == "claude" else _gemini(image))
+        try:
+            text = _clean(llm_mod.ask(method, PROMPT, image))
+            if not any(is_chord_line(l) for l in text.splitlines()):
+                raise RuntimeError("코드 줄이 없는 답")
+        except Exception as e:
+            print(f"{method}: 전체 받아 적기 실패 ({str(e).strip().splitlines()[-1][:160]}) → 코드 줄만 다시 요청")
+            try:
+                chords = [l.rstrip() for l in _clean(llm_mod.ask(method, CHORDS_ONLY, image)).splitlines() if is_chord_line(l)]
+                if not chords:
+                    raise RuntimeError("코드 줄이 없는 답")
+                text, label = _merge_chords(_vision(gray), chords), f"{method}+vision"
+            except Exception as e2:
+                print(f"{method}: 코드 줄도 실패 ({str(e2).strip().splitlines()[-1][:160]}) → Apple Vision만 사용")
+                text, label = _vision(gray), f"vision ({method} 실패)"
     out_dir.mkdir(parents=True, exist_ok=True)
-    cached.write_text(text)
-    return text, method, time.time() - t0
+    cached.write_text(f"#method {label}\n{text}" if label != method else text)
+    return text, label, time.time() - t0

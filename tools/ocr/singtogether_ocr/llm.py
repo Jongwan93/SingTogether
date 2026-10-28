@@ -1,0 +1,85 @@
+"""사용자 컴퓨터에 로그인된 AI CLI로 악보 그림을 받아 적게 한다. 앱은 시작할 때 둘 중 하나를 고르게 한다.
+
+    claude  Claude Code CLI (`claude`)              모델: SINGTOGETHER_CLAUDE_MODEL (기본 sonnet)
+    gemini  Antigravity (`agy`), 없으면 Gemini CLI (`gemini`, API 키 필요)
+
+앱을 Finder에서 열면 PATH가 짧아서 흔한 설치 폴더를 직접 뒤진다. "auto"는 위 순서로 처음 찾은 것.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+from pathlib import Path
+
+from .engines._run import run
+
+PROVIDERS = ("claude", "gemini")
+CHOICES = ("auto", *PROVIDERS, "none")
+LABELS = {"claude": "Claude", "gemini": "Gemini", "none": "Apple Vision"}
+_BINARIES = {"claude": ("claude",), "gemini": ("agy", "gemini")}
+_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/.npm-global/bin", "~/.bun/bin",
+         "~/.volta/bin", "~/.claude/local")
+
+
+def find(name: str) -> str | None:
+    if found := shutil.which(name):
+        return found
+    for d in _DIRS:
+        p = Path(d).expanduser() / name
+        if p.exists() and os.access(p, os.X_OK):
+            return str(p)
+    nvm = sorted((Path.home() / ".nvm/versions/node").glob(f"*/bin/{name}"))
+    return str(nvm[-1]) if nvm else None
+
+
+def binary(provider: str) -> tuple[str, str] | None:
+    """(실행 파일 이름, 경로). gemini는 agy를 먼저 찾는다."""
+    for name in _BINARIES.get(provider, ()):
+        if path := find(name):
+            return name, path
+    return None
+
+
+def pick(pref: str = "auto") -> str:
+    """쓸 제공자 이름. 고른 것이 설치돼 있지 않으면 "none"."""
+    if pref == "none":
+        return "none"
+    if pref == "auto":
+        return next((p for p in PROVIDERS if binary(p)), "none")
+    return pref if binary(pref) else "none"
+
+
+def available() -> dict[str, str]:
+    """설치된 제공자 → 실행 파일 경로 (앱 메뉴 표시용)."""
+    return {p: b[1] for p in PROVIDERS if (b := binary(p))}
+
+
+def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
+    """그림 한 장과 지시문을 주고 답 글을 받는다. 지시문의 {image}는 그림의 절대 경로로 바뀐다."""
+    found = binary(provider)
+    if not found:
+        raise RuntimeError(f"{LABELS.get(provider, provider)} CLI를 찾지 못했어요")
+    name, path = found
+    image = image.resolve()
+    prompt = prompt.format(image=image)
+    if name == "claude":
+        model = os.environ.get("SINGTOGETHER_CLAUDE_MODEL", "sonnet")
+        _, out = run([path, "-p", prompt, "--model", model, "--tools", "Read", "--allowedTools", "Read",
+                      "--output-format", "json"], timeout=timeout)
+        result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
+        if result.get("is_error"):
+            raise RuntimeError(f"claude 실패: {result.get('result')}")
+        return result["result"]
+    if name == "agy":
+        # 헤드리스 모드에서는 프롬프트를 플래그에 붙여야 하고, 셸 명령을 쓰려 하면 권한을 못 받아 빈 결과가 나온다 (프롬프트로 막음)
+        _, out = run([path, "--add-dir", str(image.parent), "--print-timeout", f"{max(60, timeout - 60)}s",
+                      "-p=" + prompt], timeout=timeout)
+        return out
+    # Gemini CLI: @경로로 그림을 붙인다. plan 모드는 읽기 전용.
+    _, out = run([path, "--approval-mode", "plan", "--skip-trust", "--include-directories", str(image.parent),
+                  "-p", prompt + f" @{image}"], timeout=timeout)
+    if re.search(r"IneligibleTierError|Error authenticating", out):
+        raise RuntimeError("Gemini CLI 로그인이 안 돼요 (GEMINI_API_KEY가 필요하거나 agy를 쓰세요)")
+    return "\n".join(l for l in out.splitlines() if not re.match(r"(Warning:|\[STARTUP\]|Loaded cached)", l))

@@ -2,6 +2,7 @@
 
     singtogether-eval                       # 정답이 있는 샘플 전부, 기본 엔진들
     singtogether-eval --engines homr claude --samples "주님의 임재 앞에서"
+    singtogether-eval --engines hybrid:claude hybrid:gemini      # 하이브리드의 글자 읽기 AI를 바꿔서
     singtogether-eval --cached              # 이미 돌린 결과(out/<엔진>/<이름>.txt)만 다시 채점
 
 결과: out/<엔진>/<이름>.txt|.musicxml, out/<엔진>/dbg/ 오버레이, out/report.md
@@ -51,7 +52,9 @@ def run_one(engine: str, name: str, img: Path, cached: bool, interline: float) -
     truth = from_text(truth_file.read_text())
     if not (cached and txt.exists()):
         try:
-            t = recognize(img, engine, out_dir / "work", out_dir / "dbg", interline=interline, review_dir=out_dir / "review")
+            base, _, llm_name = engine.partition(":")      # "hybrid:gemini" = 하이브리드, 글자는 Gemini로
+            t = recognize(img, base, out_dir / "work", out_dir / "dbg", interline=interline, review_dir=out_dir / "review",
+                          llm_name=llm_name or "auto")
             from ..review import assess
             rev = assess(t)
             write_outputs(t, out_dir / f"{name}.musicxml")

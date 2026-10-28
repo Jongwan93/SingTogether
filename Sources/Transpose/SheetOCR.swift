@@ -27,6 +27,32 @@ package enum SheetOCR {
     package static let extensions: Set<String> = ["png", "jpg", "jpeg", "webp", "pdf", "tif", "tiff", "bmp"]
 
     /// singtogether-ocr 실행 파일. 환경 변수 → 설정 → 저장소 안(.venv) → PATH 순.
+    /// 글자를 읽을 AI CLI: "claude" / "gemini". 앱이 시작할 때 고른다. 고른 것이 없으면 설치된 것을 쓴다.
+    package static var llm: String {
+        get { UserDefaults.standard.string(forKey: "llm") ?? "auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "llm") }
+    }
+
+    package static let llmChoices: [(id: String, label: String, binaries: [String])] = [
+        ("claude", "Claude", ["claude"]),
+        ("gemini", "Gemini", ["agy", "gemini"]),
+    ]
+
+    /// llm.py와 같은 폴더들을 뒤져 설치된 AI CLI를 찾는다 (Finder에서 연 앱은 PATH가 짧다).
+    package static func isInstalled(_ id: String) -> Bool {
+        guard let names = llmChoices.first(where: { $0.id == id })?.binaries else { return false }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        dirs += ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.npm-global/bin", home + "/.bun/bin",
+                 home + "/.volta/bin", home + "/.claude/local"]
+        return names.contains { n in dirs.contains { FileManager.default.isExecutableFile(atPath: $0 + "/" + n) } }
+    }
+
+    static func readerName(_ method: String) -> String {
+        method.replacingOccurrences(of: "claude", with: "Claude").replacingOccurrences(of: "gemini", with: "Gemini").replacingOccurrences(of: "vision", with: "Apple Vision")
+            .replacingOccurrences(of: "none", with: "Apple Vision").replacingOccurrences(of: "실패", with: "못 씀")
+    }
+
     package static func locate() -> URL? {
         let fm = FileManager.default
         var candidates: [String] = []
@@ -66,7 +92,7 @@ package enum SheetOCR {
 
     private static func invoke(input: URL, semitones: Int, out: URL?, work: URL) throws -> Result {
         guard let tool = locate() else { throw Failure.notInstalled }
-        var args = [input.path, "--engine", "auto", "--transpose", String(semitones), "--render", "--json",
+        var args = [input.path, "--engine", "auto", "--llm", llm, "--transpose", String(semitones), "--render", "--json",
                     "--work", work.appendingPathComponent("work").path]
         if let out { args += ["--out", out.path] }
         let p = Process()
@@ -101,6 +127,7 @@ package enum SheetOCR {
             if let chart = dict["chart"] as? [String: Any] {
                 let notes = (chart["notes"] as? [String]) ?? []
                 summary = "코드 차트: 원본 위의 코드 \(chart["replaced"] ?? 0)개를 바꿨어요" + (notes.isEmpty ? "" : " · ⚠︎ " + notes.joined(separator: " · "))
+                if let by = dict["read_by"] as? String { summary += " · 읽기: " + readerName(by) }
             } else if let err = dict["overlay_error"] as? String {
                 summary = "코드 차트: 그림은 못 만들고 텍스트로 만들었어요 (\(err))"
             } else {

@@ -59,14 +59,14 @@ def mark_claude(t: Transcription, claude_t: Transcription) -> None:
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for n in a[i1:i2]:
-                n.reasons.append("Claude 일치")
+                n.reasons.append("AI 일치")
         elif tag == "replace":
             for k, n in enumerate(a[i1:i2]):
                 other = b[j1 + k] if j1 + k < j2 else None
-                n.reasons.append(f"Claude와 다름: {other.name}/{other.duration}" if other else "Claude에 없음")
+                n.reasons.append(f"AI와 다름: {other.name}/{other.duration}" if other else "AI에 없음")
         elif tag == "delete":
             for n in a[i1:i2]:
-                n.reasons.append("Claude에 없음")
+                n.reasons.append("AI에 없음")
 
 
 def assess(t: Transcription) -> dict:
@@ -90,19 +90,19 @@ def assess(t: Transcription) -> dict:
             for r in n.reasons:
                 if r.startswith("오선 위치로 고침"):
                     c *= W_OVERRIDE
-                elif r.startswith("Claude와 다름") or r == "Claude에 없음":
+                elif r.startswith("AI와 다름") or r == "AI에 없음":
                     c *= W_CLAUDE_DIFF if claude_ok else W_CLAUDE_DIFF_WEAK
-                elif r == "Claude 일치":
+                elif r == "AI 일치":
                     c = min(1.0, c * W_CLAUDE_SAME)
             n.conf = round(c, 2)
             notes.append({"measure": m.number, "index": i, "note": n.name, "duration": str(n.duration), "conf": n.conf,
-                          "reasons": [r for r in why if r != "Claude 일치"], "x": n.x, "y": n.y})
+                          "reasons": [r for r in why if r != "AI 일치"], "x": n.x, "y": n.y})
             if n.chord:
                 cc = n.chord_conf if n.chord_conf is not None else 0.5
                 cc = {"both": max(cc, 0.9), "claude": 0.5}.get(n.chord_src, cc)
                 why = []
                 if n.chord_src == "claude":
-                    why.append("Claude만 읽음 (자리 추정)")
+                    why.append("AI만 읽음 (자리 추정)")
                 elif n.chord_src == "vision" and cc < 0.9:
                     why.append("Vision만 읽음")
                 if canon(n.chord) not in common:
@@ -113,7 +113,7 @@ def assess(t: Transcription) -> dict:
             if n.lyrics and n.lyrics[0]:
                 lc = n.lyric_conf if n.lyric_conf is not None else 0.5
                 lc = {"both": max(lc, 0.9), "claude": 0.5}.get(n.lyric_src, lc)
-                why = {"claude": ["Claude만 읽음 (자리 추정)"], "vision": ["Vision만 읽음"] if lc < 0.9 else []}.get(n.lyric_src, [])
+                why = {"claude": ["AI만 읽음 (자리 추정)"], "vision": ["Vision만 읽음"] if lc < 0.9 else []}.get(n.lyric_src, [])
                 n.lyric_conf = round(min(1.0, lc), 2)
                 lyrics.append({"measure": m.number, "index": i, "syllable": n.lyrics[0], "conf": n.lyric_conf, "reasons": why, "x": n.x, "y": n.y})
     flagged = lambda items: [it for it in items if it["conf"] < FLAG]

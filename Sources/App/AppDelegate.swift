@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hideWork: DispatchWorkItem?
     private var reviewWindows: [ReviewWindowController] = []
     private var busy = false
+    private let readerItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -26,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         formats.isEnabled = false
         menu.addItem(formats)
         menu.addItem(.separator())
+        readerItem.action = #selector(chooseReader)
+        readerItem.target = self
+        menu.addItem(readerItem)
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "SingTogether 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
@@ -35,6 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let t = Timer(timeInterval: 1.0 / 60.0, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         RunLoop.main.add(t, forMode: .common)
         timer = t
+
+        updateReaderItem()
+        // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다
+        DispatchQueue.main.async { [weak self] in self?.chooseReader() }
 
         // 개발용: SingTogether --sheet <이미지> <반음> 으로 띄우면 드래그 없이 인식 → 확인 창까지 간다
         let args = CommandLine.arguments
@@ -148,5 +157,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+}
+
+/// 시작할 때와 메뉴에서: 이미지 악보의 코드·가사를 Claude와 Gemini 중 무엇으로 읽을지 버튼으로 고른다.
+extension AppDelegate {
+    @objc func chooseReader() {
+        let choices = SheetOCR.llmChoices
+        let installed = choices.map { SheetOCR.isInstalled($0.id) }
+        let alert = NSAlert()
+        alert.messageText = "악보 글자를 어느 AI로 읽을까요?"
+        alert.informativeText = "이미지 악보의 코드와 가사를 이 Mac에 로그인된 AI로 읽어요. 나중에 ♪ 메뉴에서 바꿀 수 있어요."
+            + (installed.contains(false) ? "\n설치되지 않은 것은 고를 수 없어요." : "")
+        for (c, ok) in zip(choices, installed) {
+            let button = alert.addButton(withTitle: c.label + (ok ? "" : " (설치 안 됨)"))
+            button.isEnabled = ok
+            button.keyEquivalent = c.id == SheetOCR.llm ? "\r" : ""
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if choices.indices.contains(index) { SheetOCR.llm = choices[index].id }
+        updateReaderItem()
+    }
+
+    func updateReaderItem() {
+        let name = SheetOCR.llmChoices.first { $0.id == SheetOCR.llm }?.label ?? "Apple Vision"
+        readerItem.title = "글자 읽기: \(name) — 바꾸기…"
     }
 }

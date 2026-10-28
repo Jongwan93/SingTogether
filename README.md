@@ -26,7 +26,7 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 | `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F` | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
 | `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, rendered to a new PDF | depends on image quality, see below |
-| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with Claude or Gemini CLI, 80–96% without |
+| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI CLI, 80–96% without |
 
 ## Install
 
@@ -43,7 +43,9 @@ cd tools/ocr && uv sync         # Python 3.13 environment with homr (OMR) and Ve
 brew install librsvg            # rsvg-convert, used to write the PDF
 ```
 
-- If the [Claude Code CLI](https://claude.com/claude-code) (`claude`) is installed and logged in, chords and lyrics are read with it and accuracy goes up a lot. Without it the app uses Apple Vision only.
+- Chords and lyrics are read much more accurately with an AI command-line tool that is installed and logged in on the Mac:
+  [Claude Code](https://claude.com/claude-code) (`claude`) or Google [Antigravity](https://antigravity.google) (`agy`).
+  When the app starts it asks which one to use, with a button for each. Change it later from the ♪ menu. Without either, the app uses Apple Vision only.
 - The app looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 - To start at login: System Settings → General → Login Items → add SingTogether.
 - macOS may ask once for permission to access the Desktop or Documents folder.
@@ -101,11 +103,11 @@ Edit the file, then drop it on the ring or run `singtogether-ocr fixed.txt --tra
 .build/release/singtogether-transpose Song.musicxml -2            # same rules as the app, any supported file
 tools/ocr/.venv/bin/singtogether-ocr score.jpg                     # → score.musicxml, score.txt, score.review.json, score-p1.review.png
 tools/ocr/.venv/bin/singtogether-ocr score.jpg --transpose -2 --render     # + transposed copy and PDFs
-tools/ocr/.venv/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → .txt
+tools/ocr/.venv/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → image with new chords + .txt
 ```
 
-Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with Claude; auto picks hybrid when `claude` is available),
-`--llm claude|gemini|none|auto` for chord charts, `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
+Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
+`--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 
 ## Limits
 

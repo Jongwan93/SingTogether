@@ -1,20 +1,19 @@
-"""Claude CLI (claude -p). 비교용. 사용자 컴퓨터에 로그인된 Claude Code로 악보를 압축 텍스트 형식으로 받아 적게 한다.
+"""AI CLI(Claude / GPT / Gemini)로 악보를 압축 텍스트 형식으로 받아 적게 한다. 하이브리드에서 코드·가사·제목을 맡는다.
 
-코드와 가사까지 한 번에 읽으므로 has_chords/has_lyrics가 True다. 모델: 환경변수 SINGTOGETHER_CLAUDE_MODEL (기본 sonnet).
+코드와 가사까지 한 번에 읽으므로 has_chords/has_lyrics가 True다. 어떤 CLI를 부르는지는 llm.py.
+엔진 이름 "claude"는 비교 평가용으로 남겨 둔 것이고, 실제로는 for_provider("gpt") 처럼 고른다.
 """
 from __future__ import annotations
 
-import json
-import os
-import shutil
 from pathlib import Path
 
+from .. import llm
 from ..ingest import Page
 from ..model import Transcription
 from ..textfmt import from_text
-from ._run import run, save_png
+from ._run import save_png
 
-PROMPT = """Open and look at the image file {image} with the Read tool. The user owns this sheet music and wants a transposed copy for their own singing. Transcribe it so it can be re-engraved in another key. Write only what is printed, including all lyrics.
+PROMPT = """Look at the sheet music image {image} (open it with your file-reading tool if it is not attached). The user owns this sheet music and wants a transposed copy for their own singing. Transcribe it so it can be re-engraved in another key. Write only what is printed, including all lyrics.
 
 Output format (plain text, nothing else):
 title: <title>
@@ -39,14 +38,12 @@ Example line:
 class engine:
     name = "claude"
 
-    def __init__(self, model: str | None = None):
-        self.model = model or os.environ.get("SINGTOGETHER_CLAUDE_MODEL", "sonnet")
-        self.binary = shutil.which("claude") or "/opt/homebrew/bin/claude"
+    def __init__(self, provider: str = "claude"):
+        self.provider = provider
+        self.name = provider
 
     def transcribe(self, page: Page, work_dir: Path, debug_dir: Path | None = None) -> Transcription:
-        if not Path(self.binary).exists():
-            raise RuntimeError("claude CLI가 없어요 (Claude Code 설치 필요)")
-        out_dir = work_dir / "claude"
+        out_dir = work_dir / self.provider            # Claude는 예전 캐시 폴더 이름("claude") 그대로
         cached = out_dir / f"{page.name}.txt"
         if cached.exists():                         # 같은 작업 폴더면 다시 묻지 않는다 (40초·구독 사용량 절약)
             t = from_text(cached.read_text(), self.name)
@@ -54,15 +51,15 @@ class engine:
             return t
         # 이미지 파일은 원본 그대로 (확대본보다 낫다), PDF는 렌더링한 쪽을 넘긴다
         image = page.source if page.source.suffix.lower() != ".pdf" else save_png(page.gray, out_dir / f"{page.name}.png")
-        cmd = [self.binary, "-p", PROMPT.format(image=image.resolve()), "--model", self.model,
-               "--tools", "Read", "--allowedTools", "Read", "--output-format", "json"]
-        seconds, out = run(cmd, timeout=600)
-        result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
-        if result.get("is_error"):
-            raise RuntimeError(f"claude 실패: {result.get('result')}")
-        text = result["result"]
+        import time
+        t0 = time.time()
+        text = llm.ask(self.provider, PROMPT, image)
         out_dir.mkdir(parents=True, exist_ok=True)
         cached.write_text(text)
-        t = from_text(text, f"{self.name}:{self.model}")
-        t.engine, t.seconds = self.name, seconds
+        t = from_text(text, self.name)
+        t.engine, t.seconds = self.name, time.time() - t0
         return t
+
+
+def for_provider(provider: str) -> engine:
+    return engine(provider)

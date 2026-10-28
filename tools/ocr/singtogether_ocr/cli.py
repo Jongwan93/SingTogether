@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import assemble, chordsheet, engines, hybrid, ingest, key, layout, lyrics, notes, review, text, textfmt
+from . import assemble, chordsheet, engines, hybrid, llm, ingest, key, layout, lyrics, notes, review, text, textfmt
 from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
@@ -58,14 +58,18 @@ def cache_put(key: str, files: list[Path]) -> None:
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
               chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True,
-              mask_text: bool = True, review_dir: Path | None = None) -> Transcription:
-    """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다. review_dir을 주면 쪽마다 <이름>.review.png(확인할 곳 표시)를 남긴다."""
+              mask_text: bool = True, review_dir: Path | None = None, llm_name: str = "auto") -> Transcription:
+    """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다. review_dir을 주면 쪽마다 <이름>.review.png(확인할 곳 표시)를 남긴다.
+    engine_name "hybrid"는 음표를 homr로, 코드·가사·제목을 AI CLI(llm_name: claude/gemini/auto)로 읽는다."""
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
         debug_dir.mkdir(parents=True, exist_ok=True)
     text_from_claude = engine_name == "hybrid"
     eng = engines.get("homr" if text_from_claude else engine_name)
-    claude_eng = engines.get("claude") if text_from_claude else None
+    provider = llm.pick(llm_name) if text_from_claude else "none"
+    from .engines.claude import for_provider
+    claude_eng = for_provider(provider) if provider != "none" else None
+    who = llm.LABELS.get(provider, provider)
     merged: Transcription | None = None
     t0 = time.time()
     for page in ingest.prepare(src, target_interline=interline, debug_dir=debug_dir):
@@ -76,12 +80,17 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)
-            claude_t = claude_eng.transcribe(page, work, debug_dir) if claude_eng else None
+            claude_t = None
+            if claude_eng:
+                try:
+                    claude_t = claude_eng.transcribe(page, work, debug_dir)
+                except Exception as e:        # 로그인 만료, 가사 저작권 필터 등 → AI 없이 계속
+                    print(f"{who} 읽기 실패, Apple Vision만 사용: {str(e).strip().splitlines()[-1][:200]}")
             if chords:
                 chord_boxes = text.read_chords(page, systems, debug_dir)
                 if claude_t:
                     chord_boxes, ratio = hybrid.merge_chords(chord_boxes, claude_t, systems, page.interline)
-                    print(f"하이브리드 코드: Claude {sum(1 for n in claude_t.notes if n.chord)}개, 앵커 {ratio:.0%}")
+                    print(f"하이브리드 코드: {who} {sum(1 for n in claude_t.notes if n.chord)}개, 앵커 {ratio:.0%}")
                 assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord])
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
@@ -117,8 +126,8 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
     return merged
 
 
-def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None) -> str | None:
-    """오선이 없는 코드 차트면 텍스트 악보를, 오선 악보면 None을 돌려준다."""
+def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None, info: dict | None = None) -> str | None:
+    """오선이 없는 코드 차트면 텍스트 악보를, 오선 악보면 None을 돌려준다. info를 주면 쓴 방법을 info["read_by"]에 적는다."""
     pages = ingest.prepare(src)
     if not pages or not chordsheet.is_chord_chart(pages[0]):
         return None
@@ -129,6 +138,8 @@ def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None)
         n = sum(1 for line in text.splitlines() if chordsheet.is_chord_line(line))
         print(f"코드 차트 ({method}): {page.name} 코드 줄 {n}개, {seconds:.0f}초")
         texts.append(text)
+        if info is not None:
+            info["read_by"] = method
     return "\n".join(texts)
 
 
@@ -185,7 +196,7 @@ def main(argv=None) -> None:
     ap.add_argument("input", type=Path)
     ap.add_argument("--out", type=Path, help="출력 MusicXML (기본: 입력 옆 <이름>.musicxml)")
     ap.add_argument("--engine", default="homr", choices=list(engines.NAMES) + ["auto"],
-                    help="auto = Claude Code CLI가 있으면 hybrid, 없으면 homr")
+                    help="auto = AI CLI(--llm)가 있으면 hybrid, 없으면 homr")
     ap.add_argument("--debug", type=Path, metavar="DIR", help="단계별 오버레이 이미지를 저장할 폴더")
     ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
     ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
@@ -195,15 +206,15 @@ def main(argv=None) -> None:
                     help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
     ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
-    ap.add_argument("--llm", default="auto", choices=chordsheet.LLMS,
-                    help="코드 차트 글자 읽기: claude(Claude Code CLI) / gemini(agy) / none(Apple Vision) / auto(있는 것)")
+    ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
+                    help="글자를 읽을 AI CLI: claude(Claude Code) / gemini(agy·Gemini CLI) / none(Apple Vision만) / auto(설치된 것)")
     ap.add_argument("--no-cache", action="store_true", help="인식 결과 캐시(~/Library/Caches/SingTogether/ocr)를 읽지도 쓰지도 않는다")
     ap.add_argument("--json", action="store_true", help="마지막 줄에 결과 파일 경로·요약을 JSON 한 줄로 (앱 연동용)")
     a = ap.parse_args(argv)
     if a.engine == "auto":
-        import shutil
-        a.engine = "hybrid" if (shutil.which("claude") or Path("/opt/homebrew/bin/claude").exists()) else "homr"
-    result: dict = {"engine": a.engine, "input": str(a.input)}
+        a.engine = "hybrid" if llm.pick(a.llm) != "none" else "homr"
+    a.llm = llm.pick(a.llm)          # 캐시 키에 실제로 쓸 것을 넣는다
+    result: dict = {"engine": a.engine, "input": str(a.input), "llm": a.llm}
 
     def finish():
         if a.json:
@@ -257,7 +268,7 @@ def main(argv=None) -> None:
         finish()
         return
 
-    if chart := recognize_chordsheet(a.input, a.llm, a.work):
+    if chart := recognize_chordsheet(a.input, a.llm, a.work, result):
         out = (a.out.with_suffix(".txt") if a.out else a.input.with_suffix(".txt"))
         out.write_text(chart)
         print(f"→ {out}")
@@ -273,7 +284,7 @@ def main(argv=None) -> None:
 
     out_base = a.out or a.input.with_suffix(".musicxml")
     t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics,
-                  mask_text=not a.no_mask, review_dir=out_base.parent)
+                  mask_text=not a.no_mask, review_dir=out_base.parent, llm_name=a.llm)
     rev = review.assess(t)
     out, txt = write_outputs(t, out_base)
     rev_path = out.with_suffix(".review.json")
