@@ -31,14 +31,15 @@ package enum KeyInfo {
 }
 
 package enum Converter {
-    package enum Kind { case text, musicxml, mxl }
+    package enum Kind { case text, musicxml, mxl, sheet }
 
     package static func kind(of url: URL) -> Kind? {
-        switch url.pathExtension.lowercased() {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
         case "txt", "cho", "chopro", "chordpro", "crd", "pro": return .text
         case "musicxml", "xml": return .musicxml
         case "mxl": return .mxl
-        default: return nil
+        default: return SheetOCR.extensions.contains(ext) ? .sheet : nil
         }
     }
 
@@ -57,7 +58,7 @@ package enum Converter {
                 guard let doc = try? MusicXML.load(score), let k = MusicXML.firstKey(doc) else { return nil }
                 return KeyInfo.xml(k)
             }
-        case nil:
+        case .sheet, nil:                      // 이미지·PDF는 인식해 봐야 키를 안다 (드래그 중엔 ±n만 보여 준다)
             return nil
         }
     }
@@ -103,6 +104,9 @@ package enum Converter {
                 try run("/usr/bin/zip", ["-X", "-r", "-q", tmpZip.path, ".", "-x", "mimetype", rootRel], cwd: dir)
                 try fm.moveItem(at: tmpZip, to: out)
             }
+        case .sheet:                           // 인식 → 이조 → PDF. 중간 파일은 캐시 폴더, 결과만 원본 옆에
+            let r = try SheetOCR.run(url, semitones: s)
+            return try SheetOCR.deliver(r, next: url, semitones: s)
         case nil:
             throw ConvertError.unreadable
         }

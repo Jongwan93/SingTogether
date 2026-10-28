@@ -14,7 +14,7 @@ let package = Package(
             name: "SingTogether",
             dependencies: ["Transpose"],
             path: "Sources/App",
-            linkerSettings: [.linkedFramework("AppKit")]
+            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("PDFKit"), .linkedFramework("Quartz")]
         ),
 
         // 터미널용: singtogether-transpose <악보 파일> <반음> [--out <출력 파일>]

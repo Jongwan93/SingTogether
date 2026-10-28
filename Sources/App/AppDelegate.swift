@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dragStartCount = 0
     private var ringShown = false
     private var hideWork: DispatchWorkItem?
+    private var reviewWindows: [ReviewWindowController] = []
+    private var busy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -20,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let info = NSMenuItem(title: "악보 파일을 드래그하면서 Shift를 누르세요", action: nil, keyEquivalent: "")
         info.isEnabled = false
         menu.addItem(info)
-        let formats = NSMenuItem(title: "지원: .txt .cho .chordpro .musicxml .xml .mxl", action: nil, keyEquivalent: "")
+        let formats = NSMenuItem(title: "지원: .txt .cho .chordpro .musicxml .xml .mxl · 이미지/PDF(인식)", action: nil, keyEquivalent: "")
         formats.isEnabled = false
         menu.addItem(formats)
         menu.addItem(.separator())
@@ -33,6 +35,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let t = Timer(timeInterval: 1.0 / 60.0, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         RunLoop.main.add(t, forMode: .common)
         timer = t
+
+        // 개발용: SingTogether --sheet <이미지> <반음> 으로 띄우면 드래그 없이 인식 → 확인 창까지 간다
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--sheet"), i + 2 < args.count, let s = Int(args[i + 2]) {
+            panel.show(centeredAt: NSEvent.mouseLocation)
+            ringShown = true
+            handleSheetDrop(semis: s, url: URL(fileURLWithPath: args[i + 1]))
+        }
     }
 
     /// 드래그 상태 감시: 마우스가 눌린 상태에서 드래그 페이스트보드가 바뀌면 = 무언가 드래그 중
@@ -64,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleDrop(semis: Int, urls: [URL]) {
+        if let sheet = urls.first(where: { Converter.kind(of: $0) == .sheet }) {
+            handleSheetDrop(semis: semis, url: sheet)
+            return
+        }
         var made: [String] = []
         var errors: [String] = []
         for url in urls where Converter.kind(of: url) != nil {
@@ -80,6 +94,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ring.message = "지원하지 않는 파일이에요"
         }
         scheduleHide(after: errors.isEmpty ? 1.6 : 3.5)
+    }
+
+    /// 이미지·PDF: 인식에 10초~1분이 걸리므로 링에 진행 중 표시를 두고 백그라운드로 돌린 뒤 확인 창을 띄운다.
+    private func handleSheetDrop(semis: Int, url: URL) {
+        guard !busy else { ring.message = "앞 악보를 아직 인식 중이에요"; scheduleHide(after: 2); return }
+        guard SheetOCR.locate() != nil else {
+            ring.message = "악보 인식 도구가 없어요\n(tools/ocr에서 uv sync)"
+            NSSound(named: "Basso")?.play()
+            scheduleHide(after: 4)
+            return
+        }
+        busy = true
+        hideWork?.cancel()
+        ring.message = "악보를 읽는 중…\n\(url.lastPathComponent)\n(10초~1분)"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let r = try SheetOCR.run(url, semitones: semis)
+                let made = try SheetOCR.deliver(r, next: url, semitones: semis)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.busy = false
+                    self.ring.message = "만들었어요\n\(made.lastPathComponent)\n\(r.summary)"
+                    NSSound(named: "Glass")?.play()
+                    self.scheduleHide(after: 2.5)
+                    let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made)
+                    self.reviewWindows.append(wc)
+                    wc.window?.center()
+                    wc.showWindow(nil)
+                    NSApp.activate(ignoringOtherApps: true)
+                    wc.window?.makeKeyAndOrderFront(nil)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.busy = false
+                    self.ring.message = "인식 실패\n\(error.localizedDescription)"
+                    NSSound(named: "Basso")?.play()
+                    self.scheduleHide(after: 5)
+                }
+            }
+        }
     }
 
     private func scheduleHide(after delay: TimeInterval) {

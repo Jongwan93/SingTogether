@@ -140,8 +140,8 @@ def write_outputs(t: Transcription, out: Path) -> tuple[Path, Path]:
     return out, txt
 
 
-def transpose(musicxml: Path, semitones: int) -> Path:
-    """Swift CLI(singtogether-transpose)로 이조본을 만든다."""
+def transpose(musicxml: Path, semitones: int, result: dict | None = None) -> Path:
+    """Swift CLI(singtogether-transpose)로 이조본을 만든다. result를 주면 경로와 키를 적어 준다."""
     binary = os.environ.get("SINGTOGETHER_TRANSPOSE") or next(
         (p for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose") if p.exists()), None)
     if not binary:
@@ -151,6 +151,8 @@ def transpose(musicxml: Path, semitones: int) -> Path:
         raise RuntimeError(p.stderr.strip())
     keys, path = p.stdout.strip().splitlines()[:2]
     print(f"이조: {keys}")
+    if result is not None:
+        result["transposed"], result["keys"] = path, keys
     return Path(path)
 
 
@@ -158,7 +160,8 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="singtogether-ocr", description="악보 이미지/PDF → MusicXML")
     ap.add_argument("input", type=Path)
     ap.add_argument("--out", type=Path, help="출력 MusicXML (기본: 입력 옆 <이름>.musicxml)")
-    ap.add_argument("--engine", default="homr", choices=engines.NAMES)
+    ap.add_argument("--engine", default="homr", choices=list(engines.NAMES) + ["auto"],
+                    help="auto = Claude Code CLI가 있으면 hybrid, 없으면 homr")
     ap.add_argument("--debug", type=Path, metavar="DIR", help="단계별 오버레이 이미지를 저장할 폴더")
     ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
     ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
@@ -171,7 +174,16 @@ def main(argv=None) -> None:
     ap.add_argument("--llm", default="auto", choices=chordsheet.LLMS,
                     help="코드 차트 글자 읽기: claude(Claude Code CLI) / gemini(agy) / none(Apple Vision) / auto(있는 것)")
     ap.add_argument("--no-cache", action="store_true", help="인식 결과 캐시(~/Library/Caches/SingTogether/ocr)를 읽지도 쓰지도 않는다")
+    ap.add_argument("--json", action="store_true", help="마지막 줄에 결과 파일 경로·요약을 JSON 한 줄로 (앱 연동용)")
     a = ap.parse_args(argv)
+    if a.engine == "auto":
+        import shutil
+        a.engine = "hybrid" if (shutil.which("claude") or Path("/opt/homebrew/bin/claude").exists()) else "homr"
+    result: dict = {"engine": a.engine, "input": str(a.input)}
+
+    def finish():
+        if a.json:
+            print("JSON " + json.dumps(result, ensure_ascii=False))
 
     key_ = cache_key(a.input, a.engine, a.llm, "chords" if not a.no_chords else "", "lyrics" if not a.no_lyrics else "",
                      f"il{a.interline:g}", "" if a.no_mask else "mask")
@@ -180,9 +192,21 @@ def main(argv=None) -> None:
         print(f"캐시에서 가져옴 ({key_})")
         for f in hit:
             print(f"→ {f}")
+        result["cached"] = True
+        for f in hit:
+            result[{".musicxml": "musicxml", ".txt": "txt", ".json": "review_json"}.get(f.suffix, f.suffix)] = str(f)
         if a.transpose:
             main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
-            print(f"→ {transpose(main_out, a.transpose)}")
+            tr = transpose(main_out, a.transpose, result)
+            print(f"→ {tr}")
+            if a.render and tr.suffix != ".txt":
+                from .render import render
+                for p in (main_out, tr):
+                    for f in render(p, p.with_suffix("")):
+                        print(f"→ {f}")
+                        if f.suffix == ".pdf":
+                            result["transposed_pdf" if p == tr else "pdf"] = str(f)
+        finish()
         return
 
     if a.input.suffix.lower() == ".txt" and "key:" in a.input.read_text()[:400]:
@@ -190,27 +214,33 @@ def main(argv=None) -> None:
         t = textfmt.from_text(a.input.read_text())
         out, _ = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
         print(f"→ {out}")
+        result["musicxml"] = str(out)
         targets = [out]
         if a.transpose:
-            targets.append(transpose(out, a.transpose))
+            targets.append(transpose(out, a.transpose, result))
             print(f"→ {targets[-1]}")
         if a.render:
             from .render import render
             for p in targets:
                 for f in render(p, p.with_suffix("")):
                     print(f"→ {f}")
+                    if f.suffix == ".pdf":
+                        result["transposed_pdf" if p != out else "pdf"] = str(f)
+        finish()
         return
 
     if chart := recognize_chordsheet(a.input, a.llm, a.work):
         out = (a.out.with_suffix(".txt") if a.out else a.input.with_suffix(".txt"))
         out.write_text(chart)
         print(f"→ {out}")
+        result["chordsheet"], result["txt"] = True, str(out)
         if not a.no_cache:
             cache_put(key_, [out])
         if a.transpose:
-            print(f"→ {transpose(out, a.transpose)}")
+            print(f"→ {transpose(out, a.transpose, result)}")
         if a.render:
             print("코드 차트는 렌더링하지 않아요 (.txt 그대로 쓰세요)")
+        finish()
         return
 
     out_base = a.out or a.input.with_suffix(".musicxml")
@@ -227,18 +257,23 @@ def main(argv=None) -> None:
     print(f"{a.engine}: {t.title or '(제목 없음)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, "
           f"음표 {len(t.notes)}, 코드 {n_chords}, 가사 {n_lyr}음절, {t.seconds:.0f}초")
     print(f"→ {out}\n→ {txt}")
+    result.update({"musicxml": str(out), "txt": str(txt), "review_json": str(rev_path), "summary": s_, "key": t.key_name,
+                   "review_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.review.png"))]})
     if not a.no_cache:
         cache_put(key_, [out, txt, rev_path])
 
     targets = [out]
     if a.transpose:
-        targets.append(transpose(out, a.transpose))
+        targets.append(transpose(out, a.transpose, result))
         print(f"→ {targets[-1]}")
     if a.render:
         from .render import render
         for p in targets:
             for f in render(p, p.with_suffix("")):
                 print(f"→ {f}")
+                if f.suffix == ".pdf":
+                    result["transposed_pdf" if p != out else "pdf"] = str(f)
+    finish()
 
 
 if __name__ == "__main__":

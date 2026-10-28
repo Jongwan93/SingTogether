@@ -29,7 +29,14 @@ if let i = args.firstIndex(of: "--out"), i + 1 < args.count {
 do {
     let info = Converter.keyInfo(for: input)
     let made = try Converter.convert(input, semitones: semitones, to: output)
-    print("\(info?.originalName ?? "?") -> \(info?.name(shiftedBy: semitones) ?? "?")")
+    if Converter.kind(of: input) == .sheet {
+        // 이미지·PDF는 인식 뒤에야 키를 안다. 결과 파일 이름의 "(−2, F)"에서 새 키를 보여 준다
+        let name = made.deletingPathExtension().lastPathComponent
+        let newKey = name.split(separator: ",").last.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " )")) } ?? "?"
+        print("(인식) -> \(newKey)")
+    } else {
+        print("\(info?.originalName ?? "?") -> \(info?.name(shiftedBy: semitones) ?? "?")")
+    }
     print(made.path)
 } catch {
     fail("변환 실패: \(error.localizedDescription)", code: 1)
