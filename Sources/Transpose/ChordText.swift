@@ -17,9 +17,13 @@ enum Notes {
     static func usesFlats(_ k: MusicKey) -> Bool {
         k.minor ? flatMinor.contains(mod12(k.root)) : flatMajor.contains(mod12(k.root))
     }
+    /// 옮긴 뒤의 조가 F#/Gb(단조는 D#m/Ebm)처럼 둘 다 가능하면 원래 조가 쓰던 쪽(♯ 악보는 ♯)을 따른다
+    static func usesFlats(_ target: MusicKey, from source: MusicKey) -> Bool {
+        mod12(target.root) == (target.minor ? 3 : 6) ? usesFlats(source) : usesFlats(target)
+    }
     static func name(_ pc: Int, flats: Bool) -> String { (flats ? flat : sharp)[mod12(pc)] }
-    static func keyName(_ k: MusicKey) -> String {
-        name(k.root, flats: usesFlats(k)) + (k.minor ? "m" : "")
+    static func keyName(_ k: MusicKey, from source: MusicKey? = nil) -> String {
+        name(k.root, flats: source.map { usesFlats(k, from: $0) } ?? usesFlats(k)) + (k.minor ? "m" : "")
     }
 }
 
@@ -79,6 +83,20 @@ enum ChordText {
         return (lead, String(core), trail)
     }
 
+    /// "Eb-F", "Bb9-Dm7-Eb-F": 붙임표로 이은 코드 진행. 조각이 전부 코드일 때만 인정한다 (C-7 같은 단일 코드는 parse가 먼저 받는다)
+    static func parseRun(_ core: String) -> [Chord]? {
+        if let c = parse(core) { return [c] }
+        guard core.contains("-") else { return nil }
+        let parts = core.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return nil }
+        let chords = parts.compactMap(parse)
+        return chords.count == parts.count ? chords : nil
+    }
+
+    private static func renderRun(_ run: [Chord], _ s: Int, _ flats: Bool) -> String {
+        run.map { render($0, s, flats) }.joined(separator: "-")
+    }
+
     private static func tokens(_ line: String) -> [NSTextCheckingResult] {
         tokenRE.matches(in: line, range: NSRange(location: 0, length: (line as NSString).length))
     }
@@ -88,52 +106,95 @@ enum ChordText {
         for m in tokens(line) {
             let t = (line as NSString).substring(with: m.range)
             if fullMatch(neutralRE, t) != nil { continue }
-            if parse(split(t).core) != nil { chords += 1 } else { other += 1 }
+            if let run = parseRun(split(t).core) { chords += run.count } else { other += 1 }
         }
         return chords > 0 && chords >= other * 3
     }
 
-    static func detectKey(_ text: String) -> MusicKey? {
-        func key(_ c: Chord) -> MusicKey {
-            let q = c.quality
-            let minor = (q.hasPrefix("m") && !q.hasPrefix("maj")) || q.hasPrefix("min")
-            return MusicKey(root: c.root, minor: minor)
-        }
+    static func isMinor(_ c: Chord) -> Bool {
+        let q = c.quality
+        return (q.hasPrefix("m") && !q.hasPrefix("maj")) || q.hasPrefix("min") || q.hasPrefix("-")
+    }
+
+    /// 악보에 나온 코드 전부 (줄 순서)
+    static func allChords(_ text: String) -> [Chord] {
+        var out: [Chord] = []
         for line in text.components(separatedBy: "\n") {
             let ns = line as NSString
             for m in bracketRE.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
-                if let c = parse(ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)) {
-                    return key(c)
-                }
+                if let c = parse(ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)) { out.append(c) }
             }
             if isChordLine(line) {
                 for m in tokens(line) {
-                    if let c = parse(split(ns.substring(with: m.range)).core) { return key(c) }
+                    if let run = parseRun(split(ns.substring(with: m.range)).core) { out += run }
                 }
             }
         }
-        return nil
+        return out
+    }
+
+    /// 조 판별. 코드 근음이 온음계에 들면 +1, 3화음 성질(I·IV·V 장, ii·iii·vi 단)까지 맞으면 +1, 틀리면 −1.
+    /// 동점이면 첫 코드의 조. 첫 코드가 vi 단3화음이면 나란한 단조로 본다.
+    static func detectKey(_ text: String) -> MusicKey? {
+        let chords = allChords(text)
+        guard let first = chords.first else { return nil }
+        let majorDegrees = [0, 2, 4, 5, 7, 9, 11], minorDegrees: Set<Int> = [2, 4, 9]
+        var best = (score: Int.min, root: first.root)
+        for tonic in 0..<12 {
+            var score = 0
+            for c in chords {
+                let d = Notes.mod12(c.root - tonic)
+                guard majorDegrees.contains(d) else { score -= 1; continue }
+                score += 1
+                if d == 11 { continue }                          // vii°는 성질을 따지지 않는다
+                score += isMinor(c) == minorDegrees.contains(d) ? 1 : -1
+            }
+            if score > best.score || (score == best.score && tonic == first.root) { best = (score, tonic) }
+        }
+        if isMinor(first) && Notes.mod12(first.root - best.root) == 9 { return MusicKey(root: first.root, minor: true) }
+        if isMinor(first) && first.root == best.root { return MusicKey(root: first.root, minor: true) }
+        return MusicKey(root: best.root, minor: false)
     }
 
     static func transposeLine(_ line: String, _ s: Int, _ flats: Bool) -> String {
         let ns = line as NSString
         if isChordLine(line) {
-            var out = ""
-            for m in tokens(line) {
-                let tok = ns.substring(with: m.range)
-                let p = split(tok)
-                let t = parse(p.core).map { p.lead + render($0, s, flats) + p.trail } ?? tok
-                let outLen = (out as NSString).length
-                // 원래 열 위치를 유지하되, 코드가 길어지면 최소 한 칸 띄움
-                let pos = outLen == 0 ? m.range.location : max(m.range.location, outLen + 1)
-                out += String(repeating: " ", count: max(0, pos - outLen)) + t
-            }
-            return out
+            return transposeChordLine(line, s, flats)
         }
+        return transposeLyricLine(line, ns, s, flats)
+    }
+
+    private static func transposeChordLine(_ line: String, _ s: Int, _ flats: Bool) -> String {
+        let ns = line as NSString
+        var out = ""
+        for m in tokens(line) {
+            let tok = ns.substring(with: m.range)
+            let p = split(tok)
+            let t = parseRun(p.core).map { p.lead + renderRun($0, s, flats) + p.trail } ?? tok
+            let outLen = (out as NSString).length
+            // 원래 열 위치를 유지하되, 코드가 길어지면 최소 한 칸 띄움
+            let pos = outLen == 0 ? m.range.location : max(m.range.location, outLen + 1)
+            out += String(repeating: " ", count: max(0, pos - outLen)) + t
+        }
+        return out
+    }
+
+    private static func transposeLyricLine(_ line: String, _ ns: NSString, _ s: Int, _ flats: Bool) -> String {
+        // 코드 줄이 아니어도 "(Repeat Chorus) Eb-F (2x)"처럼 붙임표로 이은 코드 진행(2개 이상)은 옮긴다
+        var runs = "", runLast = 0
+        for m in tokens(line) {
+            let tok = ns.substring(with: m.range), p = split(tok)
+            guard p.core.contains("-"), let run = parseRun(p.core), run.count >= 2 else { continue }
+            runs += ns.substring(with: NSRange(location: runLast, length: m.range.location - runLast))
+            runs += p.lead + renderRun(run, s, flats) + p.trail
+            runLast = m.range.location + m.range.length
+        }
+        let line = runs + ns.substring(from: runLast)
+        let ns = line as NSString
         var out = "", last = 0
         for m in bracketRE.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
             out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
-            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: CharacterSet.whitespaces)
             if let c = parse(inner) { out += "[" + render(c, s, flats) + "]" }
             else { out += ns.substring(with: m.range) }
             last = m.range.location + m.range.length
@@ -149,7 +210,7 @@ enum ChordText {
         let crlf = body.contains("\r\n")
         if crlf { body = body.replacingOccurrences(of: "\r\n", with: "\n") }
 
-        let flats = detectKey(body).map { Notes.usesFlats(MusicKey(root: $0.root + s, minor: $0.minor)) } ?? false
+        let flats = detectKey(body).map { Notes.usesFlats(MusicKey(root: $0.root + s, minor: $0.minor), from: $0) } ?? false
         var out = body.components(separatedBy: "\n")
             .map { transposeLine($0, s, flats) }
             .joined(separator: crlf ? "\r\n" : "\n")

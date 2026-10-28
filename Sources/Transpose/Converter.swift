@@ -24,7 +24,7 @@ package enum KeyInfo {
     }
     package func name(shiftedBy s: Int) -> String {
         switch self {
-        case .chords(let k): return Notes.keyName(MusicKey(root: k.root + s, minor: k.minor))
+        case .chords(let k): return Notes.keyName(MusicKey(root: k.root + s, minor: k.minor), from: k)
         case .xml(let k): return MusicXML.keyName(.init(fifths: MusicXML.targetFifths(k.fifths, s), minor: k.minor))
         }
     }
