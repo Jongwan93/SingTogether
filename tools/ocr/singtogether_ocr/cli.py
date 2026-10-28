@@ -20,6 +20,39 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
+PIPELINE_VERSION = "2026-10-28"           # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
+
+
+def cache_key(src: Path, *parts: str) -> str:
+    """파일 내용 해시 + 설정. 같은 악보를 다른 이름·폴더로 저장해도 같은 키."""
+    import hashlib
+    h = hashlib.sha256(src.read_bytes())
+    h.update("|".join((PIPELINE_VERSION, *parts)).encode())
+    return h.hexdigest()[:16]
+
+
+def cache_get(key: str, out: Path) -> list[Path] | None:
+    """캐시에 든 결과 파일들을 out 이름으로 복사해 돌려준다. 없으면 None."""
+    import shutil
+    d = CACHE_DIR / key
+    if not d.is_dir() or not any(d.iterdir()):
+        return None
+    out.parent.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for f in sorted(d.iterdir()):
+        target = out.with_suffix(f.suffix)
+        shutil.copy(f, target)
+        copied.append(target)
+    return copied
+
+
+def cache_put(key: str, files: list[Path]) -> None:
+    import shutil
+    d = CACHE_DIR / key
+    d.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        shutil.copy(f, d / f.name.replace(f.stem, "result"))
 
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
@@ -131,12 +164,27 @@ def main(argv=None) -> None:
     ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
     ap.add_argument("--llm", default="auto", choices=chordsheet.LLMS,
                     help="코드 차트 글자 읽기: claude(Claude Code CLI) / gemini(agy) / none(Apple Vision) / auto(있는 것)")
+    ap.add_argument("--no-cache", action="store_true", help="인식 결과 캐시(~/Library/Caches/SingTogether/ocr)를 읽지도 쓰지도 않는다")
     a = ap.parse_args(argv)
+
+    key_ = cache_key(a.input, a.engine, a.llm, "chords" if not a.no_chords else "", "lyrics" if not a.no_lyrics else "",
+                     f"il{a.interline:g}", "mask" if a.mask_text else "")
+    out_base = a.out or a.input.with_suffix(".musicxml")
+    if not a.no_cache and (hit := cache_get(key_, out_base)):
+        print(f"캐시에서 가져옴 ({key_})")
+        for f in hit:
+            print(f"→ {f}")
+        if a.transpose:
+            main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
+            print(f"→ {transpose(main_out, a.transpose)}")
+        return
 
     if chart := recognize_chordsheet(a.input, a.llm, a.work):
         out = (a.out.with_suffix(".txt") if a.out else a.input.with_suffix(".txt"))
         out.write_text(chart)
         print(f"→ {out}")
+        if not a.no_cache:
+            cache_put(key_, [out])
         if a.transpose:
             print(f"→ {transpose(out, a.transpose)}")
         if a.render:
@@ -151,6 +199,8 @@ def main(argv=None) -> None:
     print(f"{a.engine}: {t.title or '(제목 없음)'} — {t.key_name}, {t.beats}/{t.beat_type}, {len(t.measures)}마디, "
           f"음표 {len(t.notes)}, 코드 {n_chords}, 가사 {n_lyr}음절, {t.seconds:.0f}초")
     print(f"→ {out}\n→ {txt}")
+    if not a.no_cache:
+        cache_put(key_, [out, txt])
 
     targets = [out]
     if a.transpose:
