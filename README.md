@@ -32,7 +32,9 @@ Sources/
     ChordText.swift       텍스트 코드 악보 이조
     MusicXML.swift        MusicXML 음표·조표·코드 이조
     SheetOCR.swift        이미지·PDF: tools/ocr 인식 도구 호출, 결과 PDF를 원본 옆에
+    CompactText.swift     압축 텍스트 악보를 마디·음표 단위로 고치기 (클릭 수정)
   App/ReviewWindow.swift  인식 결과 확인 창
+  App/NoteEditor.swift    그림 위 음표 클릭 → 수정 팝오버
 tools/ocr/              악보 인식 (Python, 별도 README)
 Info.plist              앱 정보 (메뉴바 전용 앱 설정)
 build.sh                build/SingTogether.app 만들기
@@ -47,6 +49,7 @@ MusicXML 경로는 계산이라 100%여야 한다. `tests/transpose_check.py`가
 ./build.sh                                                  # singtogether-transpose
 tools/ocr/.venv/bin/python tests/transpose_check.py --quick  # 조표·코드·가사 케이스 + 코퍼스 일부
 tools/ocr/.venv/bin/python tests/transpose_check.py          # 전체 (Lilypond MusicXML 테스트 스위트 142 + 코퍼스 60 + OCR 출력)
+.build/release/singtogether-transpose --selftest             # 텍스트 이조·클릭 수정 자체 검사 (XCTest 없이)
 ```
 
 - 왕복: +n 뒤 −n 하면 원본과 음·코드가 같다
@@ -63,7 +66,8 @@ tools/ocr/.venv/bin/python tests/transpose_check.py          # 전체 (Lilypond 
 
 이미지·PDF 악보는 `tools/ocr`의 인식 도구가 있어야 합니다 (아래). 인식은 100%가 아니라서, 결과와 함께
 **확인 창**이 뜹니다. 왼쪽은 원본 위에 의심스러운 곳 표시, 오른쪽은 이조된 악보(빨간 음표 = 확인 필요).
-"텍스트 고치기"로 압축 텍스트를 고친 뒤 "고친 텍스트로 다시 만들기"를 누르면 PDF를 다시 만듭니다.
+왼쪽 그림에서 음표를 **클릭하면** 한 칸 위·아래, ♯/♭, 길이, 쉼표, 삭제를 바로 고칠 수 있고 PDF가 다시 만들어집니다(초록 테두리 = 고친 것).
+더 큰 수정은 "텍스트 고치기"로 압축 텍스트를 편집한 뒤 "고친 텍스트로 다시 만들기".
 
 ```bash
 cd tools/ocr && uv sync            # 인식 도구 설치 (처음 한 번). Claude Code CLI가 있으면 글자 정확도가 올라갑니다

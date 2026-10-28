@@ -2,8 +2,8 @@ import Foundation
 
 /// 조성 (근음 pitch class 0–11, 단조 여부)
 package struct MusicKey {
-    var root: Int
-    var minor: Bool
+    package var root: Int
+    package var minor: Bool
 }
 
 enum Notes {
@@ -28,7 +28,7 @@ enum Notes {
 }
 
 /// 텍스트 코드 악보 (가사 위 코드 줄, [G]가사 인라인 형식)
-enum ChordText {
+package enum ChordText {
     struct Chord { var root: Int; var quality: String; var bass: Int? }
 
     private static let chordRE = try! NSRegularExpression(
@@ -135,7 +135,7 @@ enum ChordText {
 
     /// 조 판별. 코드 근음이 온음계에 들면 +1, 3화음 성질(I·IV·V 장, ii·iii·vi 단)까지 맞으면 +1, 틀리면 −1.
     /// 동점이면 첫 코드의 조. 첫 코드가 vi 단3화음이면 나란한 단조로 본다.
-    static func detectKey(_ text: String) -> MusicKey? {
+    package static func detectKey(_ text: String) -> MusicKey? {
         let chords = allChords(text)
         guard let first = chords.first else { return nil }
         let majorDegrees = [0, 2, 4, 5, 7, 9, 11], minorDegrees: Set<Int> = [2, 4, 9]
@@ -203,7 +203,7 @@ enum ChordText {
         return out
     }
 
-    static func transpose(_ text: String, semitones s: Int) -> String {
+    package static func transpose(_ text: String, semitones s: Int) -> String {
         var body = text
         let bom = body.hasPrefix("\u{FEFF}")
         if bom { body.removeFirst() }

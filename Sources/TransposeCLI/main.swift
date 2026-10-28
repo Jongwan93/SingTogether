@@ -11,6 +11,7 @@ func fail(_ message: String, code: Int32) -> Never {
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
+if args.first == "--selftest" { exit(SelfTest.run()) }
 guard args.count >= 2, let semitones = Int(args[1]) else {
     fail("사용법: singtogether-transpose <악보 파일> <반음> [--out <출력 파일>]", code: 2)
 }

@@ -13,7 +13,9 @@ final class ReviewWindowController: NSWindowController {
 
     private let summary = NSTextField(labelWithString: "")
     private let pdfView = PDFView()
-    private let imageView = NSImageView()
+    private let imageView = ReviewImageView()
+    private var popover: NSPopover?
+    private var rebuildWork: DispatchWorkItem?
     private let imageScroll = NSScrollView()
     private let spinner = NSProgressIndicator()
 
@@ -46,7 +48,8 @@ final class ReviewWindowController: NSWindowController {
         imageScroll.allowsMagnification = true
         imageScroll.minMagnification = 0.25
         imageScroll.maxMagnification = 4
-        let left = labeled("원본 — 빨강: 확인할 음표, 주황: 코드, 보라: 가사", imageScroll)
+        let left = labeled("원본 — 빨강: 확인할 음표, 주황: 코드, 보라: 가사 · 음표를 클릭하면 고칠 수 있어요 (초록: 고친 것)", imageScroll)
+        imageView.onPick = { [weak self] spot, rect in self?.pick(spot, at: rect) }
 
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
@@ -110,6 +113,9 @@ final class ReviewWindowController: NSWindowController {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
             imageScroll.magnification = min(1, (imageScroll.bounds.width - 4) / max(1, img.size.width))
+            if imageView.spots.isEmpty, let t = result.text {
+                imageView.load(reviewJSON: t.deletingPathExtension().appendingPathExtension("review.json"))
+            }
         } else if let img = NSImage(contentsOf: original) {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
@@ -125,6 +131,50 @@ final class ReviewWindowController: NSWindowController {
             tv.autoresizingMask = [.width, .height]
             pdfView.addSubview(tv)
         }
+    }
+
+    /// 그림에서 음표를 클릭: 팝오버를 띄우고, 고칠 때마다 .txt에 쓰고 잠시 뒤 PDF를 다시 만든다
+    private func pick(_ spot: ReviewImageView.Spot, at rect: NSRect) {
+        guard let textURL = result.text else { return }
+        popover?.close()
+        let editor = NoteEditorController(spot: spot) { [weak self] edit in
+            guard let self, var text = (try? String(contentsOf: textURL, encoding: .utf8)).map(CompactText.init) else { return nil }
+            var newName: String? = nil
+            var newLength: String? = nil
+            switch edit {
+            case .step(let d):
+                newName = text.shiftStep(measure: spot.measure, index: spot.index, by: d)?.name
+            case .accidental(let a):
+                newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; if t.step != nil { t.alter = a }; return t }?.name
+            case .length(let l):
+                newLength = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.length = l; return t }?.length
+            case .rest:
+                newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.step = nil; t.tie = false; return t }?.name
+            case .delete:
+                text.update(measure: spot.measure, index: spot.index) { _ in nil }
+            }
+            try? text.text.write(to: textURL, atomically: true, encoding: .utf8)
+            if case .delete = edit {
+                self.imageView.remove(measure: spot.measure, index: spot.index)
+            } else {
+                self.imageView.update(measure: spot.measure, index: spot.index, name: newName, duration: newLength)
+            }
+            self.scheduleRebuild()
+            if case .delete = edit { return nil }
+            return newName ?? self.imageView.spots.first { $0.measure == spot.measure && $0.index == spot.index }?.name ?? spot.name
+        }
+        let pop = NSPopover()
+        pop.contentViewController = editor
+        pop.behavior = .transient
+        pop.show(relativeTo: rect, of: imageView, preferredEdge: .maxY)
+        popover = pop
+    }
+
+    private func scheduleRebuild() {
+        rebuildWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rebuild() }
+        rebuildWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
     }
 
     @objc private func openText() {
