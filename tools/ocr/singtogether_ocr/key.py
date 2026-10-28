@@ -78,3 +78,20 @@ def infer_key(chords: list[str]) -> tuple[int, str, float] | None:
     if re.match(r"[A-G][#b]?m(?!aj)", first[0]) and first[1] == (tonic + 9) % 12:
         mode = "minor"
     return fifths, mode, hits / len(roots)
+
+
+def scale_fit(t, fifths: int) -> float:
+    """엔진이 읽은 음 가운데 그 조의 온음계에 드는 비율."""
+    tonic = (fifths * 7) % 12
+    scale = {(tonic + d) % 12 for d in _SCALE}
+    pcs = [n.midi % 12 for n in t.notes if not n.is_rest and n.midi is not None]
+    return sum(pc in scale for pc in pcs) / len(pcs) if pcs else 0.0
+
+
+def plausible_change(t, fifths: int) -> bool:
+    """코드로 추론한 조를 엔진 조표 대신 쓸지. 엔진은 조표를 한두 칸 틀리게 읽는 일이 흔하지만(♭4→♭3),
+    멀리 떨어진 조는 코드 OCR이 깨진 쪽일 가능성이 크다. 그때는 음들이 어느 조에 더 잘 맞는지로 가른다
+    (렌더링 악보에서 코드의 ♭를 놓쳐 A♭장조가 E장조로 바뀌며 음높이 14%가 된 사례)."""
+    if abs(fifths - t.fifths) <= 2:
+        return True
+    return scale_fit(t, fifths) >= scale_fit(t, t.fifths)

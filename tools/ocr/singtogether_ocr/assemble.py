@@ -1,6 +1,7 @@
 """5단계 조립: 엔진 마디를 오선에 배정하고, 음표에 x좌표를 붙이고, 코드 기호를 가장 가까운 음표에 단다."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -38,22 +39,33 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
         for k, m in enumerate(measures):
             m.system = si
             m.x0, m.x1 = bars[min(k, len(bars) - 2)], bars[min(k + 1, len(bars) - 1)]
+        # 첫 마디의 왼쪽은 음자리표·조표·박자표 자리(find_symbols가 머리를 건너뛰는 폭과 같다)를 뺀 곳부터.
+        # 이걸 빼지 않으면 첫 마디 음표들의 기대 x가 왼쪽으로 쏠려 한 머리씩 어긋나게 짝지어진다 (렌더링 악보 첫 마디 F#→G).
+        if measures:
+            head_start = left + (5 if si == 0 else 3.5) * sys_.staff.interline
+            if measures[0].x1 is not None and head_start < measures[0].x1 - sys_.staff.interline:
+                measures[0].x0 = max(measures[0].x0, head_start)
         st = sys_.staff
         heads = syms.noteheads
         il = st.interline
 
-        def read_pitch(n, h):
-            """오선 위치에서 음높이를 다시 읽는다 (엔진보다 정확하다). 엔진이 같은 음이름·옥타브면 엔진 것을 둔다 (임시표 보존)."""
+        def position_pitch(h):
             step = round((st.bottom - h.y) / (il / 2))
-            letter, octave = "EFGABCD"[step % 7], 4 + (step + 2) // 7
+            return "EFGABCD"[step % 7], 4 + (step + 2) // 7
+
+        def read_pitch(n, h, why=""):
+            """오선 위치에서 음높이를 다시 읽는다. 엔진이 같은 음이름·옥타브면 엔진 것을 둔다 (임시표 보존)."""
+            letter, octave = position_pitch(h)
             if (n.step, n.octave) != (letter, octave):
+                if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
+                    print(f"    덮어씀[{why}] 오선{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
                 n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
 
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]
         if all_pitched and len(all_pitched) == len(heads):     # 오선 전체가 딱 맞으면 그대로 짝
             for n, h in zip(all_pitched, heads):
                 n.x, n.y = h.x, h.y
-                read_pitch(n, h)
+                read_pitch(n, h, "오선수일치")
         else:
             # 음표의 기대 x = 그 마디 범위 안에서 시간 비율 (악보는 대체로 시간에 비례해 배치된다).
             # 오선 전체의 기대 x 열과 머리 열을 한 번에 순서대로 DP 짝짓기 → 머리를 두 음표가 나눠 갖지 않고 x가 단조롭다.
@@ -71,13 +83,28 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                 n.x = exp[id(n)]
             if pitched and heads:
                 pairs = _align_x([exp[id(n)] for n in pitched], [h.x for h in heads], gap=1.5 * il)
-                trust_all = abs(len(heads) - len(pitched)) <= 3
+                # 음높이 덮어쓰기는 짝이 확실할 때만. 마디 안의 머리 수와 음표 수가 같으면 그 마디의 짝은 믿을 만하고,
+                # 아니면(머리를 놓쳤거나 가짜 머리) 기대 자리와 가까운 짝만 믿는다. 오선 전체 수가 비슷하다고 전부 덮어쓰면
+                # 깨끗한 입력에서 엔진이 맞게 읽은 음을 어긋난 짝이 망친다 (렌더링 악보 100% → 88%).
+                measure_of = {id(n): m for m in measures for n in m.notes}
+                exact = {id(m): (m.x0 is not None and
+                                 sum(1 for h in heads if m.x0 <= h.x < m.x1) == sum(1 for n in m.notes if not n.is_rest))
+                         for m in measures}
+                sure = [(a, b) for a, b in pairs
+                        if exact[id(measure_of[id(pitched[a])])] and measure_of[id(pitched[a])].x0 <= heads[b].x < measure_of[id(pitched[a])].x1]
+                # 확실한 짝에서 엔진과 오선 위치가 얼마나 일치하나 = 이 쪽에서 엔진의 음높이를 얼마나 믿을지.
+                # 거의 다 맞으면(깨끗한 입력) 불확실한 짝은 엔진을 두고, 자주 틀리면(웹 캡처) 수가 비슷한 한 전부 덮어쓴다.
+                agree = (sum(position_pitch(heads[b]) == (pitched[a].step, pitched[a].octave) for a, b in sure) / len(sure)) if sure else None
+                trust_all = abs(len(heads) - len(pitched)) <= 3 and (agree is None or agree < 0.93)
+                sure_ids = {(a, b) for a, b in sure}
+                if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
+                    print(f"  오선{si}: 음표 {len(pitched)} 머리 {len(heads)} 확실한 짝 {len(sure)} 일치율 {agree if agree is None else round(agree, 2)} trust_all {trust_all}")
                 for a, b in pairs:
                     n, h = pitched[a], heads[b]
                     near = abs(exp[id(n)] - h.x) < 1.0 * il
                     n.x, n.y = h.x, h.y
-                    if trust_all or near:
-                        read_pitch(n, h)
+                    if (a, b) in sure_ids or near or trust_all:
+                        read_pitch(n, h, "확실" if (a, b) in sure_ids else ("근접" if near else "전체신뢰"))
         for m in measures:                                   # 쉼표는 마디 안에서 시간 비율로
             if m.x0 is not None and m.length:
                 pos = 0

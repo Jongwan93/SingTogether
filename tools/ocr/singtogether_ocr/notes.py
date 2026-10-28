@@ -36,7 +36,7 @@ def find_symbols(page: Page, systems: list[System], debug_dir: Path | None = Non
     for k, sys_ in enumerate(systems):
         st = sys_.staff
         y0, y1 = max(0, int(st.top - 2 * il)), min(H, int(st.bottom + 2 * il))
-        heads = find_noteheads(page.binary[y0:y1, st.left:st.right + 1], il)
+        heads = find_noteheads(page.binary[y0:y1, st.left:st.right + 1], il, [ln - y0 for ln in st.lines])
         skip = st.left + (5 if k == 0 else 3.5) * il        # 음자리표·조표·박자표 자리
         heads = [Notehead(h.x + st.left, h.y + y0, h.w, h.h) for h in heads if h.x + st.left > skip]
         out.append(SystemSymbols(heads, find_barlines(page.binary, st, il, heads)))
@@ -52,9 +52,10 @@ def find_symbols(page: Page, systems: list[System], debug_dir: Path | None = Non
     return out
 
 
-def find_noteheads(region: np.ndarray, il: float) -> list[Notehead]:
+def find_noteheads(region: np.ndarray, il: float, lines: list[int] | None = None) -> list[Notehead]:
     """오선·기둥·빔처럼 가는 것을 열림 연산으로 지우면 꽉 찬 머리만 남는다.
-    속 빈 머리(2분·온음표)는 먼저 닫힘으로 채운 뒤 같은 방법으로 찾되, 원래 잉크가 성긴 것만 고른다."""
+    속 빈 머리(2분·온음표)는 먼저 닫힘으로 채운 뒤 같은 방법으로 찾되, 원래 잉크가 성긴 것만 고른다.
+    lines: 이 영역 기준 오선 줄 y (지금은 안 쓰지만 호출부가 넘긴다)."""
     ink = (region < 128).astype(np.uint8)
     open_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, int(0.8 * il)) | 1, max(3, int(0.6 * il)) | 1))
     close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(0.6 * il) | 1, int(0.6 * il) | 1))
@@ -62,10 +63,18 @@ def find_noteheads(region: np.ndarray, il: float) -> list[Notehead]:
     closed = cv2.morphologyEx(cv2.morphologyEx(ink, cv2.MORPH_CLOSE, close_k), cv2.MORPH_OPEN, open_k)
     hollow = []
     for h in _head_blobs(closed, il, median_filter=False):   # 닫힘으로 커진 꽉 찬 머리들이 중앙값을 끌어올리므로 크기 범위만 본다
-        inner, ring = hollow_stats(ink, h)
+        if h.w < h.h:                                        # 머리는 가로가 더 길다. 세로로 긴 것은 8분음표 꼬리 (렌더링 악보에서 가짜 머리 13개)
+            continue
+        probe = h
+        if h.w > 1.6 * il:                                   # 점(D4/2.)이 닫힘으로 붙어 넓어진 덩어리: 왼쪽 머리 부분만 본다
+            w = int(1.3 * il)
+            probe = Notehead(h.x - h.w / 2 + w / 2, h.y, w, h.h)
+        inner, ring = hollow_stats(ink, probe)
         if inner < 0.6 and ring > HOLLOW_RING_MIN and has_stem(ink, h, il) \
-                and all(abs(h.x - f.x) > 0.5 * il for f in filled):
-            hollow.append(h)
+                and all(abs(probe.x - f.x) > 0.5 * il for f in filled):
+            hollow.append(probe)
+    # 붙임줄이 붙은 2분음표는 여전히 놓친다. 기둥 끝에서 다시 찾는 방식을 시험했지만(2026-10) 가짜 머리가 늘어
+    # 웹 캡처 음높이가 79→59%로 떨어져서 뺐다. 놓친 머리는 마디 수 불일치로 이어져 그 마디는 엔진 음을 그대로 둔다.
     return sorted(filled + hollow, key=lambda h: h.x)
 
 
@@ -135,9 +144,11 @@ def find_barlines(binary: np.ndarray, staff: Staff, il: float, heads: list[Noteh
         x = int(np.mean(g))
         if x < staff.left + 0.3 * il:
             continue
-        above = ink[max(0, int(top - 1.2 * il)):int(top - 0.3 * il), max(0, x - 1):x + 2].mean()
-        below = ink[int(bottom + 0.3 * il):int(bottom + 1.2 * il), max(0, x - 1):x + 2].mean()
+        # 오선 바로 바깥(0.5il 안)이 이어져 검으면 기둥·빔. 붙임줄·이음줄은 더 멀리서 지나가므로 창을 오선에 붙인다
+        # (렌더링 악보에서 마디줄 아래를 지나는 붙임줄 때문에 진짜 마디줄을 버리던 것).
+        above = ink[max(0, int(top - 0.5 * il)):top, max(0, x - 1):x + 2].mean()
+        below = ink[bottom + 1:int(bottom + 0.5 * il) + 1, max(0, x - 1):x + 2].mean()
         near_head = any(abs(h.x - x) < 0.9 * il for h in heads)
-        if above < 0.3 and below < 0.3 and not near_head:
+        if above < 0.5 and below < 0.5 and not near_head:
             out.append(float(x))
     return out

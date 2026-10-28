@@ -83,7 +83,8 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                     print(f"하이브리드 코드: Claude {sum(1 for n in claude_t.notes if n.chord)}개, 앵커 {ratio:.0%}")
                 assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord])
-                if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode):
+                if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
+                        and key.plausible_change(t, inferred[0]):
                     rekey(t, inferred[0], inferred[1])
             key.infer_time(t)
             if lyrics_:
