@@ -24,7 +24,7 @@ SCORES = REPO / "music_scores"
 TRUTH = OCR_ROOT / "truth"
 OUT = OCR_ROOT / "out"
 DEFAULT_ENGINES = ["homr", "oemer", "audiveris", "claude"]
-COLUMNS = ["notes", "pitch", "chords", "lyrics", "measures", "key", "time", "sec"]
+COLUMNS = ["notes", "pitch", "chords", "lyrics", "measures", "key", "time", "sec", "review"]
 
 
 def _nfc(s: str) -> str:
@@ -51,9 +51,14 @@ def run_one(engine: str, name: str, img: Path, cached: bool, interline: float) -
     truth = from_text(truth_file.read_text())
     if not (cached and txt.exists()):
         try:
-            t = recognize(img, engine, out_dir / "work", out_dir / "dbg", interline=interline)
+            t = recognize(img, engine, out_dir / "work", out_dir / "dbg", interline=interline, review_dir=out_dir / "review")
+            from ..review import assess
+            rev = assess(t)
             write_outputs(t, out_dir / f"{name}.musicxml")
             (out_dir / f"{name}.sec").write_text(f"{t.seconds:.1f}")
+            import json
+            (out_dir / f"{name}.review.json").write_text(json.dumps(rev, ensure_ascii=False, indent=1))
+            return score(t, truth), ""                      # 신뢰도는 방금 돌린 결과에만 있다
         except Exception as e:
             (out_dir / f"{name}.error.txt").parent.mkdir(parents=True, exist_ok=True)
             (out_dir / f"{name}.error.txt").write_text(traceback.format_exc())
@@ -177,7 +182,8 @@ def main(argv=None) -> None:
                 row["notes"] = err
             lines.append(f"| {name} | {engine} | " + " | ".join(row[c] for c in COLUMNS) + " |")
             print("   ", err or row)
-    report = "\n".join(lines) + "\n\nnotes = 음높이·길이 둘 다 맞은 비율, pitch = 음높이만, 마디 경계가 달라도 순서가 맞으면 인정.\n"
+    report = "\n".join(lines) + "\n\nnotes = 음높이·길이 둘 다 맞은 비율, pitch = 음높이만, 마디 경계가 달라도 순서가 맞으면 인정.\n" \
+             "review = 검토 표시(신뢰도 < 0.6)의 정밀도 P(표시한 것 중 실제 오류)·재현율 R(실제 오류 중 표시된 것). 방금 돌린 결과에만.\n"
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "report.md").write_text(report)
     print("\n" + report)
