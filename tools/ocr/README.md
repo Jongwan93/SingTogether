@@ -43,6 +43,9 @@ brew install librsvg                     # PDF 출력용 rsvg-convert
 - `--no-chords` / `--no-lyrics`: 코드 / 가사 OCR 생략
 - `--interline PX`: 확대 목표 오선 간격 (기본 24. homr는 폭 ≈1920px 입력에서 가장 좋았다)
 - 출력: `<이름>.musicxml`과 사람이 읽고 고칠 수 있는 `<이름>.txt` (압축 텍스트 형식, 아래)
+- **코드 차트** (오선 없이 코드 줄 + 가사 줄): 오선이 하나도 안 잡히면 자동으로 이 경로. 글자를 `--llm claude|gemini|none|auto`로
+  읽어 앱의 텍스트 이조가 그대로 읽는 `<이름>.txt`를 만든다 (`--transpose N`이면 `<이름> (+N, 키).txt`까지).
+  auto는 Claude Code CLI → agy → Apple Vision 순으로 있는 것을 쓴다. 결과는 `<work>/chordsheet/`에 캐시.
 
 ## 압축 텍스트 형식 (정답 파일 · 인식 결과 캐시)
 
@@ -63,7 +66,7 @@ time: 4/4
 | 방법 | 10,000 Reasons | Blessed Assurance | Emmanuel | Here I Am to Worship |
 |---|---|---|---|---|
 | Vision 한 번 (×3) | 45% | 77% | 95% | 77% |
-| Vision 여러 배율 합집합 + 못 읽은 잉크 덩어리 재OCR | 78% | 96% | 80% | 94% |
+| Vision 여러 배율 합집합 + 못 읽은 잉크 덩어리 재OCR (`--llm none`) | 81% | 96% | 80% | 94% |
 | Claude CLI(sonnet) 전사 | **100%** | **100%** | 97% | 98% |
 | Gemini(agy) 전사 | **100%** | **100%** | 97% | 98% |
 
@@ -72,7 +75,8 @@ time: 4/4
 - Claude 전사는 "코드 줄 위, 가사 줄 아래" 텍스트 그대로 나오므로 앱의 `.txt` 이조(`ChordText`)에 바로 넣으면 된다.
   네 장 모두 `singtogether-transpose` +2로 옮겨 확인했고, 그 과정에서 붙임표로 이은 진행(`Bb9-Dm7-Eb-F`)이
   안 옮겨지던 것과 조 판별(첫 코드만 보던 것)을 고쳤다. 한 장에 약 20~30초, $0.03.
-- 아직 패키지 CLI에 넣지는 않았다. 넣는다면: 오선이 안 잡히는 입력 → 코드 차트로 보고 Claude 전사(또는 Vision 합집합) → `.txt` 출력.
+- CLI에 들어 있다 (`chordsheet.py`): 오선이 안 잡히는 입력 → `--llm`으로 전사 → `.txt` → `--transpose`. Vision 경로가 놓치는 건
+  외따로 선 한 글자 코드와 굵은 색 글씨의 F 같은 것이라, LLM CLI가 없을 때의 대비책으로 본다.
 
 ## 상한 측정 (깨끗한 입력이면 어디까지 되나)
 
@@ -101,6 +105,7 @@ time: 4/4
 .venv/bin/singtogether-eval                         # truth/*.txt 와 이름이 같은 music_scores/ 악보 전부
 .venv/bin/singtogether-eval --engines homr claude --samples "주님의 임재 앞에서"
 .venv/bin/singtogether-eval --cached                # out/ 에 있는 결과만 다시 채점
+.venv/bin/singtogether-eval --chordsheets --llm none  # 코드 차트 (music_scores/english, truth/chordsheets) → out/chordsheets.md
 ```
 
 `out/report.md`에 엔진 × 샘플 표. notes = 음높이·길이 둘 다 맞은 비율, pitch = 음높이만, 마디 경계가 틀려도 순서가 맞으면 인정.
