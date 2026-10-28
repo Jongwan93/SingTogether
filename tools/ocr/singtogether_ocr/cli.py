@@ -23,7 +23,8 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
-              chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True) -> Transcription:
+              chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True,
+              mask_text: bool = False) -> Transcription:
     """전체 파이프라인. 여러 쪽이면 마디를 이어 붙인다."""
     work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
     if debug_dir:
@@ -35,7 +36,9 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
     t0 = time.time()
     for page in ingest.prepare(src, target_interline=interline, debug_dir=debug_dir):
         systems = layout.find_systems(page, debug_dir)
-        t = eng.transcribe(page, work, debug_dir)
+        # 엔진에는 코드·가사 글자를 지운 쪽을 준다 (글자를 음표로 오인하는 것이 줄어 homr 원본 인식이 올라간다). 코드·가사 OCR은 원본으로.
+        engine_page = layout.clean_staff_image(page, systems, debug_dir) if mask_text and systems else page
+        t = eng.transcribe(engine_page, work, debug_dir)
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)
@@ -120,6 +123,8 @@ def main(argv=None) -> None:
     ap.add_argument("--work", type=Path, metavar="DIR", help="중간 파일 폴더 (기본: 임시 폴더)")
     ap.add_argument("--no-chords", action="store_true", help="코드 OCR 생략")
     ap.add_argument("--no-lyrics", action="store_true", help="가사 OCR 생략")
+    ap.add_argument("--mask-text", action="store_true",
+                    help="엔진에 주기 전 코드·가사 글자를 지운다 (homr 원본 인식은 오르지만 최종 결과는 아직 비슷해 기본 꺼짐)")
     ap.add_argument("--interline", type=float, default=ingest.TARGET_INTERLINE, metavar="PX",
                     help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
@@ -138,7 +143,8 @@ def main(argv=None) -> None:
             print("코드 차트는 렌더링하지 않아요 (.txt 그대로 쓰세요)")
         return
 
-    t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics)
+    t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics,
+                  mask_text=a.mask_text)
     out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))
     n_chords = sum(1 for n in t.notes if n.chord)
     n_lyr = sum(1 for n in t.notes if n.lyrics and n.lyrics[0])

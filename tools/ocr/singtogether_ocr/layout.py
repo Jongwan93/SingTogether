@@ -116,3 +116,36 @@ def staff_extent(binary: np.ndarray, lines: list[int]) -> tuple[int, int]:
     hits = ink[rows].reshape(len(lines), 3, -1).any(axis=1).sum(axis=0)
     xs = np.flatnonzero(hits >= 3)
     return (int(xs.min()), int(xs.max())) if xs.size else (0, ink.shape[1] - 1)
+
+
+def clean_staff_image(page: Page, systems: list[System], debug_dir: Path | None = None) -> Page:
+    """코드·가사 글줄을 흰색으로 지운 쪽. OMR 엔진이 한글 글자를 음표로 오인하는 것을 줄인다.
+    오선 위아래 1.5il 안(덧줄 음표·붙임줄)은 건드리지 않고, 코드 띠·가사 띠 안의 Vision 글줄 상자만 지운다."""
+    import dataclasses
+
+    from . import ingest
+    from .lyrics import recognize_lines
+
+    il = page.interline
+    g = page.gray.copy()
+    H, W = g.shape
+
+    def in_text_zone(y: float) -> bool:
+        for s in systems:
+            if s.staff.top - 1.5 * il <= y <= s.staff.bottom + 1.5 * il:
+                return False
+            if s.chord_band[0] <= y <= s.chord_band[1] or s.lyric_band[0] <= y <= s.lyric_band[1]:
+                return True
+        return False
+
+    n = 0
+    for _, _, _, (x0, y0, x1, y1) in recognize_lines(page.gray, ("ko-KR", "en-US")):
+        if in_text_zone((y0 + y1) / 2):
+            g[max(0, int(y0) - 2):min(H, int(y1) + 2), max(0, int(x0) - 2):min(W, int(x1) + 2)] = 255
+            n += 1
+    clean = dataclasses.replace(page, gray=g, binary=ingest.binarize(g))
+    if debug_dir:
+        img = debug.canvas(clean.binary)
+        debug.caption(img, f"{page.name}  text lines masked {n}")
+        debug.save(debug_dir / f"{page.name}-2-clean.png", img)
+    return clean
