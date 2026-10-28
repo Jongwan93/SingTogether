@@ -1,7 +1,9 @@
 """singtogether-ocr: 악보 이미지/PDF → MusicXML (+ 압축 텍스트). 선택: 이조, 렌더링, 단계별 오버레이.
+오선이 없는 코드 차트(코드 줄 + 가사 줄)는 텍스트 악보(.txt)로 만든다.
 
     singtogether-ocr input.pdf --out output.musicxml
     singtogether-ocr score.jpg --engine homr --debug dbg/ --transpose -2 --render
+    singtogether-ocr chart.jpg --llm claude --transpose 2        # 코드 차트 → chart.txt, chart (+2, A).txt
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import assemble, engines, hybrid, ingest, key, layout, lyrics, notes, text, textfmt
+from . import assemble, chordsheet, engines, hybrid, ingest, key, layout, lyrics, notes, text, textfmt
 from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
@@ -72,6 +74,21 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
     return merged
 
 
+def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None) -> str | None:
+    """오선이 없는 코드 차트면 텍스트 악보를, 오선 악보면 None을 돌려준다."""
+    pages = ingest.prepare(src)
+    if not pages or not chordsheet.is_chord_chart(pages[0]):
+        return None
+    work = work or Path(tempfile.mkdtemp(prefix="singtogether-"))
+    texts = []
+    for page in pages:
+        text, method, seconds = chordsheet.transcribe(src, page, work, llm)
+        n = sum(1 for line in text.splitlines() if chordsheet.is_chord_line(line))
+        print(f"코드 차트 ({method}): {page.name} 코드 줄 {n}개, {seconds:.0f}초")
+        texts.append(text)
+    return "\n".join(texts)
+
+
 def write_outputs(t: Transcription, out: Path) -> tuple[Path, Path]:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(to_musicxml(t))
@@ -107,7 +124,19 @@ def main(argv=None) -> None:
                     help=f"확대 목표 오선 간격 (기본 {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="반음 수. 이조본도 만든다 (./build.sh 필요)")
     ap.add_argument("--render", action="store_true", help="SVG/PDF로 그린다 (이조본이 있으면 그것도)")
+    ap.add_argument("--llm", default="auto", choices=chordsheet.LLMS,
+                    help="코드 차트 글자 읽기: claude(Claude Code CLI) / gemini(agy) / none(Apple Vision) / auto(있는 것)")
     a = ap.parse_args(argv)
+
+    if chart := recognize_chordsheet(a.input, a.llm, a.work):
+        out = (a.out.with_suffix(".txt") if a.out else a.input.with_suffix(".txt"))
+        out.write_text(chart)
+        print(f"→ {out}")
+        if a.transpose:
+            print(f"→ {transpose(out, a.transpose)}")
+        if a.render:
+            print("코드 차트는 렌더링하지 않아요 (.txt 그대로 쓰세요)")
+        return
 
     t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics)
     out, txt = write_outputs(t, a.out or a.input.with_suffix(".musicxml"))

@@ -33,7 +33,7 @@ def _nfc(s: str) -> str:
 
 def samples(names: list[str] | None) -> list[tuple[str, Path]]:
     wanted = {_nfc(n) for n in names} if names else None
-    images = {_nfc(p.stem): p for p in SCORES.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".pdf")}
+    images = {_nfc(p.stem): p for p in SCORES.rglob("*") if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".pdf")}
     out = []
     for truth in sorted(TRUTH.glob("*.txt")):
         name = _nfc(truth.stem)
@@ -68,13 +68,62 @@ def run_one(engine: str, name: str, img: Path, cached: bool, interline: float) -
     return score(t, truth), ""
 
 
+def chordsheet_eval(llm: str, names: list[str] | None) -> str:
+    """코드 차트: truth/chordsheets/<이름>.txt(코드만, | 로 줄 구분)와 비교해 코드 재현율을 낸다."""
+    import re
+    from collections import Counter
+    from ..chordsheet import chord_token, is_chord_line
+    from ..cli import recognize_chordsheet
+
+    def tokens(text: str) -> Counter:
+        out: list[str] = []
+        for line in text.splitlines():
+            if not is_chord_line(line):
+                continue
+            for raw in re.split(r"[\s\-–—|]+", line):
+                t = chord_token(raw) if raw else None
+                if t:
+                    out.append(t)
+        return Counter(out)
+
+    folder = SCORES / "english"
+    images = {_nfc(p.stem): p for p in folder.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".pdf")} if folder.exists() else {}
+    lines = [f"| 샘플 | 방법 | 코드 재현율 | 엉뚱 | 빠짐 | 초 |", "|---|---|---|---|---|---|"]
+    for truth_file in sorted((TRUTH / "chordsheets").glob("*.txt")):
+        name = _nfc(truth_file.stem)
+        if (names and name not in {_nfc(n) for n in names}) or name not in images:
+            continue
+        T = Counter(sum((list(tokens("| ".join(l.split("|"))).elements()) for l in truth_file.read_text().splitlines()), []))
+        out_dir = OUT / "chordsheets" / llm
+        import time
+        t0 = time.time()
+        text = recognize_chordsheet(images[name], llm, out_dir / "work") or ""
+        (out_dir / f"{name}.txt").parent.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{name}.txt").write_text(text)
+        R = tokens(text)
+        hit = sum((T & R).values())
+        lines.append(f"| {name} | {llm} | {hit / max(1, sum(T.values())):.0%} ({hit}/{sum(T.values())}) | {sum((R - T).values())} | "
+                     f"{' '.join(f'{k}×{v}' for k, v in (T - R).items()) or '-'} | {time.time() - t0:.0f} |")
+        print(lines[-1], flush=True)
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="singtogether-eval", description="엔진별 인식 정확도 비교")
     ap.add_argument("--engines", nargs="+", default=DEFAULT_ENGINES)
     ap.add_argument("--samples", nargs="+", help="샘플 이름 (truth/<이름>.txt)")
     ap.add_argument("--cached", action="store_true", help="이미 돌린 결과만 다시 채점")
     ap.add_argument("--interline", type=float, default=24.0)
+    ap.add_argument("--chordsheets", action="store_true", help="코드 차트(music_scores/english, truth/chordsheets) 평가")
+    ap.add_argument("--llm", default="auto", help="코드 차트 글자 읽기: auto|claude|gemini|none")
     a = ap.parse_args(argv)
+
+    if a.chordsheets:
+        report = chordsheet_eval(a.llm, a.samples)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / "chordsheets.md").write_text("# 코드 차트\n\n" + report)
+        print("\n" + report)
+        return
 
     items = samples(a.samples)
     if not items:
