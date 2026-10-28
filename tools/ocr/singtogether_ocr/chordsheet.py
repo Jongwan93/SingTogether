@@ -41,7 +41,11 @@ def chord_token(tok: str) -> str | None:
     t = re.sub(r"(?i)(sus|add|dim|aug|maj)", lambda m: m.group(1).lower(), t)   # DsUs4 → Dsus4
     m = _CHORD.match(t)
     if not m or (m.group(3) and not QUALITY_RE.match(m.group(3))):
-        return None
+        from .sanitize import candidates
+        if not re.match(r"[A-G0-9(]", t) or not 2 <= len(t) <= 8 or not re.search(r"[0-9#b/]", t):   # 가사 단어·외딴 숫자는 안 건드린다
+            return None
+        fixed = candidates(t)
+        return fixed[0] if fixed else None
     return t
 
 

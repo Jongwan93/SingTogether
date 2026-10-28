@@ -67,6 +67,7 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
             box = (bx0, y0 + by0, bx1, y0 + by1)
             all_boxes.append(box)
             votes: dict[str, list[float]] = {}
+            rescued: dict[str, list[float]] = {}
             raw: list[str] = []
             for pad_f, min_side, langs in _OCR_PASSES:
                 pad = int(pad_f * il)
@@ -78,6 +79,12 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                     raw.append(chord)
                     if is_chord(chord):
                         votes.setdefault(chord, []).append(b.conf)
+                    else:
+                        from .sanitize import candidates
+                        for fixed in candidates(chord)[:2]:          # 8b2 → Bb2, F4m → F#m
+                            rescued.setdefault(fixed, []).append(b.conf * 0.7)
+            if not votes and rescued:                                # 직접 읽은 유효한 코드가 하나도 없을 때만 쓴다
+                votes = rescued
             weak = not votes or max(len(v) for v in votes.values()) < 2 or all(re.fullmatch(r"[A-G][#b]?", c) for c in votes)
             if weak:
                 # 윗첨자가 붙은 코드(A♭, C², D⁷)는 통째로 읽으면 자주 틀린다("A6", "C'"). 큰 글자와 윗첨자를 나눠 읽는다
