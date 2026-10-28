@@ -13,6 +13,10 @@ M2(가사): 가사 띠를 Vision(ko+en)으로 읽어 글자 단위 좌표를 얻
 x좌표 순서를 지키는 DP로 음표에 짝짓는다. `-`/`_` 멜리스마 표시는 자리 표시자로 음표 하나를 차지한다.
 글줄은 y로 묶어 절(1절, 2절, 영어 줄)을 나누고, 다음 오선의 코드 줄·잡음 줄은 걸러낸다. 제목·작곡자는 첫 오선 위에서 읽는다.
 
+앱 연동: `singtogether-ocr 입력 --engine auto --transpose N --render --json`이 마지막 줄에 `JSON {...}`(결과 경로·요약)을 찍고,
+앱(`Sources/Transpose/SheetOCR.swift`)이 그걸 읽어 확인 창을 띄운다. `--engine auto`는 Claude Code CLI가 있으면 hybrid, 없으면 homr.
+중간 파일은 `~/Library/Caches/SingTogether/work/<이름>/`, 결과 PDF만 원본 옆에.
+
 ## 설치
 
 ```bash

@@ -31,6 +31,9 @@ Sources/
     Converter.swift       형식 판별, 원래 키 읽기, 새 파일 만들기
     ChordText.swift       텍스트 코드 악보 이조
     MusicXML.swift        MusicXML 음표·조표·코드 이조
+    SheetOCR.swift        이미지·PDF: tools/ocr 인식 도구 호출, 결과 PDF를 원본 옆에
+  App/ReviewWindow.swift  인식 결과 확인 창
+tools/ocr/              악보 인식 (Python, 별도 README)
 Info.plist              앱 정보 (메뉴바 전용 앱 설정)
 build.sh                build/SingTogether.app 만들기
 Package.swift           Xcode / SwiftPM용
@@ -56,9 +59,18 @@ tools/ocr/.venv/bin/python tests/transpose_check.py          # 전체 (Lilypond 
 |---|---|
 | `.txt` `.cho` `.chordpro` `.crd` | 가사 위 코드 줄, `[G]가사` 인라인 코드, `Bb9-Dm7-Eb-F`처럼 붙임표로 이은 진행 |
 | `.musicxml` `.xml` `.mxl` | 모든 음표, 조표, 임시표, 코드 기호 |
+| `.png` `.jpg` `.webp` `.pdf` (이미지 악보) | 인식 → 이조 → 새 PDF. 코드 차트(코드+가사)는 `.txt` |
 
-PDF·이미지 악보는 음표를 읽을 수 없어서 지원하지 않습니다.
-MuseScore에서 MusicXML로 내보내면 쓸 수 있어요.
+이미지·PDF 악보는 `tools/ocr`의 인식 도구가 있어야 합니다 (아래). 인식은 100%가 아니라서, 결과와 함께
+**확인 창**이 뜹니다. 왼쪽은 원본 위에 의심스러운 곳 표시, 오른쪽은 이조된 악보(빨간 음표 = 확인 필요).
+"텍스트 고치기"로 압축 텍스트를 고친 뒤 "고친 텍스트로 다시 만들기"를 누르면 PDF를 다시 만듭니다.
+
+```bash
+cd tools/ocr && uv sync            # 인식 도구 설치 (처음 한 번). Claude Code CLI가 있으면 글자 정확도가 올라갑니다
+open build/SingTogether.app --args --sheet 악보.png -2    # 드래그 없이 바로 시험
+```
+
+앱은 `tools/ocr/.venv/bin/singtogether-ocr`를 저장소 안에서 찾습니다. 다른 곳에 있으면 `SINGTOGETHER_OCR` 환경 변수로 알려 주세요.
 
 ## 참고
 
