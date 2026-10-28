@@ -57,7 +57,7 @@ class engine:
         cmd = [self.binary, "-p", PROMPT.format(image=image.resolve()), "--model", self.model,
                "--tools", "Read", "--allowedTools", "Read", "--output-format", "json"]
         seconds, out = run(cmd, timeout=600)
-        result = json.loads(out[out.index("{"):])
+        result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
         if result.get("is_error"):
             raise RuntimeError(f"claude 실패: {result.get('result')}")
         text = result["result"]

@@ -98,7 +98,14 @@ package enum SheetOCR {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }
             summary = "확인 필요: 음표 \(pair("notes_flagged", "notes")), 코드 \(pair("chords_flagged", "chords")), 가사 \(pair("lyrics_flagged", "lyrics"))"
         } else if dict["chordsheet"] as? Bool == true {
-            summary = "코드 차트: 코드와 가사만 읽었어요"
+            if let chart = dict["chart"] as? [String: Any] {
+                let notes = (chart["notes"] as? [String]) ?? []
+                summary = "코드 차트: 원본 위의 코드 \(chart["replaced"] ?? 0)개를 바꿨어요" + (notes.isEmpty ? "" : " · ⚠︎ " + notes.joined(separator: " · "))
+            } else if let err = dict["overlay_error"] as? String {
+                summary = "코드 차트: 그림은 못 만들고 텍스트로 만들었어요 (\(err))"
+            } else {
+                summary = "코드 차트: 코드와 가사를 텍스트로 만들었어요"
+            }
         }
         return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"),
                       reviewPNGs: ((dict["review_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },

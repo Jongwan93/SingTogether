@@ -7,6 +7,7 @@ Drag a score, pick a key, and a transposed copy appears next to the original. Th
 Song.txt       →  drop on +2  →  Song (+2, A).txt
 Song.musicxml  →  drop on −3  →  Song (-3, E).musicxml
 Song.png       →  drop on −2  →  Song (-2, F).pdf   (+ a review window)
+Chart.jpg      →  drop on +2  →  Chart (+2, A).jpg   (same image, new chords)
 ```
 
 ## How to use
@@ -25,7 +26,7 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 | `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F` | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
 | `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, rendered to a new PDF | depends on image quality, see below |
-| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | recognized, transposed to a `.txt` | 97–100% with Claude or Gemini CLI, 80–96% without |
+| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with Claude or Gemini CLI, 80–96% without |
 
 ## Install
 
@@ -58,6 +59,13 @@ Recognition is never perfect, so every image score opens a review window:
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
 To try it without dragging: `open build/SingTogether.app --args --sheet score.png -2`
+
+### Chord charts
+
+Sheets that only have chords above lyrics (no staff) are not redrawn. The app keeps the original image and rewrites just the chord symbols:
+it erases each chord, then writes the new one in the same place, colour and size, in the closest matching system font.
+Title, lyrics, layout and watermarks stay exactly as they were. Hyphenated runs like `Bb9-Dm7-Eb-F` are rewritten as a whole.
+If a chord could not be found in the image, the review window says so and marks the spot.
 
 ### What to expect
 

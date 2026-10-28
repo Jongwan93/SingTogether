@@ -70,7 +70,7 @@ def _claude(image: Path) -> str:
     from .engines._run import run
     _, out = run([binary, "-p", PROMPT.format(image=image), "--model", model,
                   "--tools", "Read", "--allowedTools", "Read", "--output-format", "json"], timeout=600)
-    result = json.loads(out[out.index("{"):])
+    result = json.JSONDecoder().raw_decode(out[out.index("{"):])[0]
     if result.get("is_error"):
         raise RuntimeError(f"claude 실패: {result.get('result')}")
     return result["result"]

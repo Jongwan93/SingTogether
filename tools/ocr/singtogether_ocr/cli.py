@@ -132,6 +132,30 @@ def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None)
     return "\n".join(texts)
 
 
+def chart_overlay(src: Path, chart_text: str, semitones: int, transposed_txt: Path, result: dict) -> Path | None:
+    """코드 차트: 원본 그림 위에서 코드만 바꾼 그림을 이조된 .txt 옆에 같은 이름으로 만든다 (확장자는 원본과 같게)."""
+    from . import chordoverlay
+    ext = src.suffix.lower() if src.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".pdf", ".bmp", ".tif", ".tiff") else ".png"
+    out = transposed_txt.with_suffix(ext)
+    review_png = transposed_txt.parent / f"{src.stem}-p1.review.png"
+    try:
+        r = chordoverlay.overlay(src, chart_text, semitones, out, review_png)
+    except Exception as e:                          # 그림을 못 만들어도 .txt는 있다
+        print(f"코드 그림 실패 (텍스트는 있음): {e}")
+        result["overlay_error"] = str(e)
+        return None
+    if r.image is None:
+        result["overlay_error"] = "; ".join(r.notes)
+        return None
+    print(f"→ {r.image}  (코드 {r.replaced}개 바꿈, 글꼴 {r.font})")
+    for n in r.notes:
+        print(f"   ! {n}")
+    result.update({"transposed_txt": result.get("transposed"), "transposed": str(r.image),
+                   "review_png": [str(r.review)] if r.review else [],
+                   "chart": {"replaced": r.replaced, "missed": r.missed, "notes": r.notes, "font": r.font}})
+    return r.image
+
+
 def write_outputs(t: Transcription, out: Path) -> tuple[Path, Path]:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(to_musicxml(t))
@@ -195,10 +219,14 @@ def main(argv=None) -> None:
         result["cached"] = True
         for f in hit:
             result[{".musicxml": "musicxml", ".txt": "txt", ".json": "review_json"}.get(f.suffix, f.suffix)] = str(f)
+        if not any(f.suffix == ".musicxml" for f in hit):
+            result["chordsheet"] = True
         if a.transpose:
             main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
             tr = transpose(main_out, a.transpose, result)
             print(f"→ {tr}")
+            if result.get("chordsheet") and a.input.suffix.lower() != ".txt":
+                chart_overlay(a.input, main_out.read_text(), a.transpose, tr, result)
             if a.render and tr.suffix != ".txt":
                 from .render import render
                 for p in (main_out, tr):
@@ -237,9 +265,9 @@ def main(argv=None) -> None:
         if not a.no_cache:
             cache_put(key_, [out])
         if a.transpose:
-            print(f"→ {transpose(out, a.transpose, result)}")
-        if a.render:
-            print("코드 차트는 렌더링하지 않아요 (.txt 그대로 쓰세요)")
+            tr = transpose(out, a.transpose, result)
+            print(f"→ {tr}")
+            chart_overlay(a.input, chart, a.transpose, tr, result)
         finish()
         return
 

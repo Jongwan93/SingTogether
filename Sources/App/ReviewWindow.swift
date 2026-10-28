@@ -120,7 +120,14 @@ final class ReviewWindowController: NSWindowController {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
         }
+        pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
+            pdfView.document = doc
+        } else if let t = result.transposed, SheetOCR.extensions.contains(t.pathExtension.lowercased()),
+                  let img = NSImage(contentsOf: t), let page = PDFPage(image: img) {
+            // 코드 차트: 원본 위에서 코드만 바꾼 그림
+            let doc = PDFDocument()
+            doc.insert(page, at: 0)
             pdfView.document = doc
         } else if let t = result.transposed, let text = try? String(contentsOf: t, encoding: .utf8) {
             // 코드 차트: PDF가 없으니 텍스트를 그대로 보여 준다
