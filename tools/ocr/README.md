@@ -41,6 +41,11 @@ brew install librsvg                     # PDF 출력용 rsvg-convert
 - `--debug DIR`: 단계별 오버레이 `<이름>-1-ingest.png`, `-2-layout`, `-3-symbols`, `-4-chords`, `-4-lyrics`, `-5-assembled`
   (오선=파랑, 음표=초록, 코드=주황, 가사=보라, 영역=회색)
 - `--no-chords` / `--no-lyrics`: 코드 / 가사 OCR 생략
+- 결과 캐시: 파일 내용 해시 + 설정으로 `~/Library/Caches/SingTogether/ocr/<키>/`에 결과를 두고, 같은 악보(다른 이름·폴더여도)는
+  다시 인식하지 않는다. `--no-cache`로 끔, `SINGTOGETHER_CACHE`로 위치 변경. 인식 논리가 바뀌면 `cli.PIPELINE_VERSION`을 올린다.
+- 코드 OCR 후보정(`sanitize.py`): 문법에 안 맞는 읽기(`8b2`, `F4m`, `A/C4`, `AIC#`, `Cim`)를 자리별 혼동표로 살린다.
+  유효한 읽기가 하나도 없는 글 덩어리에만 쓴다. 조성의 흔한 코드 사전(`common_chords`)도 있지만 유효한 읽기를 바꾸는 데는 쓰지 않는다
+  (조 추정이 틀리면 맞는 코드를 망쳤다). 지금 샘플 7장에서는 ±0.
 - `--interline PX`: 확대 목표 오선 간격 (기본 24. homr는 폭 ≈1920px 입력에서 가장 좋았다)
 - 출력: `<이름>.musicxml`과 사람이 읽고 고칠 수 있는 `<이름>.txt` (압축 텍스트 형식, 아래)
 - **코드 차트** (오선 없이 코드 줄 + 가사 줄): 오선이 하나도 안 잡히면 자동으로 이 경로. 글자를 `--llm claude|gemini|none|auto`로
