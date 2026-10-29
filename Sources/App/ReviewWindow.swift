@@ -1,10 +1,11 @@
 import AppKit
 import PDFKit
 import Transpose
+import UniformTypeIdentifiers
 
 /// 이미지·PDF 악보를 인식한 뒤 띄우는 확인 창.
-/// 왼쪽: 원본 위에 확인할 곳 표시(review.png). 오른쪽: 이조된 악보 PDF.
-/// 아래: 요약, 텍스트 고치기(기본 편집기로 .txt 열기), 고친 텍스트로 다시 만들기, 결과 파일 보기.
+/// 왼쪽: 원본 위에 확인할 곳 표시 (가장 의심스러운 것부터 Next 키로 돌 수 있고, ▶로 들어 볼 수 있다). 오른쪽: 이조된 악보 PDF.
+/// 아래: 요약, 텍스트 고치기(기본 편집기로 .txt 열기), 고친 텍스트로 다시 만들기, 결과 파일 보기, 정답으로 저장(평가 세트).
 final class ReviewWindowController: NSWindowController {
     private let original: URL
     private let semitones: Int
@@ -22,6 +23,12 @@ final class ReviewWindowController: NSWindowController {
     private let undoButton = NSButton(title: "Undo", target: nil, action: nil)
     private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private var chartFont: String?        // 코드 차트: 사용자가 고른 글꼴 (nil = 자동)
+    private let leftLabel = NSTextField(labelWithString: "")
+    private let nextButton = NSButton(title: "Next doubtful", target: nil, action: nil)
+    private let playButton = NSButton(title: "▶ Play", target: nil, action: nil)
+    private let tempoPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let truthButton = NSButton(title: "Save as Truth…", target: nil, action: nil)
+    private var lastPicked: ReviewImageView.Spot?
 
     init(original: URL, semitones: Int, result: SheetOCR.Result, delivered: URL) {
         self.original = original
@@ -31,12 +38,14 @@ final class ReviewWindowController: NSWindowController {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         w.title = "Review: \(original.lastPathComponent) → \(delivered.lastPathComponent)"
-        w.minSize = NSSize(width: 800, height: 500)
+        w.minSize = NSSize(width: 860, height: 500)
         super.init(window: w)
         build()
         load()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { MelodyPlayer.shared.stop() }
 
     private func build() {
         guard let content = window?.contentView else { return }
@@ -52,12 +61,30 @@ final class ReviewWindowController: NSWindowController {
         imageScroll.allowsMagnification = true
         imageScroll.minMagnification = 0.25
         imageScroll.maxMagnification = 4
-        let left = labeled("Original — red: notes to check, orange: chords, purple: lyrics · click any note, chord or syllable to fix it (green: fixed)", imageScroll)
+        leftLabel.font = .systemFont(ofSize: 11)
+        leftLabel.textColor = .secondaryLabelColor
+        leftLabel.lineBreakMode = .byTruncatingTail
+        leftLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        leftLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nextButton.target = self; nextButton.action = #selector(nextDoubtful)
+        nextButton.keyEquivalent = "n"
+        nextButton.toolTip = "Jump to the next most doubtful note that is not fixed yet (N)"
+        playButton.target = self; playButton.action = #selector(togglePlay)
+        playButton.keyEquivalent = " "
+        playButton.toolTip = "Play the melody as it was read, from the start (space). Click a note to hear just that note."
+        for t in MelodyPlayer.tempos { tempoPopup.addItem(withTitle: "♩ = \(Int(t))") }
+        tempoPopup.selectItem(at: MelodyPlayer.tempos.firstIndex(of: MelodyPlayer.tempo) ?? 2)
+        tempoPopup.target = self; tempoPopup.action = #selector(tempoChanged)
+        for b in [nextButton, playButton, tempoPopup] { b.controlSize = .small; b.font = .systemFont(ofSize: 11) }
+        let leftBar = NSStackView(views: [leftLabel, nextButton, playButton, tempoPopup])
+        leftBar.orientation = .horizontal
+        leftBar.spacing = 8
+        let left = labeled(leftBar, imageScroll)
         imageView.onPick = { [weak self] spot, rect in self?.pick(spot, at: rect) }
 
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
-        let right = labeled("Transposed — doubtful notes are red", pdfView)
+        let right = labeled(NSTextField(labelWithString: "Transposed — doubtful notes are red"), pdfView)
 
         split.addArrangedSubview(left)
         split.addArrangedSubview(right)
@@ -73,6 +100,9 @@ final class ReviewWindowController: NSWindowController {
         undoButton.action = #selector(undo(_:))
         undoButton.toolTip = "Undo the last click-fix (⌘Z)"
         undoButton.isEnabled = false
+        truthButton.target = self
+        truthButton.action = #selector(saveTruth)
+        truthButton.toolTip = "When every note, chord and syllable is right: save this score as ground truth for singtogether-eval (tools/ocr/truth/)"
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isHidden = true
@@ -82,7 +112,7 @@ final class ReviewWindowController: NSWindowController {
         fontPopup.target = self
         fontPopup.action = #selector(fontChanged)
         fontPopup.isHidden = !result.isChordSheet
-        let bar = NSStackView(views: [summary, NSView(), spinner, fontPopup, undoButton, fix, redo, reveal])
+        let bar = NSStackView(views: [summary, NSView(), spinner, fontPopup, undoButton, fix, redo, truthButton, reveal])
         bar.orientation = .horizontal
         bar.spacing = 10
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 10, right: 14)
@@ -105,19 +135,23 @@ final class ReviewWindowController: NSWindowController {
             guard let self, let w = self.window else { return }
             split.setPosition(w.frame.width * 0.5, ofDividerAt: 0)
         }
+        MelodyPlayer.shared.onEvent = { [weak self] e in self?.playing(e) }
     }
 
-    private func labeled(_ title: String, _ view: NSView) -> NSView {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [label, view])
+    private func labeled(_ header: NSView, _ view: NSView) -> NSView {
+        if let label = header as? NSTextField {
+            label.font = .systemFont(ofSize: 11)
+            label.textColor = .secondaryLabelColor
+        }
+        let stack = NSStackView(views: [header, view])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 0, right: 10)
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
+        for v in [header, view] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true
+        }
         return stack
     }
 
@@ -127,7 +161,10 @@ final class ReviewWindowController: NSWindowController {
             fontPopup.selectItem(at: i + 1)
             fontPopup.itemArray[0].title = "Font: Automatic (\(f))"
         }
-        if let png = result.reviewPNGs.first, let img = NSImage(contentsOf: png) {
+        // 표시 없는 쪽 그림이 있으면 앱이 직접 표시를 그린다 (의심 순서 강조, 고친 것은 표시가 사라진다). 없으면 그려진 review.png.
+        let clean = result.pagePNGs.first.flatMap { NSImage(contentsOf: $0) }
+        if let img = clean ?? result.reviewPNGs.first.flatMap({ NSImage(contentsOf: $0) }) {
+            imageView.drawsFlags = clean != nil
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
             imageScroll.magnification = min(1, (imageScroll.bounds.width - 4) / max(1, img.size.width))
@@ -138,6 +175,13 @@ final class ReviewWindowController: NSWindowController {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
         }
+        let isStaff = !result.isChordSheet && result.text != nil
+        nextButton.isHidden = !isStaff
+        playButton.isHidden = !isStaff
+        tempoPopup.isHidden = !isStaff
+        leftLabel.stringValue = result.isChordSheet
+            ? "Original — orange: chords to check · click any chord or word to fix it (green: fixed)"
+            : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed)"
         pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
             pdfView.document = doc
@@ -158,15 +202,24 @@ final class ReviewWindowController: NSWindowController {
         }
     }
 
+    private func readText() -> CompactText? {
+        guard let t = result.text, let s = try? String(contentsOf: t, encoding: .utf8) else { return nil }
+        return CompactText(s)
+    }
+
     /// 그림에서 음표·코드·가사를 클릭: 팝오버를 띄우고, 고칠 때마다 .txt에 쓰고 잠시 뒤 PDF를 다시 만든다
     private func pick(_ spot: ReviewImageView.Spot, at rect: NSRect) {
         guard let textURL = result.text else { return }
         popover?.close()
-        let read = { (try? String(contentsOf: textURL, encoding: .utf8)).map(CompactText.init) }
+        MelodyPlayer.shared.stop()
+        lastPicked = spot
+        imageView.current = spot.key
+        let read = { [weak self] in self?.readText() }
         let editor: NSViewController
         switch spot.kind {
         case .note:
-            editor = NoteEditorController(spot: spot, chord: read()?.chord(measure: spot.measure, index: spot.index)) { [weak self] edit in
+            editor = NoteEditorController(spot: spot, chord: read()?.chord(measure: spot.measure, index: spot.index),
+                                          playMeasure: { [weak self] in self?.play(measure: spot.measure) }) { [weak self] edit in
                 guard let self, var text = read() else { return nil }
                 self.snapshot(text.text)
                 var newName: String? = nil
@@ -189,6 +242,7 @@ final class ReviewWindowController: NSWindowController {
                 switch edit {
                 case .delete:
                     self.imageView.remove(measure: spot.measure, index: spot.index)
+                    self.imageView.current = nil
                 case .chord(let c):
                     self.imageView.update(.chord, measure: spot.measure, index: spot.index, name: c)
                 default:
@@ -196,7 +250,7 @@ final class ReviewWindowController: NSWindowController {
                 }
                 self.scheduleRebuild()
                 if case .delete = edit { return nil }
-                return newName ?? self.imageView.spots.first { $0.kind == .note && $0.measure == spot.measure && $0.index == spot.index }?.name ?? spot.name
+                return newName ?? self.imageView.spot(measure: spot.measure, index: spot.index)?.name ?? spot.name
             }
         case .chord, .lyric:
             editor = TextEditorController(spot: spot) { [weak self] value in
@@ -217,6 +271,89 @@ final class ReviewWindowController: NSWindowController {
         pop.behavior = .transient
         pop.show(relativeTo: rect, of: imageView, preferredEdge: .maxY)
         popover = pop
+    }
+
+    /// N: 아직 안 고친 의심 음표 중 다음 것으로 (의심스러운 순서, 끝에 가면 처음으로). 화면에 보이게 하고 편집 팝오버를 연다.
+    @objc private func nextDoubtful() {
+        let list = imageView.doubtful
+        guard !list.isEmpty else {
+            summary.stringValue = imageView.spots.isEmpty ? "No review data for this score" : "No doubtful notes left — everything flagged has been fixed"
+            NSSound.beep()
+            return
+        }
+        var k = 0
+        if let cur = lastPicked, let i = list.firstIndex(where: { $0.key == cur.key }) { k = (i + 1) % list.count }
+        else if let cur = lastPicked, let i = list.firstIndex(where: { $0.rank > cur.rank }) { k = i }
+        let spot = list[k]
+        let rect = imageView.viewRect(spot)
+        imageView.scrollToVisible(rect.insetBy(dx: -120, dy: -120))
+        summary.stringValue = "Doubtful note \(k + 1) of \(list.count): measure \(spot.measure), \(spot.name) (confidence \(String(format: "%.2f", spot.conf)))"
+        pick(spot, at: rect)
+    }
+
+    // MARK: 재생
+
+    @objc private func togglePlay() {
+        if MelodyPlayer.shared.isPlaying { MelodyPlayer.shared.stop(); return }
+        popover?.close()
+        play(from: nil)
+    }
+
+    private func play(measure: Int) {
+        popover?.close()
+        guard let events = readText()?.events().filter({ $0.measure == measure }), !events.isEmpty else { NSSound.beep(); return }
+        MelodyPlayer.shared.play(events)
+    }
+
+    private func play(from measure: Int?) {
+        guard let events = readText()?.events(), !events.isEmpty else { NSSound.beep(); return }
+        let fromHere = measure.map { m in events.filter { $0.measure >= m } } ?? events
+        MelodyPlayer.shared.play(fromHere)
+    }
+
+    @objc private func tempoChanged() {
+        MelodyPlayer.tempo = MelodyPlayer.tempos[tempoPopup.indexOfSelectedItem]
+    }
+
+    /// 울리는 음표를 그림에 표시하고 보이게 스크롤한다. nil = 끝났다.
+    private func playing(_ e: CompactText.Event?) {
+        playButton.title = e == nil ? "▶ Play" : "■ Stop"
+        guard let e else { imageView.playing = nil; return }
+        imageView.playing = e.key
+        if let s = imageView.spot(measure: e.measure, index: e.index) {
+            imageView.scrollToVisible(imageView.viewRect(s).insetBy(dx: -200, dy: -150))
+        }
+    }
+
+    // MARK: 정답 저장
+
+    /// 다 고친 악보를 평가 세트의 정답(tools/ocr/truth/<이름>.txt)으로 저장한다. 저장소 안에서 돌릴 때는 그 폴더를 기본으로 열고,
+    /// 같은 이름의 악보가 music_scores/에 없으면 원본 그림도 복사한다 (singtogether-eval이 이름으로 짝짓는다).
+    @objc private func saveTruth() {
+        guard let t = result.text, let text = try? String(contentsOf: t, encoding: .utf8), let window else { NSSound.beep(); return }
+        popover?.close()
+        let panel = NSSavePanel()
+        panel.title = "Save as Ground Truth"
+        panel.message = "Saves the corrected score as ground truth for singtogether-eval. Make sure every note, chord and syllable is right first."
+        panel.nameFieldStringValue = original.deletingPathExtension().lastPathComponent + ".txt"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        if let dir = SheetOCR.truthDirectory(chordSheet: result.isChordSheet) { panel.directoryURL = dir }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                var note = "Saved as ground truth → \(url.lastPathComponent)"
+                if let copied = try SheetOCR.copyToScores(self.original, truth: url) {
+                    note += " · image copied to music_scores/\(copied.lastPathComponent)"
+                }
+                self.summary.stringValue = note
+                if AppSettings.playSound { NSSound(named: "Glass")?.play() }
+            } catch {
+                self.summary.stringValue = "Could not save the truth file: \(error.localizedDescription)"
+                NSSound(named: "Basso")?.play()
+            }
+        }
     }
 
     /// 클릭 수정 전의 텍스트와 표시 상태를 쌓아 둔다 (⌘Z / Undo 버튼).
@@ -271,6 +408,7 @@ final class ReviewWindowController: NSWindowController {
                 var r = try SheetOCR.rerun(text: t, semitones: self.semitones,
                                            source: self.result.isChordSheet ? self.original : nil, font: self.chartFont)
                 r.reviewPNGs = self.result.reviewPNGs     // 확인 그림은 처음 것을 그대로 둔다
+                r.pagePNGs = self.result.pagePNGs
                 r.text = t
                 try? FileManager.default.removeItem(at: self.delivered)
                 let made = try SheetOCR.deliver(r, next: self.original, semitones: self.semitones)

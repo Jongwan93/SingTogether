@@ -32,6 +32,8 @@ class Note:
     lyrics: list[str] = field(default_factory=list)   # 절별 음절. '' = 새 음절 없음
     # 확인·수정 단계(M3)용 근거. 조립 단계가 채우고 review.assess가 신뢰도로 바꾼다.
     reasons: list[str] = field(default_factory=list)  # 의심 근거 ("머리 못 찾음", "Claude와 다름: G4" …)
+    signals: list[str] = field(default_factory=list)  # 신뢰도 신호 코드 (review.WEIGHTS의 키). AI 비교가 채운다
+    engine_read: str | None = None       # 오선 위치로 음높이를 고치기 전에 엔진이 읽은 이름 (고치지 않았으면 None)
     head: bool = False                   # 오선에서 찾은 음표 머리와 짝지어졌나
     chord_conf: float | None = None      # 코드 글자 확신도 (0–1)
     chord_src: str = ""                  # "both"(Vision·Claude 일치) / "vision" / "claude"

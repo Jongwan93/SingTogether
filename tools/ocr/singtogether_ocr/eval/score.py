@@ -5,6 +5,7 @@
   pitch  : 음높이만 맞은 비율 (쉼표 제외)
   chords : 코드 기호가 순서대로 맞은 비율
   lyrics : 1절 음절이 순서대로 맞은 비율
+  review : 검토 표시의 정밀도·재현율, 그리고 가장 의심스러운 순서로 늘어놓았을 때 앞 TOP개 중 실제 오류 비율
 """
 from __future__ import annotations
 
@@ -13,6 +14,32 @@ from difflib import SequenceMatcher
 
 from ..model import Transcription
 from ..text import normalize_chord
+
+
+@dataclass
+class Flags:
+    tp: int            # 표시했고 실제 틀린 수
+    flagged: int       # 표시한 수
+    wrong: int         # 실제 틀린 수
+    top_hit: int       # 의심 순서 앞 top개 중 실제 틀린 수
+    top: int
+
+    @property
+    def precision(self) -> float | None:
+        return self.tp / self.flagged if self.flagged else None
+
+    @property
+    def recall(self) -> float | None:
+        return self.tp / self.wrong if self.wrong else None
+
+    @property
+    def f1(self) -> float:
+        p, r = self.precision or 0.0, self.recall or 0.0
+        return 2 * p * r / (p + r) if p + r else 0.0
+
+    def __str__(self) -> str:
+        pct = lambda v: "–" if v is None else f"{100 * v:.0f}%"
+        return f"P {pct(self.precision)} R {pct(self.recall)} ({self.flagged} flagged/{self.wrong} wrong) · top{self.top} {pct(self.top_hit / self.top if self.top else None)}"
 
 
 @dataclass
@@ -25,16 +52,11 @@ class Score:
     key_ok: bool
     time_ok: bool
     seconds: float
-    flags: tuple[int, int, int] | None = None     # (표시했고 실제 틀린 수, 표시한 수, 실제 틀린 수) — 검토 표시의 정밀도·재현율
+    flags: Flags | None = None       # 검토 표시의 품질 (신뢰도가 있는 결과만)
 
     @property
     def review(self) -> str:
-        if not self.flags:
-            return "–"
-        tp, flagged, wrong = self.flags
-        p = f"{100 * tp / flagged:.0f}%" if flagged else "–"
-        r = f"{100 * tp / wrong:.0f}%" if wrong else "–"
-        return f"P {p} R {r} ({flagged} flagged/{wrong} wrong)"
+        return str(self.flags) if self.flags else "–"
 
     def row(self) -> dict:
         def pct(p):
@@ -48,16 +70,22 @@ def _matched(a: list, b: list) -> int:
     return sum(m.size for m in SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks())
 
 
-def flag_quality(t: Transcription, truth: Transcription, threshold: float = 0.6) -> tuple[int, int, int]:
-    """검토 표시(신뢰도 < threshold)가 실제 오류(정답과 맞춰지지 않은 음표)를 얼마나 잡는가. (둘 다, 표시, 오류)"""
-    tn, gn = t.notes, truth.notes
-    sm = SequenceMatcher(None, [(n.midi, n.duration) for n in tn], [(n.midi, n.duration) for n in gn], autojunk=False)
+def wrong_notes(t: Transcription, truth: Transcription) -> set[int]:
+    """정답과 맞춰지지 않은 음표의 (전체 순서) 번호."""
+    sm = SequenceMatcher(None, [(n.midi, n.duration) for n in t.notes], [(n.midi, n.duration) for n in truth.notes], autojunk=False)
     ok = set()
     for m in sm.get_matching_blocks():
         ok.update(range(m.a, m.a + m.size))
-    wrong = {i for i in range(len(tn)) if i not in ok}
+    return {i for i in range(len(t.notes)) if i not in ok}
+
+
+def flag_quality(t: Transcription, truth: Transcription, threshold: float = 0.6, top: int = 12) -> Flags:
+    """검토 표시(신뢰도 < threshold)가 실제 오류를 얼마나 잡는가, 의심 순서(신뢰도 오름차순) 앞 top개는 얼마나 맞는가."""
+    tn = t.notes
+    wrong = wrong_notes(t, truth)
     flagged = {i for i, n in enumerate(tn) if n.conf is not None and n.conf < threshold}
-    return len(wrong & flagged), len(flagged), len(wrong)
+    order = sorted((i for i, n in enumerate(tn) if n.conf is not None), key=lambda i: tn[i].conf)[:top]
+    return Flags(len(wrong & flagged), len(flagged), len(wrong), sum(1 for i in order if i in wrong), len(order))
 
 
 def score(t: Transcription, truth: Transcription) -> Score:

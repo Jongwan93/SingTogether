@@ -8,6 +8,7 @@ package enum SheetOCR {
         package var transposedPDF: URL?     // 이조된 악보를 그린 PDF (오선 악보만)
         package var text: URL?              // 사람이 고칠 수 있는 압축 텍스트
         package var reviewPNGs: [URL]       // 원본 위에 확인할 곳을 표시한 그림 (쪽마다)
+        package var pagePNGs: [URL] = []    // 표시 없는 쪽 그림 (review.json 좌표와 같은 픽셀). 앱이 그 위에 직접 표시를 그린다
         package var keys: String?           // "G -> A"
         package var summary: String         // "To check: notes 31/118, chords 2/25, lyrics 2/80"
         package var isChordSheet: Bool
@@ -187,9 +188,51 @@ package enum SheetOCR {
         }
         return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"),
                       reviewPNGs: ((dict["review_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
+                      pagePNGs: ((dict["page_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       keys: dict["keys"] as? String, summary: summary,
                       isChordSheet: dict["chordsheet"] as? Bool == true, engine: dict["engine"] as? String ?? "",
                       chartFont: (dict["chart"] as? [String: Any])?["font"] as? String)
+    }
+
+    // MARK: 정답(truth) 저장 — 확인 창에서 다 고친 악보를 평가 세트(tools/ocr/truth)에 넣는다
+
+    /// 저장소 루트. 인식 도구가 저장소 안(tools/ocr/.venv)에 있거나 앱이 저장소 안에서 빌드됐을 때만 찾는다 (배포 앱은 nil).
+    package static func repoRoot() -> URL? {
+        let fm = FileManager.default
+        var roots: [URL] = []
+        for p in [ProcessInfo.processInfo.environment["SINGTOGETHER_OCR"], UserDefaults.standard.string(forKey: "ocrPath")].compactMap({ $0 }) {
+            if let r = p.range(of: "/tools/ocr/") { roots.append(URL(fileURLWithPath: String(p[..<r.lowerBound]))) }
+        }
+        var up = Bundle.main.bundleURL
+        for _ in 1...4 {
+            up = up.deletingLastPathComponent()
+            roots.append(up)
+        }
+        return roots.first { fm.fileExists(atPath: $0.appendingPathComponent("tools/ocr/truth").path) }
+    }
+
+    /// 정답 폴더: 오선 악보는 truth/, 코드 차트는 truth/chordsheets/.
+    package static func truthDirectory(chordSheet: Bool) -> URL? {
+        repoRoot()?.appendingPathComponent(chordSheet ? "tools/ocr/truth/chordsheets" : "tools/ocr/truth")
+    }
+
+    /// 정답을 저장소의 truth 폴더에 넣었고 같은 이름의 악보가 music_scores/에 아직 없으면 원본을 거기 복사한다
+    /// (평가는 이름이 같은 그림과 정답을 짝짓는다). 복사한 곳을 돌려준다. music_scores/는 git에 올라가지 않는다.
+    @discardableResult
+    package static func copyToScores(_ original: URL, truth: URL) throws -> URL? {
+        guard let root = repoRoot(), truth.path.hasPrefix(root.appendingPathComponent("tools/ocr/truth").path) else { return nil }
+        let scores = root.appendingPathComponent("music_scores")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: scores.path) else { return nil }
+        let stem = truth.deletingPathExtension().lastPathComponent
+        if let e = fm.enumerator(at: scores, includingPropertiesForKeys: nil) {
+            for case let f as URL in e where f.deletingPathExtension().lastPathComponent == stem && extensions.contains(f.pathExtension.lowercased()) {
+                return nil
+            }
+        }
+        let dest = scores.appendingPathComponent(stem + "." + original.pathExtension)
+        try fm.copyItem(at: original, to: dest)
+        return dest
     }
 
     /// 최종 결과물을 원본 옆에 "이름 (+2, A).pdf"로 복사한다. 코드 차트는 .txt.

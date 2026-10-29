@@ -60,6 +60,7 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
                     print(f"    override[{why}] staff{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
                 n.reasons.append(f"pitch fixed from staff position (engine read {n.name})")
+                n.engine_read = n.name
                 n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
 
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]

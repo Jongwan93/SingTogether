@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-28e"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-29a"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -257,6 +257,12 @@ def main(argv=None) -> None:
             result[{".musicxml": "musicxml", ".txt": "txt", ".json": "review_json"}.get(f.suffix, f.suffix)] = str(f)
         if not any(f.suffix == ".musicxml" for f in hit):
             result["chordsheet"] = True
+        else:
+            # 확인 그림은 캐시에 없지만, 같은 작업 폴더에서 전에 돌렸으면 아직 거기 있다 (앱의 클릭 수정에 필요)
+            for kind in ("review", "page"):
+                found = sorted(out_base.parent.glob(f"{a.input.stem}-p*.{kind}.png"))
+                if found:
+                    result[f"{kind}_png"] = [str(p) for p in found]
         if a.transpose:
             main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
             tr = transpose(main_out, a.transpose, result)
@@ -333,7 +339,8 @@ def main(argv=None) -> None:
           f"{len(t.notes)} notes, {n_chords} chords, {n_lyr} syllables, {t.seconds:.0f}s")
     print(f"→ {out}\n→ {txt}")
     result.update({"musicxml": str(out), "txt": str(txt), "review_json": str(rev_path), "summary": s_, "key": t.key_name,
-                   "review_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.review.png"))]})
+                   "review_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.review.png"))],
+                   "page_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.page.png"))]})
     if not a.no_cache:
         cache_put(key_, [out, txt, rev_path])
 

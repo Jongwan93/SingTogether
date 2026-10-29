@@ -168,6 +168,50 @@ package struct CompactText {
         return true
     }
 
+    // MARK: 재생 — 마디 순서대로 (MIDI 번호, 4분음표 단위 길이)
+
+    package struct Event {
+        package let measure: Int
+        package let index: Int
+        package let midi: Int?          // 쉼표면 nil
+        package let quarters: Double    // 4분음표 = 1
+        package let tie: Bool           // 다음 음과 붙임줄
+        package var key: String { "note:\(measure):\(index)" }
+    }
+
+    package static func midi(of t: Token) -> Int? {
+        guard let step = t.step, let i = steps.firstIndex(of: step) else { return nil }
+        return 12 * (t.octave + 1) + [0, 2, 4, 5, 7, 9, 11][i] + t.alter
+    }
+
+    /// 음표 이름("F#4", "Bb3", "r") → MIDI 번호
+    package static func midi(ofName name: String) -> Int? {
+        parse(name + "/4").flatMap(midi(of:))
+    }
+
+    package static func quarters(_ length: String) -> Double {
+        let dotted = length.hasSuffix(".")
+        let base = Double(Int(length.trimmingCharacters(in: CharacterSet(charactersIn: "."))) ?? 4)
+        return 4 / base * (dotted ? 1.5 : 1)
+    }
+
+    /// 도돌이·괄호는 무시하고 적힌 순서대로. index는 마디 안 음표·쉼표 번호 (확인 창의 자리와 같다).
+    package func events() -> [Event] {
+        var out: [Event] = []
+        for line in lines {
+            guard let colon = line.firstIndex(of: ":"), let measure = Int(line[..<colon].trimmingCharacters(in: .whitespaces)) else { continue }
+            let rest = String(line[line.index(after: colon)...])
+            let body = rest.firstIndex(of: "|").map { String(rest[..<$0]) } ?? rest
+            var k = 0
+            for tok in body.split(separator: " ") {
+                guard let t = Self.parse(String(tok)) else { continue }
+                out.append(Event(measure: measure, index: k, midi: Self.midi(of: t), quarters: Self.quarters(t.length), tie: t.tie))
+                k += 1
+            }
+        }
+        return out
+    }
+
     /// 계이름 한 칸(음이름 글자) 위·아래. 임시표는 조표를 따른다 (G장조에서 E→F는 F♯).
     package mutating func shiftStep(measure: Int, index: Int, by delta: Int) -> Token? {
         let f = fifths

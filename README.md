@@ -79,12 +79,15 @@ With **Apple Vision only**, nothing leaves your Mac.
 
 Recognition is never perfect, so every image score opens a review window:
 
-- **Left:** the original with suspicious spots marked. Red boxes are notes, orange are chords, purple are lyric syllables. Each note is labeled with its measure number and what was read.
+- **Left:** the original with suspicious spots marked. Red boxes are notes (thick for the 12 most doubtful, thin for the rest), orange are chords, purple are lyric syllables. Each note is labeled with its measure number and what was read.
 - **Right:** the transposed score. Notes that need checking are drawn in red.
-- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The PDF is rebuilt right away. Fixed items get a green outline.
+- **Next doubtful** (or the **N** key) jumps to the next unfixed note, most doubtful first, scrolls to it and opens its editor, so you can walk through the flags in order instead of hunting for them.
+- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The PDF is rebuilt right away. Fixed items get a green outline. The editor also says why the note was flagged.
+- **Hear it.** Clicking a note plays it as it was read, and so does every step up or down. **▶ Note** and **▶ Measure** in the editor replay the note or its measure; **▶ Play** above the image (or the space bar) plays the whole melody from the start, highlighting each note as it sounds. Tempo is in the ♩ menu. Nothing plays until you ask.
 - **Click a chord or a lyric syllable** (the orange and purple boxes, but any chord or syllable works) to retype it or remove it.
 - **Undo** (⌘Z or the button) takes back the last click-fix.
 - For bigger changes use **Edit Text…**, which opens the score as plain text (format below), then **Rebuild from Text**.
+- **Save as Truth…** stores the corrected score as ground truth for the recognizer's evaluation (see Development). Use it when every note, chord and syllable is right.
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
 To try it without dragging, quit SingTogether and run `open -a SingTogether --args --sheet score.png -2`.
@@ -101,14 +104,15 @@ pick the right one from the **Font** menu in the review window and the image is 
 
 ### What to expect
 
-Measured on three Korean worship lead sheets with hand-checked ground truth:
+Measured on four Korean worship lead sheets with hand-checked ground truth:
 
 | Input | Pitch | Pitch + rhythm | Chords | Lyrics |
 |---|---|---|---|---|
-| Image saved from a web search (600–800 px) | 64–82% | 38–74% | 98–100% | 77–82% |
+| Image saved from a web search (500–800 px) | 32–82% | 28–74% | 74–100% | 42–82% |
 | Clean PDF or high-resolution scan | 93–100% | 86–100% | – | – |
 
-Most church teams use web images, so expect to fix some notes. The review marks catch 72–97% of the real errors.
+Most church teams use web images, so expect to fix some notes; very small images (about 500 px wide) can lose whole measures.
+The review marks catch 73–96% of the real errors, and **Next doubtful** takes you through them most-likely-wrong first.
 If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.
 
 ### The text format
@@ -183,9 +187,15 @@ cd tools/ocr
 .venv/bin/singtogether-eval --engines homr hybrid       # recognition accuracy against truth/ → out/report.md
 .venv/bin/singtogether-eval --rendered                  # clean-render regression test for the assembly stage
 .venv/bin/singtogether-eval --chordsheets --llm none    # chord charts
+.venv/bin/singtogether-eval --missing                   # sample scores that have no ground truth yet
+.venv/bin/singtogether-eval --tune                      # refit the review-flag weights (review.WEIGHTS) on the hybrid results
 ```
 
 Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted).
+The evaluation pairs each image with `tools/ocr/truth/<same name>.txt`. The quickest way to add a truth file is the app:
+drop the score, fix everything in the review window, then **Save as Truth…** — when the app runs from this repository it
+offers `tools/ocr/truth/` directly and copies the image into `music_scores/` if it is not there yet. Chord charts go to
+`truth/chordsheets/`.
 
 `dist.sh` copies a relocatable Python 3.13 (uv's managed build) into the app, installs `tools/ocr` into it, bundles homr's model files,
 and signs everything. With `DEVELOPER_ID="Developer ID Application: …"` and `NOTARY_PROFILE=<notarytool keychain profile>` set,

@@ -4,7 +4,10 @@
     singtogether-eval --engines homr claude --samples "주님의 임재 앞에서"
     singtogether-eval --engines hybrid:claude hybrid:gemini      # 하이브리드의 글자 읽기 AI를 바꿔서
     singtogether-eval --cached              # 이미 돌린 결과(out/<엔진>/<이름>.txt)만 다시 채점
+    singtogether-eval --missing             # music_scores/에 있지만 정답(truth/)이 없는 악보 목록
+    singtogether-eval --tune                # hybrid 결과로 검토 표시 가중치(review.WEIGHTS)를 다시 찾는다
 
+정답은 앱의 확인 창에서 고친 뒤 "Save as Truth…"로 저장하거나(truth/<이름>.txt), .txt를 손으로 써서 둔다.
 결과: out/<엔진>/<이름>.txt|.musicxml, out/<엔진>/dbg/ 오버레이, out/report.md
 """
 from __future__ import annotations
@@ -32,9 +35,16 @@ def _nfc(s: str) -> str:
     return unicodedata.normalize("NFC", s)       # macOS 파일 이름은 NFD, 코드·인자는 NFC
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".pdf")
+
+
+def score_images() -> dict[str, Path]:
+    return {_nfc(p.stem): p for p in SCORES.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES}
+
+
 def samples(names: list[str] | None) -> list[tuple[str, Path]]:
     wanted = {_nfc(n) for n in names} if names else None
-    images = {_nfc(p.stem): p for p in SCORES.rglob("*") if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".pdf")}
+    images = score_images()
     out = []
     for truth in sorted(TRUTH.glob("*.txt")):
         name = _nfc(truth.stem)
@@ -94,8 +104,7 @@ def chordsheet_eval(llm: str, names: list[str] | None) -> str:
                     out.append(t)
         return Counter(out)
 
-    folder = SCORES / "english"
-    images = {_nfc(p.stem): p for p in folder.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".pdf")} if folder.exists() else {}
+    images = score_images()
     lines = [f"| sample | method | chord recall | extra | missing | sec |", "|---|---|---|---|---|---|"]
     for truth_file in sorted((TRUTH / "chordsheets").glob("*.txt")):
         name = _nfc(truth_file.stem)
@@ -157,7 +166,19 @@ def main(argv=None) -> None:
     ap.add_argument("--chordsheets", action="store_true", help="evaluate chord charts (music_scores/english, truth/chordsheets)")
     ap.add_argument("--rendered", action="store_true", help="render the truth with Verovio and recognize it (assembly regression test) → out/rendered.md")
     ap.add_argument("--llm", default="auto", help="AI for chords and lyrics: auto|claude|gemini|none")
+    ap.add_argument("--missing", action="store_true", help="list scores in music_scores/ that have no truth file yet")
+    ap.add_argument("--tune", action="store_true", help="search review flag weights on out/hybrid results (prints a WEIGHTS dict for review.py)")
     a = ap.parse_args(argv)
+
+    if a.missing:
+        have = {_nfc(p.stem) for p in TRUTH.glob("*.txt")} | {_nfc(p.stem) for p in (TRUTH / "chordsheets").glob("*.txt")}
+        for name, img in sorted(score_images().items()):
+            print(f"{'  truth ' if name in have else 'missing'}  {img.relative_to(REPO)}")
+        return
+    if a.tune:
+        from .tune import main as tune
+        tune(OUT / "hybrid", TRUTH)
+        return
 
     if a.rendered:
         report = rendered_eval(a.samples)
@@ -186,7 +207,8 @@ def main(argv=None) -> None:
             lines.append(f"| {name} | {engine} | " + " | ".join(row[c] for c in COLUMNS) + " |")
             print("   ", err or row)
     report = "\n".join(lines) + "\n\nnotes = pitch and length both right, pitch = pitch only; counted in order even if measure boundaries differ.\n" \
-             "review = review flags (confidence < 0.6): precision P (flagged that are wrong), recall R (wrong that are flagged). Fresh runs only.\n"
+             "review = review flags (confidence < 0.6): precision P (flagged that are wrong), recall R (wrong that are flagged); " \
+             "topN = share of the N most doubtful notes that are really wrong. Fresh runs only.\n"
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "report.md").write_text(report)
     print("\n" + report)
