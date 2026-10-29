@@ -235,7 +235,7 @@ final class ReviewWindowController: NSWindowController {
                     self.load()
                     self.summary.stringValue = "Rebuilt from the edited text → \(made.lastPathComponent)"
                     self.spinner.stopAnimation(nil); self.spinner.isHidden = true
-                    NSSound(named: "Glass")?.play()
+                    if AppSettings.playSound { NSSound(named: "Glass")?.play() }
                 }
             } catch {
                 DispatchQueue.main.async {

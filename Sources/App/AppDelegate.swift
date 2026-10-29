@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         readerItem.action = #selector(chooseReader)
         readerItem.target = self
         menu.addItem(readerItem)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit SingTogether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -42,8 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = t
 
         updateReaderItem()
-        // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다
-        DispatchQueue.main.async { [weak self] in self?.chooseReader() }
+        SettingsWindowController.shared.onReaderChange = { [weak self] in self?.updateReaderItem() }
+        // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다 (설정에서 끌 수 있다)
+        DispatchQueue.main.async { [weak self] in
+            if AppSettings.askAtLaunch { self?.chooseReader() } else { self?.verifyReader() }
+        }
 
         // 개발용: SingTogether --sheet <이미지> <반음> 으로 띄우면 드래그 없이 인식 → 확인 창까지 간다
         let args = CommandLine.arguments
@@ -95,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if errors.isEmpty && !made.isEmpty {
             ring.message = "Created\n\(made[0])" + (made.count > 1 ? "\nand \(made.count - 1) more" : "")
-            NSSound(named: "Glass")?.play()
+            if AppSettings.playSound { NSSound(named: "Glass")?.play() }
         } else if !errors.isEmpty {
             ring.message = "Transposition failed\n" + errors.joined(separator: "\n")
             NSSound(named: "Basso")?.play()
@@ -125,8 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     self.busy = false
                     self.ring.message = "Created\n\(made.lastPathComponent)\n\(r.summary)"
-                    NSSound(named: "Glass")?.play()
+                    if AppSettings.playSound { NSSound(named: "Glass")?.play() }
                     self.scheduleHide(after: 2.5)
+                    guard AppSettings.showReview else { return }
                     let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made)
                     self.reviewWindows.append(wc)
                     wc.window?.center()
@@ -207,6 +214,8 @@ extension AppDelegate {
             }
         }
     }
+
+    @objc func openSettings() { SettingsWindowController.shared.show() }
 
     private func label(_ id: String) -> String {
         SheetOCR.llmChoices.first { $0.id == id }?.label ?? "Apple Vision"

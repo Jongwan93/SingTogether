@@ -49,8 +49,17 @@ brew install librsvg            # rsvg-convert, used to write the PDF
   If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu.
   If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 - The app looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
-- To start at login: System Settings → General → Login Items → add SingTogether.
 - macOS may ask once for permission to access the Desktop or Documents folder.
+
+## Settings
+
+♪ menu → **Settings…** (⌘,):
+
+- **Open SingTogether at login.**
+- **Ask which AI to use when the app starts.** Turn it off once you have chosen.
+- **Open the review window after reading an image score**, and **play a sound** when a file is created.
+- **Reading image scores:** Claude, Gemini, or Apple Vision only, with the sign-in status and a **Check sign-in** button.
+- **Recognition cache:** how much space the remembered results take, and a button to clear it.
 
 ## Image scores: recognize, transpose, review
 
