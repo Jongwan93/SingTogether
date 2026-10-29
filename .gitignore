@@ -1,23 +1,51 @@
-# ./build.sh 결과물
+# ./build.sh, ./dist.sh 결과물
 build/
+dist/
+*.dmg
 
 # SwiftPM / Xcode
 .build/
 .swiftpm/
 *.xcodeproj/
+*.xcworkspace/
 xcuserdata/
 DerivedData/
+*.profraw
 
 # tools/ocr (Python)
 .venv*/
 __pycache__/
+*.py[cod]
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 tools/ocr/out/
+tools/ocr/dbg/
+*.coreml_cache/
 
-# Example data
+# 인식 결과 (입력 파일 옆에 생김 — 악보가 저장소 안에 있을 때 대비)
+*.musicxml
+*.review.json
+
+# 서명 / 공증 자료
+*.p12
+*.cer
+*.provisionprofile
+*.entitlements
+.env
+.env.*
+
+# 예시 악보 (저작권)
 music_scores/
 
-.DS_Store
+# 에디터 / 로컬 설정
+.vscode/
+.idea/
+*.swp
+.claude/settings.local.json
 
-# ./dist.sh output
-dist/
+# macOS
+.DS_Store
+._*
+.AppleDouble
