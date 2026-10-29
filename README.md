@@ -1,11 +1,16 @@
-<p align="center"><img src="Resources/AppIcon-256.png" width="128" alt=""></p>
+<p align="center">
+  <a href="https://github.com/Jongwan93/SingTogether/releases/latest"><img src="Resources/banner.svg" width="100%" alt="SingTogether — transpose any score to the key you can actually sing"></a>
+</p>
 
-# SingTogether
+<p align="center">
+  <a href="https://github.com/Jongwan93/SingTogether/releases/latest"><img src="https://img.shields.io/github/v/release/Jongwan93/SingTogether?label=download&color=7c3aed&style=flat-square" alt="Download the latest release"></a>
+  <img src="https://img.shields.io/badge/macOS%2012%2B-Apple%20Silicon-1e1b4b?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 or later, Apple Silicon">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-4f46e5?style=flat-square" alt="AGPL-3.0"></a>
+</p>
 
 A macOS menu bar app that transposes sheet music to the key you can actually sing.
 Drag a score, pick a key, and a transposed copy appears next to the original. The original is never touched.
-
-**[Download the latest version](https://github.com/Jongwan93/SingTogether/releases/latest)** · Apple Silicon Mac (M1 or later), macOS 12 or later · free and open source
+Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) all work.
 
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
