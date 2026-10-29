@@ -13,7 +13,7 @@ from ..model import Transcription
 from ..textfmt import from_text
 from ._run import save_png
 
-PROMPT = """Look at the sheet music image {image} (open it with your file-reading tool if it is not attached). The user owns this sheet music and wants a transposed copy for their own singing. Transcribe it so it can be re-engraved in another key. Write only what is printed, including all lyrics.
+PROMPT = """Look at the sheet music image {image} (open it with your file-reading tool if it is not attached). The user owns this sheet music and wants a transposed copy for their own singing. Transcribe it so it can be re-engraved in another key. Write only what is printed, including all lyrics. Even if the scan is small or blurry, give your best reading of every measure: never refuse, never summarize, never stop early.
 
 Output format (plain text, nothing else):
 title: <title>
@@ -54,9 +54,11 @@ class engine:
         import time
         t0 = time.time()
         text = llm.ask(self.provider, PROMPT, image)
+        t = from_text(text, self.name)
+        if len(t.measures) < 2 or len(t.notes) < 8:         # 거절·요약 답("I couldn't transcribe…")은 캐시하지 않고 실패로 본다
+            raise RuntimeError(f"{self.name} gave no usable transcription ({len(t.notes)} notes): {text.strip()[:120]}")
         out_dir.mkdir(parents=True, exist_ok=True)
         cached.write_text(text)
-        t = from_text(text, self.name)
         t.engine, t.seconds = self.name, time.time() - t0
         return t
 

@@ -30,17 +30,24 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 
 ## Install
 
+**From the disk image** (no developer tools needed, Apple Silicon Macs):
+
+1. Open `SingTogether-1.0.dmg` and drag SingTogether to Applications.
+2. The first time, right-click the app and choose **Open** (the build is not notarized, so macOS asks once).
+3. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
+
+**From source:**
+
 ```bash
 xcode-select --install          # once, if you don't have the Command Line Tools
 ./build.sh                      # builds build/SingTogether.app and build/singtogether-transpose
 open build/SingTogether.app
 ```
 
-Image and PDF scores need the recognition tool, a Python package in `tools/ocr`. Install it once:
+A source build reads image and PDF scores through the Python package in `tools/ocr`. Install it once:
 
 ```bash
 cd tools/ocr && uv sync         # Python 3.13 environment with homr (OMR) and Verovio
-brew install librsvg            # rsvg-convert, used to write the PDF
 ```
 
 - Chords and lyrics are read much more accurately with an AI command-line tool that is installed and logged in on the Mac:
@@ -48,7 +55,7 @@ brew install librsvg            # rsvg-convert, used to write the PDF
   When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
   If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu.
   If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
-- The app looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
+- A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 - macOS may ask once for permission to access the Desktop or Documents folder.
 
 ## Settings
@@ -134,7 +141,7 @@ Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads not
 
 - Single-line melody with chords and lyrics is the target. Whole notes, tuplets, multiple voices and two-staff piano scores are not handled.
 - Accuracy follows image quality. Upscaling the image does not help (tested); a better source file does.
-- The app depends on the Python environment in this repository and on `rsvg-convert` from Homebrew. Sharing it with other Macs means bundling those first.
+- The disk image is built for Apple Silicon only. It is signed ad hoc, not notarized, so the first launch needs right-click → Open.
 
 ## Development
 
@@ -147,6 +154,7 @@ tools/ocr/truth/    hand-checked ground truth for the evaluation
 ```
 
 ```bash
+./dist.sh                                               # self-contained dist/SingTogether.app and dist/SingTogether-1.0.dmg (needs uv)
 .build/release/singtogether-transpose --selftest        # text transposition and note editing checks
 cd tools/ocr
 .venv/bin/singtogether-eval --engines homr hybrid       # recognition accuracy against truth/ → out/report.md
@@ -155,3 +163,8 @@ cd tools/ocr
 ```
 
 Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted).
+
+`dist.sh` copies a relocatable Python 3.13 (uv's managed build) into the app, installs `tools/ocr` into it, bundles homr's model files,
+and signs everything. With `DEVELOPER_ID="Developer ID Application: …"` and `NOTARY_PROFILE=<notarytool keychain profile>` set,
+it signs with that identity and notarizes the disk image. SVG to PDF rendering uses WebKit through `singtogether-transpose --svg-to-pdf`,
+so no Homebrew packages are needed at run time.

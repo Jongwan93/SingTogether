@@ -8,7 +8,6 @@ dependencies = [
     "opencv-python-headless>=4.10,<5",
     "numpy",
     "pillow",
-    "music21>=9",
     "verovio>=5",
     "pymupdf>=1.24",
     "pyobjc-framework-Vision>=10",
@@ -20,7 +19,7 @@ singtogether-ocr = "singtogether_ocr.cli:main"
 singtogether-eval = "singtogether_ocr.eval.compare:main"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "music21>=9"]   # music21은 평가(singtogether-eval)에만 쓴다. 앱 번들에는 안 들어간다
 
 [build-system]
 requires = ["hatchling"]

@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(t, forMode: .common)
         timer = t
 
+        offerMoveToApplications()
         updateReaderItem()
         SettingsWindowController.shared.onReaderChange = { [weak self] in self?.updateReaderItem() }
         // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다 (설정에서 끌 수 있다)
@@ -235,5 +236,34 @@ extension AppDelegate {
     func updateReaderItem() {
         let state = SheetOCR.llmReady == false ? " (not signed in → Apple Vision)" : ""
         readerItem.title = "Reading with \(label(SheetOCR.llm))\(state) — Change…"
+    }
+}
+
+/// 디스크 이미지나 다운로드 폴더에서 바로 열었으면 /Applications로 옮기자고 한 번 묻는다.
+extension AppDelegate {
+    func offerMoveToApplications() {
+        let path = Bundle.main.bundlePath
+        guard path.hasSuffix(".app"), !path.hasPrefix("/Applications/"),
+              path.hasPrefix("/Volumes/") || path.contains("/Downloads/") else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move SingTogether to the Applications folder?"
+        alert.informativeText = "Running it from here works, but the Applications folder keeps it in one place and lets it start at login."
+        alert.addButton(withTitle: "Move to Applications")
+        alert.addButton(withTitle: "Not now")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let dest = URL(fileURLWithPath: "/Applications/SingTogether.app")
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: dest)
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            p.arguments = ["-n", dest.path]
+            try p.run()
+            NSApp.terminate(nil)
+        } catch {
+            let a = NSAlert(error: error)
+            a.runModal()
+        }
     }
 }

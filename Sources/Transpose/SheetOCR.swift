@@ -84,6 +84,12 @@ package enum SheetOCR {
     private static func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:" + FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        // 인식 도구가 이조·SVG→PDF에 쓰는 CLI. 앱 번들 안의 것을 쓰게 한다 (없으면 저장소의 빌드 결과를 찾는다)
+        if env["SINGTOGETHER_TRANSPOSE"] == nil,
+           let cli = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("singtogether-transpose"),
+           FileManager.default.isExecutableFile(atPath: cli.path) {
+            env["SINGTOGETHER_TRANSPOSE"] = cli.path
+        }
         return env
     }
 
@@ -97,6 +103,8 @@ package enum SheetOCR {
         var candidates: [String] = []
         if let e = ProcessInfo.processInfo.environment["SINGTOGETHER_OCR"] { candidates.append(e) }
         if let d = UserDefaults.standard.string(forKey: "ocrPath") { candidates.append(d) }
+        // 배포용 앱(dist.sh): Python과 인식 도구가 앱 안에 들어 있다
+        if let r = Bundle.main.resourceURL { candidates.append(r.appendingPathComponent("ocr/bin/singtogether-ocr").path) }
         let bundle = Bundle.main.bundleURL
         for up in 1...4 {   // build/SingTogether.app → 저장소 루트, .build/release/SingTogether → 저장소 루트
             var root = bundle

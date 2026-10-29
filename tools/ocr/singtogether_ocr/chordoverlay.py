@@ -280,9 +280,8 @@ def find_chords(gray: np.ndarray, chart_text: str | None) -> tuple[list[Chord], 
 
 def _transpose_tokens(tokens: list[str], semitones: int) -> tuple[list[str], str]:
     """Swift 이조기로 한꺼번에 (조 판별과 ♯/♭ 표기를 앱과 똑같이). (새 코드들, "G -> A")"""
-    from .cli import REPO
-    binary = os.environ.get("SINGTOGETHER_TRANSPOSE") or next(
-        (str(p) for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose") if p.exists()), None)
+    from .render import find_transpose
+    binary = find_transpose()
     if not binary:
         raise RuntimeError("singtogether-transpose not found. Run ./build.sh in the repository root first")
     with tempfile.TemporaryDirectory() as d:

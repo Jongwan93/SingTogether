@@ -12,6 +12,17 @@ func fail(_ message: String, code: Int32) -> Never {
 
 let args = Array(CommandLine.arguments.dropFirst())
 if args.first == "--selftest" { exit(SelfTest.run()) }
+if args.first == "--svg-to-pdf" {
+    // singtogether-transpose --svg-to-pdf <out.pdf> <page1.svg> [page2.svg …]   (tools/ocr의 render.py가 부른다)
+    guard args.count >= 3 else { fail("usage: singtogether-transpose --svg-to-pdf <out.pdf> <page.svg>…", code: 2) }
+    do {
+        try SVGToPDF.convert(args[2...].map { URL(fileURLWithPath: $0) }, to: URL(fileURLWithPath: args[1]))
+        print(args[1])
+        exit(0)
+    } catch {
+        fail("svg to pdf failed: \(error)", code: 1)
+    }
+}
 guard args.count >= 2, let semitones = Int(args[1]) else {
     fail("usage: singtogether-transpose <score file> <semitones> [--out <output file>]", code: 2)
 }

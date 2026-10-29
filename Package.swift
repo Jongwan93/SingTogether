@@ -21,7 +21,8 @@ let package = Package(
         .executableTarget(
             name: "singtogether-transpose",
             dependencies: ["Transpose"],
-            path: "Sources/TransposeCLI"
+            path: "Sources/TransposeCLI",
+            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("PDFKit"), .linkedFramework("WebKit")]
         ),
     ]
 )

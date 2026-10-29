@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-28d"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-28e"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 

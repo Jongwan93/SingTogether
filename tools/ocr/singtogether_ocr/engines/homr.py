@@ -1,4 +1,5 @@
-"""homr (vision transformer 기반 OMR). 같은 환경에 설치된 CLI를 부른다. 출력: 이미지 옆 <이름>.musicxml."""
+"""homr (vision transformer 기반 OMR). 같은 환경에 설치된 패키지를 `python -m homr.main`으로 부른다 (배포 번들에는 bin/ 스크립트가 없다).
+출력: 이미지 옆 <이름>.musicxml."""
 from __future__ import annotations
 
 import shutil
@@ -14,15 +15,19 @@ class engine:
     name = "homr"
 
     def __init__(self):
-        self.binary = Path(sys.executable).parent / "homr"
+        import importlib.util
+        self.available = importlib.util.find_spec("homr") is not None
 
     def transcribe(self, page: Page, work_dir: Path, debug_dir: Path | None = None) -> Transcription:
-        if not self.binary.exists():
-            raise RuntimeError(f"homr not found: {self.binary}")
+        if not self.available:
+            raise RuntimeError("homr is not installed in this Python environment")
         out_dir = work_dir / "homr"
         png = save_png(page.gray, out_dir / f"{page.name}.png")
-        cmd = [str(self.binary), str(png)] + (["--debug"] if debug_dir else [])
-        seconds, log = run(cmd, timeout=1800)
+        cmd = [sys.executable, "-m", "homr.main", str(png)] + (["--debug"] if debug_dir else [])
+        # CoreML이 컴파일한 모델 캐시를 패키지 폴더(앱 번들 안, 서명됨)가 아니라 사용자 캐시에 두게 한다
+        cache = Path.home() / "Library/Caches/SingTogether/coreml"
+        cache.mkdir(parents=True, exist_ok=True)
+        seconds, log = run(cmd, timeout=1800, env={"HOMR_COREML_MODEL_CACHE_DIR": str(cache)})
         xml = png.with_suffix(".musicxml")
         if not xml.exists():
             raise RuntimeError("homr did not produce MusicXML:\n" + log[-1500:])

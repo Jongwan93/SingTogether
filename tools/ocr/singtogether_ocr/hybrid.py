@@ -132,6 +132,8 @@ def trust(exact_ratio: float, n_ai: int, n_vision: int) -> bool:
         return False
     if n_vision < 3:
         return True
+    if n_ai < 0.5 * n_vision:                 # 일부만 읽은 답(거절하며 몇 개만 적은 경우): 합치면 Vision 코드가 버려진다
+        return False
     return exact_ratio >= TRUST_MIN
 
 

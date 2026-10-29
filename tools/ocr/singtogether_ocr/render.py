@@ -1,4 +1,4 @@
-"""7단계 렌더링: MusicXML → SVG (Verovio) → PDF (macOS AppKit로 SVG를 PDF 컨텍스트에 그림)."""
+"""7단계 렌더링: MusicXML → SVG (Verovio) → PDF (Swift CLI가 WebKit으로 그림; 없으면 rsvg-convert)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,13 +44,28 @@ def _plain_accidentals(svg: str) -> str:
     return re.sub(r'<tspan font-family="Leipzig" font-size="(\d+)px">(.)</tspan>', fix, svg)
 
 
+def find_transpose() -> str | None:
+    """Swift CLI singtogether-transpose: 환경 변수(앱이 번들 안의 것을 준다) → 저장소 빌드 결과."""
+    import os
+    from .cli import REPO
+    if (env := os.environ.get("SINGTOGETHER_TRANSPOSE")) and Path(env).exists():
+        return env
+    return next((str(p) for p in (REPO / ".build/release/singtogether-transpose", REPO / "build/singtogether-transpose")
+                 if p.exists()), None)
+
+
 def svg_to_pdf(svgs: list[Path], out: Path) -> Path:
-    """rsvg-convert(librsvg, brew install librsvg)로 여러 쪽 SVG를 한 PDF로. 앱에서는 WKWebView로 대신할 수 있다."""
+    """여러 쪽 SVG를 한 PDF로. Swift CLI(WebKit, 설치 불필요)를 쓰고, 없으면 rsvg-convert(brew install librsvg)."""
     import shutil
     import subprocess
 
-    tool = shutil.which("rsvg-convert")
+    if cli := find_transpose():
+        p = subprocess.run([cli, "--svg-to-pdf", str(out), *map(str, svgs)], capture_output=True, text=True)
+        if p.returncode == 0 and out.exists():
+            return out
+        print(f"WebKit conversion failed ({p.stderr.strip()[-200:]}), trying rsvg-convert")
+    tool = shutil.which("rsvg-convert") or next((t for t in ("/opt/homebrew/bin/rsvg-convert", "/usr/local/bin/rsvg-convert") if Path(t).exists()), None)
     if not tool:
-        raise RuntimeError("rsvg-convert not found (brew install librsvg)")
+        raise RuntimeError("no SVG to PDF converter: build singtogether-transpose (./build.sh) or brew install librsvg")
     subprocess.run([tool, "-f", "pdf", "-o", str(out), *map(str, svgs)], check=True, capture_output=True)
     return out
