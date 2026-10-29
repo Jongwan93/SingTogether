@@ -54,7 +54,12 @@
     <g filter="url(#shadow)">
       <rect x="72" y="92" width="120" height="120" rx="28" fill="url(#tile)"/>
       <rect x="72" y="92" width="120" height="120" rx="28" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
-      <text x="132" y="190" font-size="86" font-family="'Apple Symbols', 'Segoe UI Symbol', 'DejaVu Sans', 'Noto Sans Symbols2', sans-serif" font-weight="700" fill="#ffffff" text-anchor="middle">♪</text>
+      <!-- eighth note drawn as paths so it sits in the middle on every platform (the glyph's position depends on the font) -->
+      <g fill="#ffffff" stroke="#ffffff" stroke-linecap="round">
+        <ellipse cx="121" cy="178" rx="14" ry="10" transform="rotate(-20 121 178)" stroke="none"/>
+        <line x1="133" y1="174" x2="133" y2="118" stroke-width="5"/>
+        <path d="M133 118 c 20 10, 28 28, 16 50" fill="none" stroke-width="5"/>
+      </g>
     </g>
 
     <!-- title -->
@@ -71,24 +76,41 @@
       <text x="631" y="245" text-anchor="middle">drop · done</text>
     </g>
 
-    <!-- the ring: −5 … +5 around the cursor, +2 chosen -->
+    <!-- the ring, drawn like the app: +1…+5 clockwise from the top, −1…−5 counter-clockwise, +2 chosen -->
     <g transform="translate(1040 172)" filter="url(#shadow)">
-      <circle r="118" fill="#1e1b4b" fill-opacity="0.35"/>
-      <circle r="118" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="2"/>
-      <circle r="52" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
-      <!-- selected wedge: +2 sits at 2 o'clock -->
-      <path d="M 0 0 L 52.0 -90.1 A 104 104 0 0 1 90.1 -52.0 Z" fill="#ffffff" fill-opacity="0.22"/>
-      <g font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">
-        <text x="0" y="-84" fill-opacity="0.85">+3</text>
-        <text x="73" y="-42">+2</text>
-        <text x="84" y="0" fill-opacity="0.85">+1</text>
-        <text x="73" y="42" fill-opacity="0.85">0</text>
-        <text x="0" y="84" fill-opacity="0.85">−1</text>
-        <text x="-73" y="42" fill-opacity="0.85">−2</text>
-        <text x="-84" y="0" fill-opacity="0.85">−3</text>
-        <text x="-73" y="-42" fill-opacity="0.85">−4</text>
-      </g>
-      <text x="0" y="0" font-size="26" font-weight="800" fill="#ffffff" text-anchor="middle" dominant-baseline="central">G → A</text>
+      <path d="M2.0 -112.0 A112 112 0 0 1 64.2 -91.7 L22.9 -32.8 A40 40 0 0 0 0.7 -40.0 Z" fill="#293445" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="24.7" y="-80.1" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">Ab</text>
+      <text x="24.7" y="-63.1" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">+1</text>
+      <path d="M67.4 -89.4 A112 112 0 0 1 105.9 -36.5 L37.8 -13.0 A40 40 0 0 0 24.1 -31.9 Z" fill="#0a84ff" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.5"/>
+      <text x="64.7" y="-51.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">A</text>
+      <text x="64.7" y="-34.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">+2</text>
+      <path d="M107.1 -32.7 A112 112 0 0 1 107.1 32.7 L38.3 11.7 A40 40 0 0 0 38.3 -11.7 Z" fill="#293445" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="80.0" y="-4.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">Bb</text>
+      <text x="80.0" y="13.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">+3</text>
+      <path d="M105.9 36.5 A112 112 0 0 1 67.4 89.4 L24.1 31.9 A40 40 0 0 0 37.8 13.0 Z" fill="#293445" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="64.7" y="43.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">B</text>
+      <text x="64.7" y="60.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">+4</text>
+      <path d="M64.2 91.7 A112 112 0 0 1 2.0 112.0 L0.7 40.0 A40 40 0 0 0 22.9 32.8 Z" fill="#293445" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="24.7" y="72.1" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">C</text>
+      <text x="24.7" y="89.1" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">+5</text>
+      <path d="M-64.2 -91.7 A112 112 0 0 1 -2.0 -112.0 L-0.7 -40.0 A40 40 0 0 0 -22.9 -32.8 Z" fill="#332b40" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="-24.7" y="-80.1" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">F#</text>
+      <text x="-24.7" y="-63.1" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">−1</text>
+      <path d="M-105.9 -36.5 A112 112 0 0 1 -67.4 -89.4 L-24.1 -31.9 A40 40 0 0 0 -37.8 -13.0 Z" fill="#332b40" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="-64.7" y="-51.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">F</text>
+      <text x="-64.7" y="-34.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">−2</text>
+      <path d="M-107.1 32.7 A112 112 0 0 1 -107.1 -32.7 L-38.3 -11.7 A40 40 0 0 0 -38.3 11.7 Z" fill="#332b40" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="-80.0" y="-4.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">E</text>
+      <text x="-80.0" y="13.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">−3</text>
+      <path d="M-67.4 89.4 A112 112 0 0 1 -105.9 36.5 L-37.8 13.0 A40 40 0 0 0 -24.1 31.9 Z" fill="#332b40" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="-64.7" y="43.0" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">Eb</text>
+      <text x="-64.7" y="60.0" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">−4</text>
+      <path d="M-2.0 112.0 A112 112 0 0 1 -64.2 91.7 L-22.9 32.8 A40 40 0 0 0 -0.7 40.0 Z" fill="#332b40" fill-opacity="0.94" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <text x="-24.7" y="72.1" font-size="17" font-weight="700" fill="#ffffff" text-anchor="middle" dominant-baseline="central">D</text>
+      <text x="-24.7" y="89.1" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.75" text-anchor="middle" dominant-baseline="central">−5</text>
+      <circle r="36" fill="#141414" fill-opacity="0.92"/>
+      <text x="0" y="-4" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle" dominant-baseline="central" font-family="'SF Mono', Menlo, monospace">G → A</text>
+      <text x="0" y="13" font-size="7" fill="#ffffff" fill-opacity="0.65" text-anchor="middle" dominant-baseline="central">Drop to transpose</text>
     </g>
   </g>
 </svg>

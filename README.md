@@ -36,7 +36,8 @@ macOS may ask once for permission to access the Desktop or Documents folder.
 
 1. Click the ♪ icon to check it is running.
 2. In Finder, start dragging a score file and hold **Shift** (or ⌘⇧).
-3. A ring with −5 … +5 appears around the cursor. For text and MusicXML files it also shows the key each slot gives you.
+3. A ring with −5 … +5 appears around the cursor. For text and MusicXML files it also shows the key each slot gives you,
+   and the center shows the change (`G → A`) while you hover.
 4. Drop the file on a slot. The transposed copy is created in the same folder. Drop on the center to cancel.
 
 For images and PDFs the app first has to *read* the score, which takes 10 seconds to a minute. The ring shows progress, and when it is done a review window opens (see below).

@@ -78,12 +78,20 @@ final class RingView: NSView {
             }
         }
 
-        // 가운데: 원래 키 / 취소 영역
+        // 가운데: 원래 키 / 취소 영역. 칸 위에 있으면 "G → A"처럼 원래 키 → 바뀔 키를 보여 준다
         let hub = NSBezierPath(ovalIn: NSRect(x: mid.x - inner, y: mid.y - inner, width: inner * 2, height: inner * 2))
         NSColor(white: 0.08, alpha: 0.9).setFill(); hub.fill()
-        drawText(keyInfo?.originalName ?? "♪", at: NSPoint(x: mid.x, y: mid.y + 6),
-                 font: .monospacedSystemFont(ofSize: 17, weight: .bold), alpha: 1)
-        drawText("Drop here to cancel", at: NSPoint(x: mid.x, y: mid.y - 14),
+        let original = keyInfo?.originalName ?? "♪"
+        if let k = hovered {
+            // 키를 모르는 파일(이미지)은 반음 수만
+            let text = keyInfo.map { "\($0.originalName) → \($0.name(shiftedBy: k))" } ?? (k > 0 ? "+\(k)" : "\(k)")
+            drawText(text, at: NSPoint(x: mid.x, y: mid.y + 6),
+                     font: .monospacedSystemFont(ofSize: 17, weight: .bold), alpha: 1)
+        } else {
+            drawText(original, at: NSPoint(x: mid.x, y: mid.y + 6),
+                     font: .monospacedSystemFont(ofSize: 17, weight: .bold), alpha: 1)
+        }
+        drawText(hovered == nil ? "Drop here to cancel" : "Drop to transpose", at: NSPoint(x: mid.x, y: mid.y - 14),
                  font: .systemFont(ofSize: 9), alpha: 0.6)
     }
 
