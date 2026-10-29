@@ -108,12 +108,13 @@ Measured on four Korean worship lead sheets with hand-checked ground truth:
 
 | Input | Pitch | Pitch + rhythm | Chords | Lyrics |
 |---|---|---|---|---|
-| Image saved from a web search (500–800 px) | 32–82% | 28–74% | 74–100% | 42–82% |
-| Clean PDF or high-resolution scan | 93–100% | 86–100% | – | – |
+| Image saved from a web search (500–800 px) | 32–80% | 28–74% | 79–100% | 42–82% |
+| Clean PDF or high-resolution scan | 92–100% | 86–100% | – | – |
 
 Most church teams use web images, so expect to fix some notes; very small images (about 500 px wide) can lose whole measures.
-The review marks catch 73–96% of the real errors, and **Next doubtful** takes you through them most-likely-wrong first.
-If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.
+Measure boundaries are taken from the barlines in the image, so chords stay on the right measure even when the note engine
+splits or merges one. The review marks catch 75–95% of the real errors, and **Next doubtful** takes you through them
+most-likely-wrong first. If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.
 
 ### The text format
 

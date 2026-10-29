@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-29a"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-29b"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -89,6 +89,11 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)
+            key.infer_time(t)                      # 마디를 다시 나누기 전에 박자표부터 (엔진이 2/2·3/4로 읽는 경우)
+            if (moved := assemble.resegment(t, systems, symbols)):
+                print(f"measures re-cut from barlines and beat sums: {moved} boundaries moved → {len(t.measures)} measures")
+            if (added := assemble.fill_missing(t, systems, symbols)):
+                print(f"notes and rests added from skipped noteheads: {added}")
             claude_t = None
             ai_used = False
             if claude_eng:
@@ -96,6 +101,15 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                     claude_t = claude_eng.transcribe(page, work, debug_dir)
                 except Exception as e:        # 로그인 만료, 가사 저작권 필터 등 → AI 없이 계속
                     print(f"{who} reading failed, using Apple Vision only: {str(e).strip().splitlines()[-1][:200]}")
+            # 박자 합이 안 맞는 마디의 길이를 AI 읽기·이미지 단서로 바로잡는다 (1-b)
+            ai_pairs: dict = {}
+            ai_trusted = False
+            if claude_t:
+                ratio, _, pairs = review.counterparts(t, claude_t)
+                ai_trusted = ratio >= review.AI_TRUST
+                ai_pairs = {k: o for k, (o, rel) in pairs.items() if rel in ("same", "dur")}
+            if (n_fixed := assemble.fix_rhythm(t, ai_pairs, ai_trusted)):
+                print(f"note lengths fixed from beat counts: {n_fixed}")
             if chords:
                 chord_boxes = text.read_chords(page, systems, debug_dir)
                 if claude_t:

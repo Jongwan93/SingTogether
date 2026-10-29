@@ -9,9 +9,17 @@ import numpy as np
 from . import debug
 from .ingest import Page
 from .layout import System
-from .model import Transcription, key_alter
+from fractions import Fraction
+
+from .model import Measure, Note, Transcription, key_alter
 from .notes import SystemSymbols
 from .text import TextBox
+
+
+def staff_pitch(staff, y: float) -> tuple[str, int]:
+    """오선 위치(y) → (음이름, 옥타브). 첫 줄 = E4, 반 칸마다 한 음."""
+    step = round((staff.bottom - y) / (staff.interline / 2))
+    return "EFGABCD"[step % 7], 4 + (step + 2) // 7
 
 
 def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSymbols]) -> None:
@@ -50,8 +58,7 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
         il = st.interline
 
         def position_pitch(h):
-            step = round((st.bottom - h.y) / (il / 2))
-            return "EFGABCD"[step % 7], 4 + (step + 2) // 7
+            return staff_pitch(st, h.y)
 
         def read_pitch(n, h, why=""):
             """오선 위치에서 음높이를 다시 읽는다. 엔진이 같은 음이름·옥타브면 엔진 것을 둔다 (임시표 보존)."""
@@ -66,7 +73,7 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
         all_pitched = [n for m in measures for n in m.notes if not n.is_rest]
         if all_pitched and len(all_pitched) == len(heads):     # 오선 전체가 딱 맞으면 그대로 짝
             for n, h in zip(all_pitched, heads):
-                n.x, n.y, n.head = h.x, h.y, True
+                n.x, n.y, n.head, n.evidence, h.taken = h.x, h.y, True, h.evidence, True
                 read_pitch(n, h, "count match")
             for m in measures:
                 m.head_match = True
@@ -108,7 +115,7 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                 for a, b in pairs:
                     n, h = pitched[a], heads[b]
                     near = abs(exp[id(n)] - h.x) < 1.0 * il
-                    n.x, n.y, n.head = h.x, h.y, True
+                    n.x, n.y, n.head, n.evidence, h.taken = h.x, h.y, True, h.evidence, True
                     if (a, b) in sure_ids or near or trust_all:
                         read_pitch(n, h, "sure" if (a, b) in sure_ids else ("near" if near else "trust all"))
                 for n in pitched:
@@ -123,6 +130,238 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
                     pos += n.duration
     for m in t.measures[idx:]:
         m.system = len(systems) - 1
+
+
+def resegment(t: Transcription, systems: list[System], symbols: list[SystemSymbols]) -> int:
+    """마디를 다시 나눈다 (1-c): 이미지의 마디줄과 박자 합으로 엔진의 마디 경계를 바로잡는다.
+
+    오선마다 음표 열(place_notes가 x를 붙인 순서)을 구간으로 자르는 DP. 자를 수 있는 자리 = 검출된 마디줄 자리,
+    엔진의 마디 경계, 그리고 아무 자리(벌점). 비용 = 구간마다 박자 합이 맞으면 0, 아니면 1 + |합 − 박자표| / 박자표;
+    경계마다 − 근거 보너스 (마디줄 1.0, 엔진 경계 0.3, 둘 다 1.3, 아무 자리 +0.5). 깨끗한 입력(마디줄·길이가 다 맞음)은
+    그대로 나오고, 엔진이 마디를 쪼개거나 붙였을 때(이 세상의 부요함보다 35/34) 마디줄 쪽으로 돌아온다. 바뀐 경계 수를 돌려준다."""
+    if not systems or not t.measures:
+        return 0
+    expected = Fraction(t.beats * 4, t.beat_type)
+    old = t.measures
+    new_measures: list[Measure] = []
+    changed = 0
+    for si, (sys_, syms) in enumerate(zip(systems, symbols)):
+        ms = [m for m in old if m.system == si]
+        seq = [(m, n) for m in ms for n in m.notes]
+        if not seq:
+            new_measures += ms                                     # 음표 없는 마디(온쉼표)는 그대로
+            continue
+        n = len(seq)
+        xs = [nn.x if nn.x is not None else 0.0 for _, nn in seq]
+        il = sys_.staff.interline
+        g = 0
+        engine_gaps = set()
+        for m in ms:
+            if 0 < g < n:
+                engine_gaps.add(g)
+            g += len(m.notes)
+        # 후보 경계: 자리 g (= 음표 g 앞) → (보너스, 마디줄 x). 마디줄의 자리는 머리와 짝지어진 음표의 x로만 정한다
+        # (짝이 없는 음표·쉼표의 x는 엔진 마디를 등분한 어림값이라 믿을 수 없다). 짝 없는 음표들 사이가 애매하면
+        # 그 범위 안의 엔진 경계를 쓰고, 없으면 어림 x로 센다.
+        bonus: dict[int, float] = {g: 0.3 for g in engine_gaps}
+        bar_x: dict[int, float] = {}
+        matched = [k for k, (_, nn) in enumerate(seq) if nn.head and nn.x is not None]
+        for b in syms.barlines:
+            lo = max((k for k in matched if xs[k] < b), default=-1) + 1       # 이 자리부터
+            hi = min((k for k in matched if xs[k] > b), default=n)            # 이 자리까지 경계가 올 수 있다
+            inside = [g for g in engine_gaps if lo <= g <= hi]
+            g = inside[0] if inside else min(max(lo, sum(1 for x in xs if x < b)), hi)
+            if 0 < g < n:
+                bonus[g] = bonus.get(g, 0.0) + 1.0
+                bar_x[g] = b
+        durs = [nn.duration for _, nn in seq]
+        prefix = [Fraction(0)]
+        for d in durs:
+            prefix.append(prefix[-1] + d)
+        first_of_piece = bool(ms) and ms[0] is old[0]
+        INF = float("inf")
+        best = [INF] * (n + 1)
+        back = [0] * (n + 1)
+        best[0] = 0.0
+        # 구간 비용: 박자 합이 딱 맞으면 0, 아니면 1 + 어긋난 비율 (맞는 합은 마디줄 하나보다 무겁다: 깨끗한 입력에서
+        # 마디줄 자리를 한 음표 잘못 잡아도 엔진의 맞는 경계가 이긴다). 오선 첫·끝 구간은 짧아도 봐준다 (못갖춘마디).
+        for j in range(1, n + 1):
+            for i in range(j):
+                if best[i] == INF:
+                    continue
+                length = prefix[j] - prefix[i]
+                off = float(abs(length - expected) / expected)
+                if length == expected:
+                    seg = 0.0
+                elif length < expected and (i == 0 or j == n):
+                    seg = 0.0 if (i == 0 and first_of_piece) else off
+                else:
+                    seg = 1.0 + off
+                cost = best[i] + seg + (0.0 if i == 0 else -bonus.get(i, -0.5))
+                if cost < best[j] - 1e-9:
+                    best[j], back[j] = cost, i
+        cuts = []
+        j = n
+        while j > 0:
+            cuts.append(j)
+            j = back[j]
+        cuts = sorted(set(cuts))                                   # 구간 끝 자리들 (마지막은 n)
+        changed += len(set(cuts[:-1]) ^ engine_gaps)
+        left = float(sys_.staff.left) + (5 if si == 0 else 3.5) * il
+        start = 0
+        for end in cuts:
+            m = Measure(0)
+            m.system = si
+            m.notes = [nn for _, nn in seq[start:end]]
+            first_m, last_m = seq[start][0], seq[end - 1][0]
+            if first_m.notes and first_m.notes[0] is m.notes[0]:
+                m.repeat_start, m.ending = first_m.repeat_start, first_m.ending
+            if last_m.notes and last_m.notes[-1] is m.notes[-1]:
+                m.repeat_end = last_m.repeat_end
+            m.x0 = bar_x.get(start, left if start == 0 else None)
+            if m.x0 is None:
+                m.x0 = (xs[start - 1] + xs[start]) / 2
+            m.x1 = bar_x.get(end, float(sys_.staff.right) if end == n else None)
+            if m.x1 is None:
+                m.x1 = (xs[end - 1] + xs[end]) / 2
+            pitched = sum(1 for nn in m.notes if not nn.is_rest)
+            heads = sum(1 for h in syms.noteheads if m.x0 <= h.x < m.x1)
+            m.head_match = heads == pitched
+            new_measures.append(m)
+            start = end
+    new_measures += [m for m in old if m.system is None or m.system >= len(systems)]
+    for k, m in enumerate(new_measures, 1):
+        m.number = k
+    t.measures = new_measures
+    return changed
+
+
+_ALT = (Fraction(2), Fraction(1, 2), Fraction(3, 2), Fraction(2, 3))   # 길이 후보: ×2, ÷2, 점 붙이기, 점 떼기
+FIX_MAX_COST = 0.7                                                     # 이보다 비싸면(근거 없는 고침) 안 고친다
+
+
+def fill_missing(t: Transcription, systems: list[System], symbols: list[SystemSymbols]) -> int:
+    """박자 합이 모자라는 마디를 엔진이 건너뛴 머리로 채운다 (1-b, 빠진 음표).
+
+    작은 웹 이미지에서 엔진은 음표를 통째로 빼먹는데(주님 한 분만으로: 101개 중 46개만) 머리 검출은 대부분 찾는다.
+    마디마다: ① 머리 없는 음표를 어림 자리 가까이(1.5il)의 짝 없는 머리와 다시 짝짓는다(정렬 DP가 놓친 짝).
+    ② 그래도 짝 없는 머리가 남고 마디가 짧으면, 그 머리들의 이미지 길이 단서 합이 모자란 만큼과 똑같을 때만 그 자리에
+    음표를 넣는다 — 음높이는 오선 위치. 넣은 음표는 "inserted" 신호로 확인 목록에 오른다. 넣은 수를 돌려준다.
+    (머리 하나를 모자란 길이로 멋대로 넣거나 빈 자리에 쉼표를 넣는 것도 해 봤지만 가짜 머리가 음표가 되어 더 나빠졌다.)"""
+    if not systems:
+        return 0
+    expected = Fraction(t.beats * 4, t.beat_type)
+    added = 0
+    by_system: dict[int | None, list[Measure]] = {}
+    for m in t.measures:
+        by_system.setdefault(m.system, []).append(m)
+    for i, m in enumerate(t.measures):
+        if m.system is None or m.system >= len(systems) or m.x0 is None or m.x1 is None:
+            continue
+        sys_, syms = systems[m.system], symbols[m.system]
+        st, il = sys_.staff, sys_.staff.interline
+        group = by_system[m.system]
+        at_edge = i == 0 or i == len(t.measures) - 1 or m is group[0] or m is group[-1]
+        free = sorted((h for h in syms.noteheads if not h.taken and m.x0 <= h.x < m.x1), key=lambda h: h.x)
+        # ① 머리 없는 음표 ↔ 짝 없는 머리: 어림 x에서 1.5il 안에 있는 머리만 (먼 머리를 억지로 붙이면 코드 자리까지 밀린다)
+        for n in (n for n in m.notes if not n.is_rest and not n.head and n.x is not None):
+            near = [h for h in free if not h.taken and abs(h.x - n.x) < 1.5 * il]
+            if not near:
+                continue
+            h = min(near, key=lambda h: abs(h.x - n.x))
+            n.x, n.y, n.head, n.evidence, h.taken = h.x, h.y, True, h.evidence, True
+            letter, octave = staff_pitch(st, h.y)
+            if (n.step, n.octave) != (letter, octave):
+                n.reasons.append(f"pitch fixed from staff position (engine read {n.name})")
+                n.engine_read = n.name
+                n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
+        free = [h for h in free if not h.taken]
+        missing = expected - m.length
+        if missing <= 0 or not free or at_edge:
+            continue
+        # ② 남은 머리 전부의 이미지 길이 단서 합이 모자란 만큼과 똑같을 때만 넣는다 (머리 하나를 멋대로 늘이면 가짜 머리가 음표가 된다)
+        ev_durs = [h.evidence.quarters()[0] if h.evidence else None for h in free]
+        if any(d is None for d in ev_durs) or sum(ev_durs, Fraction(0)) != missing:
+            continue
+        inserted: list[Note] = []
+        for h, d in zip(free, ev_durs):
+            letter, octave = staff_pitch(st, h.y)
+            if not (52 <= 12 * (octave + 1) + "C D EF G A B".index(letter) <= 84):     # E3–C6 밖이면 머리가 아니다
+                inserted = []
+                break
+            n = Note(letter, key_alter(letter, t.fifths), octave, d, 1 if d.numerator == 3 else 0, x=h.x, y=h.y)
+            n.head, n.evidence = True, h.evidence
+            n.reasons.append("added from a notehead the engine skipped (beat count was short)")
+            n.signals.append("inserted")
+            inserted.append(n)
+        if inserted:
+            for h in free:
+                h.taken = True
+            m.notes = sorted(m.notes + inserted, key=lambda n: n.x if n.x is not None else 0.0)
+            added += len(inserted)
+    return added
+
+
+def fix_rhythm(t: Transcription, ai: dict[int, "Note"], ai_trusted: bool) -> int:
+    """박자 합이 박자표와 다른 마디에서 음표 길이를 바로잡는다 (1-b).
+
+    한 마디 안에서 음표 한두 개의 길이를 ×2·÷2·점 붙이기·점 떼기로 바꿔 합을 맞추는 조합 중 가장 근거 있는 것을 고른다.
+    근거 = AI가 그 길이로 읽었다(−0.6, 믿을 만할 때만), 이미지 단서(빈 머리·빔 수·점)가 그 길이를 가리킨다(−0.25),
+    지금 길이를 단서가 지지한다(+0.15). 근거 없는 고침(비용 > FIX_MAX_COST)은 하지 않는다 — 아무 음표나 바꾸면 맞을 확률이
+    반이라 득이 없다. 이미지 단서는 깨끗한 입력에서도 60–70%만 맞아(꼬리 수 세기가 약하다) 혼자서는 못 고치고 AI 읽기를 거든다. 오선 첫·끝의 짧은 마디(못갖춘마디)는 건드리지 않는다. 고친 음표 수를 돌려준다."""
+    expected = Fraction(t.beats * 4, t.beat_type)
+    fixed = 0
+    by_system: dict[int | None, list] = {}
+    for m in t.measures:
+        by_system.setdefault(m.system, []).append(m)
+    for i, m in enumerate(t.measures):
+        length = m.length
+        if not m.notes or length == expected:
+            continue
+        group = by_system.get(m.system, [])
+        at_edge = i == 0 or i == len(t.measures) - 1 or (group and (m is group[0] or m is group[-1]))
+        if length < expected and at_edge:
+            continue
+        options: list[list[tuple[int, Fraction, float, str]]] = []     # 음표마다 (번호, 새 길이, 비용, 근거)
+        for k, n in enumerate(m.notes):
+            opts = []
+            o = ai.get(id(n)) if ai_trusted else None
+            ev = n.evidence
+            supported_now = ev is not None and n.duration in ev.quarters()
+            for f in _ALT:
+                d = n.duration * f
+                if not (Fraction(1, 4) <= d <= Fraction(4)) or d.denominator > 8:
+                    continue
+                cost, why = 1.0, []
+                if o is not None and not o.is_rest and o.duration == d:
+                    cost -= 0.6; why.append("AI read it so")
+                if ev is not None and d in ev.quarters():
+                    cost -= 0.25; why.append("image shows it")       # 단서만으로는 못 고친다 (깨끗한 입력에서도 60–70%만 맞는다)
+                if supported_now:
+                    cost += 0.15
+                if cost <= FIX_MAX_COST:
+                    opts.append((k, d, cost, ", ".join(why)))
+            options.append(opts)
+        best = None
+        flat = [o for opts in options for o in opts]
+        for k, d, c, why in flat:                                   # 하나 고치기
+            if length - m.notes[k].duration + d == expected and (best is None or c < best[0]):
+                best = (c, [(k, d, why)])
+        for a_i, (k1, d1, c1, w1) in enumerate(flat):              # 둘 고치기 (서로 다른 음표)
+            for k2, d2, c2, w2 in flat[a_i + 1:]:
+                if k1 != k2 and length - m.notes[k1].duration - m.notes[k2].duration + d1 + d2 == expected \
+                        and (best is None or c1 + c2 < best[0]):
+                    best = (c1 + c2, [(k1, d1, w1), (k2, d2, w2)])
+        if best is None:
+            continue
+        for k, d, why in best[1]:
+            n = m.notes[k]
+            n.reasons.append(f"length fixed from beat count: {n.duration} → {d} ({why})")
+            n.signals.append("rhythm_fixed")
+            n.duration = d
+            n.dots = 1 if d.numerator == 3 else 0
+            fixed += 1
+    return fixed
 
 
 def attach_chords(t: Transcription, chords: list[list[TextBox]], interline: float) -> None:

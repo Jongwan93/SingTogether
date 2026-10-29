@@ -33,6 +33,8 @@ WEIGHTS = {
     "ai_missing": 0.65,          # AI 전사에 없는 음표
     "ai_engine": 0.65,           # 오선 위치로 고치기 전 엔진이 읽은 음과 AI가 같음 (고친 쪽이 틀렸을 수 있다)
     "ai_same": 1.4,              # AI와 음높이·길이 일치 (1보다 크면 다른 의심을 상쇄한다)
+    "rhythm_fixed": 0.8,         # 박자 합을 맞추려고 길이를 고친 음표 (근거가 있었지만 확인할 만하다)
+    "inserted": 0.6,             # 엔진이 건너뛴 머리로 넣은 음표·쉼표 (틀릴 수 있으니 확인 목록에)
     # AI 전사가 엔진 음표 열과 잘 안 맞을 때(claude_match < AI_TRUST: 다른 곡을 읽었거나 많이 밀렸을 때)의 같은 신호.
     # 그런 곡에서는 AI가 다르다는 것이 음표가 틀렸다는 뜻이 아니다 (이 세상의 부요함보다: AI 음높이 다름 27개 중 틀린 것 2개).
     "ai_pitch_weak": 1.0,
@@ -52,6 +54,8 @@ _WHY = {
     "ai_dur": "AI read a different length",
     "ai_missing": "not in AI reading",
     "ai_engine": "AI agrees with the engine, not the staff position",
+    "rhythm_fixed": "length changed to fit the beat count",
+    "inserted": "added from a skipped notehead",
 }
 
 
@@ -76,32 +80,30 @@ def _name_midi(name: str) -> int | None:
     return 12 * (int(octave) + 1) + STEP_PC[step] + {"#": 1, "##": 2, "b": -1, "bb": -2}.get(acc or "", 0)
 
 
-def mark_claude(t: Transcription, claude_t: Transcription) -> None:
-    """엔진 음표 열과 AI 전사 음표 열을 (음높이, 길이)로 맞춰 본다. 같은 자리면 '일치', 다르면 무엇이 다른지
-    (음높이 / 길이 / 아예 없음)를 신호로 적는다. 오선 위치로 고친 음표는 AI가 엔진의 원래 음과 같은지도 본다."""
-    a = [n for n in t.notes]
-    b = [n for n in claude_t.notes]
-    # AI는 조표가 많은 곡에서 음 전체를 몇 도 밀어 읽는 일이 잦다 (♭4개 곡을 3도 위로). 상대적인 모양은 맞으므로
-    # 반음 이동량을 바꿔 가며 가장 잘 맞는 정렬을 쓴다. 그러면 '다름'이 진짜 다른 곳만 가리킨다.
+def _align(t: Transcription, claude_t: Transcription):
+    """엔진 음표 열과 AI 전사 음표 열을 (음높이, 길이)로 맞춘다. AI는 조표가 많은 곡에서 음 전체를 몇 도 밀어 읽는 일이 잦으므로
+    (♭4개 곡을 3도 위로) 반음 이동량을 바꿔 가며 가장 잘 맞는 정렬을 쓴다. (일치 비율, 이동량, SequenceMatcher)"""
+    a, b = t.notes, claude_t.notes
     best = None
     for shift in range(-12, 13):
         key = lambda n, s=shift: (None if n.midi is None else n.midi + s, n.duration)
         sm = SequenceMatcher(None, [(n.midi, n.duration) for n in a], [key(n) for n in b], autojunk=False)
         if best is None or sm.ratio() > best[0]:
             best = (sm.ratio(), shift, sm)
-    ratio, shift, sm = best
-    t.claude_match = round(ratio, 2)
+    return best
 
-    def ai_midi(n: Note) -> int | None:
-        return None if n.midi is None else n.midi + shift
 
-    counterpart: dict[int, Note] = {}                 # id(엔진 음표) → AI 음표
+def counterparts(t: Transcription, claude_t: Transcription) -> tuple[float, int, dict[int, tuple[Note, str]]]:
+    """(일치 비율, 이동량, id(엔진 음표) → (AI 음표, 관계)). 관계: "same" 음높이·길이 일치, "dur" 음높이만 일치,
+    "pitch" 자리는 맞지만 음높이가 다름. AI 전사에 없는 음표는 빠진다."""
+    ratio, shift, sm = _align(t, claude_t)
+    a, b = t.notes, claude_t.notes
+    ai_midi = lambda n: None if n.midi is None else n.midi + shift
+    out: dict[int, tuple[Note, str]] = {}
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for n, o in zip(a[i1:i2], b[j1:j2]):
-                n.signals.append("ai_same")
-                n.reasons.append("matches AI")
-                counterpart[id(n)] = o
+                out[id(n)] = (o, "same")
         elif tag == "replace":
             # 다른 구간 안에서 음높이만으로 다시 맞춰 본다: 음높이는 같고 길이만 다른 것과 음높이가 다른 것을 가른다
             sub_a, sub_b = a[i1:i2], b[j1:j2]
@@ -109,29 +111,37 @@ def mark_claude(t: Transcription, claude_t: Transcription) -> None:
             for stag, k1, k2, l1, l2 in sub.get_opcodes():
                 if stag == "equal":
                     for n, o in zip(sub_a[k1:k2], sub_b[l1:l2]):
-                        n.signals.append("ai_dur")
-                        n.reasons.append(f"AI read {o.name}/{o.duration}")
-                        counterpart[id(n)] = o
+                        out[id(n)] = (o, "dur")
                 elif stag == "replace":
                     for k, n in enumerate(sub_a[k1:k2]):
-                        o = sub_b[l1 + k] if l1 + k < l2 else None
-                        n.signals.append("ai_pitch" if o else "ai_missing")
-                        n.reasons.append(f"AI read {o.name}/{o.duration}" if o else "not in AI reading")
-                        if o:
-                            counterpart[id(n)] = o
-                elif stag == "delete":
-                    for n in sub_a[k1:k2]:
-                        n.signals.append("ai_missing")
-                        n.reasons.append("not in AI reading")
-        elif tag == "delete":
-            for n in a[i1:i2]:
-                n.signals.append("ai_missing")
-                n.reasons.append("not in AI reading")
-    # 오선 위치로 고친 음표: AI가 고치기 전 엔진의 음과 같다면 고친 쪽이 틀렸을 수 있다
-    for n in a:
-        o = counterpart.get(id(n))
-        if n.engine_read and o is not None and "ai_pitch" in n.signals:
-            if ai_midi(o) == _name_midi(n.engine_read):
+                        if l1 + k < l2:
+                            out[id(n)] = (sub_b[l1 + k], "pitch")
+    return round(ratio, 2), shift, out
+
+
+def mark_claude(t: Transcription, claude_t: Transcription) -> None:
+    """엔진 음표마다 AI 전사와 같은지, 다르면 무엇이 다른지(음높이 / 길이 / 아예 없음)를 신호로 적는다.
+    오선 위치로 고친 음표는 AI가 엔진의 원래 음과 같은지도 본다."""
+    ratio, shift, pairs = counterparts(t, claude_t)
+    t.claude_match = ratio
+    for n in t.notes:
+        pair = pairs.get(id(n))
+        if pair is None:
+            n.signals.append("ai_missing")
+            n.reasons.append("not in AI reading")
+            continue
+        o, rel = pair
+        if rel == "same":
+            n.signals.append("ai_same")
+            n.reasons.append("matches AI")
+        elif rel == "dur":
+            n.signals.append("ai_dur")
+            n.reasons.append(f"AI read {o.name}/{o.duration}")
+        else:
+            n.signals.append("ai_pitch")
+            n.reasons.append(f"AI read {o.name}/{o.duration}")
+            # 오선 위치로 고친 음표: AI가 고치기 전 엔진의 음과 같다면 고친 쪽이 틀렸을 수 있다
+            if n.engine_read and o.midi is not None and o.midi + shift == _name_midi(n.engine_read):
                 n.signals.append("ai_engine")
                 n.reasons.append(f"AI agrees with the engine ({n.engine_read}), not the staff position")
 
