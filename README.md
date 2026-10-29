@@ -168,3 +168,9 @@ Sample scores go in `music_scores/korean` and `music_scores/english` (not in the
 and signs everything. With `DEVELOPER_ID="Developer ID Application: …"` and `NOTARY_PROFILE=<notarytool keychain profile>` set,
 it signs with that identity and notarizes the disk image. SVG to PDF rendering uses WebKit through `singtogether-transpose --svg-to-pdf`,
 so no Homebrew packages are needed at run time.
+
+## License
+
+SingTogether is free software under the [GNU Affero General Public License v3.0](LICENSE): use it, share it and change it
+as you like; if you distribute a modified version (or run one as a service), publish your changes under the same license.
+The bundled recognizer homr and PyMuPDF are AGPL-3.0 as well; see [THIRD_PARTY.md](THIRD_PARTY.md) for everything the app ships with.
