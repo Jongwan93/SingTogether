@@ -108,13 +108,13 @@ Measured on four Korean worship lead sheets with hand-checked ground truth:
 
 | Input | Pitch | Pitch + rhythm | Chords | Lyrics |
 |---|---|---|---|---|
-| Image saved from a web search (500–800 px) | 32–80% | 28–74% | 79–100% | 42–82% |
+| Image saved from a web search (500–800 px) | 32–80% | 28–74% | 91–100% | 41–87% |
 | Clean PDF or high-resolution scan | 92–100% | 86–100% | – | – |
 
 Most church teams use web images, so expect to fix some notes; very small images (about 500 px wide) can lose whole measures.
 Measure boundaries are taken from the barlines in the image, so chords stay on the right measure even when the note engine
-splits or merges one. The review marks catch 75–95% of the real errors, and **Next doubtful** takes you through them
-most-likely-wrong first. If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.
+splits or merges one, and the AI reads the page one staff line at a time, which is what makes chords and lyrics this reliable.
+The review marks catch 71–95% of the real errors, and **Next doubtful** takes you through them most-likely-wrong first. If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.
 
 ### The text format
 
@@ -190,6 +190,7 @@ cd tools/ocr
 .venv/bin/singtogether-eval --chordsheets --llm none    # chord charts
 .venv/bin/singtogether-eval --missing                   # sample scores that have no ground truth yet
 .venv/bin/singtogether-eval --tune                      # refit the review-flag weights (review.WEIGHTS) on the hybrid results
+.venv/bin/singtogether-eval --engines claude+page claude homr@staff    # experiments: AI on the whole page vs per-system crops (default), preprocessing variants
 ```
 
 Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted).

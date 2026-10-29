@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-29b"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-29c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -85,7 +85,8 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
         systems = layout.find_systems(page, debug_dir)
         # 엔진에는 코드·가사 글자를 지운 쪽을 준다 (글자를 음표로 오인하는 것이 줄어 homr 원본 인식이 올라간다). 코드·가사 OCR은 원본으로.
         engine_page = layout.clean_staff_image(page, systems, debug_dir) if mask_text and systems else page
-        t = eng.transcribe(engine_page, work, debug_dir)
+        # AI 엔진(비교 평가용)은 글자까지 읽어야 하므로 지우지 않은 쪽을 준다
+        t = eng.transcribe(page if hasattr(eng, "provider") else engine_page, work, debug_dir)
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)

@@ -3,6 +3,8 @@
     singtogether-eval                       # 정답이 있는 샘플 전부, 기본 엔진들
     singtogether-eval --engines homr claude --samples "주님의 임재 앞에서"
     singtogether-eval --engines hybrid:claude hybrid:gemini      # 하이브리드의 글자 읽기 AI를 바꿔서
+    singtogether-eval --engines claude+page claude claude+half   # AI에게 쪽 전체 / 시스템별(기본) / 반 시스템별 크롭을 보내서
+    singtogether-eval --engines homr homr@denoise homr@sharpen homr@binary homr@staff   # 전처리 실험 (1-e)
     singtogether-eval --cached              # 이미 돌린 결과(out/<엔진>/<이름>.txt)만 다시 채점
     singtogether-eval --missing             # music_scores/에 있지만 정답(truth/)이 없는 악보 목록
     singtogether-eval --tune                # hybrid 결과로 검토 표시 가중치(review.WEIGHTS)를 다시 찾는다
@@ -63,6 +65,11 @@ def run_one(engine: str, name: str, img: Path, cached: bool, interline: float) -
     if not (cached and txt.exists()):
         try:
             base, _, llm_name = engine.partition(":")      # "hybrid:gemini" = 하이브리드, 글자는 Gemini로
+            from .. import ingest
+            from ..engines import claude as claude_engine
+            base, _, ingest.PREPROCESS = base.partition("@")   # "homr@denoise+sharpen" = 전처리 실험 (1-e)
+            base, _, crops = base.partition("+")           # "claude+page" = AI에게 쪽 전체, "+system"(기본) / "+half" = 크롭을 보낸다
+            claude_engine.CROPS = "" if crops == "page" else (crops or "system")
             t = recognize(img, base, out_dir / "work", out_dir / "dbg", interline=interline, review_dir=out_dir / "review",
                           llm_name=llm_name or "auto")
             from ..review import assess

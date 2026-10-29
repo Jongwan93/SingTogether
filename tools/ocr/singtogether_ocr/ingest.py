@@ -11,6 +11,10 @@ from . import debug
 
 TARGET_INTERLINE = 24.0   # 확대 목표 오선 간격(px). 300dpi 악보가 15–20px, homr는 폭 1920px 입력에서 가장 좋았다
 
+# 전처리 실험(1-e): "denoise"(확대 전 JPEG 잡음 제거), "sharpen"(확대 후 언샤프 마스크), "binary"(엔진에 이진화 이미지),
+# "staff"(오선을 검출해 또렷한 선으로 다시 그림). "+"로 여러 개. singtogether-eval --engines homr@denoise 처럼 고른다.
+PREPROCESS = ""
+
 
 @dataclass
 class Page:
@@ -30,11 +34,22 @@ def prepare(path: Path, dpi: int = 300, target_interline: float = TARGET_INTERLI
         name = f"{path.stem}-p{i}"
         gray, _ = correct_perspective(raw)
         gray, angle = deskew(gray)
+        steps = [x for x in PREPROCESS.split("+") if x]
+        if "denoise" in steps:
+            gray = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
         interline = estimate_interline(binarize(gray))
         scale = 1.0
         if interline < target_interline * 0.8:            # 웹 이미지처럼 작은 악보는 키운다
             scale = target_interline / interline
             gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+        if "sharpen" in steps:
+            blur = cv2.GaussianBlur(gray, (0, 0), 2.0)
+            gray = cv2.addWeighted(gray, 1.6, blur, -0.6, 0)
+        for step in steps:
+            if step.startswith("staff"):                     # staff = 2px, staffT = 원래 두께, staffauto = 흐린 줄일 때만 원래 두께
+                gray = redraw_staff_lines(gray, step)
+        if "binary" in steps:
+            gray = binarize(gray)
         binary = binarize(gray)
         page = Page(name, gray, binary, scale, angle, estimate_interline(binary), path)
         pages.append(page)
@@ -59,6 +74,28 @@ def load_pages(path: Path, dpi: int = 300) -> list[np.ndarray]:
     if img is None:
         raise ValueError(f"Cannot read image: {path}")
     return [img]
+
+
+FAINT_LINE_GRAY = 45      # 오선 줄 위 평균 밝기가 이보다 밝으면(0=검정) 흐린 줄로 본다 (주님 한 분만으로 66, 모든 능력 59, 또렷한 악보 26–27)
+
+
+def redraw_staff_lines(gray: np.ndarray, mode: str = "staff") -> np.ndarray:
+    """오선을 검출해 그 자리에 또렷한 검정 선을 다시 그린다 (흐리거나 끊긴 오선을 엔진이 놓치지 않게).
+    "staff": 2px. "staffT": 원래 줄 두께만큼. "staffauto": 줄이 흐릴 때만(FAINT_LINE_GRAY) 원래 두께로."""
+    from . import layout
+    binary = binarize(gray)
+    lines = layout.find_staff_lines(binary)
+    staves = layout.fit_staves(binary, lines, estimate_interline(binary))
+    out = gray.copy()
+    for st in staves:
+        left, right = layout.staff_extent(binary, st.lines)
+        for y in st.lines:
+            band = (binary[max(0, y - 4):y + 5, left:right] < 128).mean(axis=1)
+            thickness = max(2, int((band >= 0.5).sum())) if mode in ("staffT", "staffauto") else 2
+            if mode == "staffauto" and gray[y, left:right].mean() < FAINT_LINE_GRAY:
+                continue
+            cv2.line(out, (int(left), int(y)), (int(right), int(y)), 0, thickness)
+    return out
 
 
 def binarize(gray: np.ndarray) -> np.ndarray:
