@@ -53,6 +53,7 @@ cat > "$RES/ocr/bin/singtogether-ocr" <<EOF
 # launcher used by the app (SheetOCR.locate): bundled Python, isolated from the user's environment
 HERE="\$(cd "\$(dirname "\$0")" && pwd)"
 export PYTHONDONTWRITEBYTECODE=1      # for the child processes it starts (homr)
+export SINGTOGETHER_TRANSPOSE="\${SINGTOGETHER_TRANSPOSE:-\$HERE/../../../MacOS/singtogether-transpose}"   # when run by hand, not by the app
 exec "\$HERE/../../python/bin/python$PYVER" -I -B -X utf8 -m singtogether_ocr.cli "\$@"
 EOF
 chmod +x "$RES/ocr/bin/singtogether-ocr"
@@ -98,5 +99,5 @@ fi
 
 du -sh "$APP" "$DMG"
 echo "Done: $DMG"
-[ "$IDENTITY" = "-" ] && echo "Ad-hoc signed: recipients open it the first time with right-click → Open (or set DEVELOPER_ID and NOTARY_PROFILE)."
+[ "$IDENTITY" = "-" ] && echo "Ad-hoc signed: recipients allow it once on first launch, see README Install (or set DEVELOPER_ID and NOTARY_PROFILE)."
 exit 0

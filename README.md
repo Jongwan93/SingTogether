@@ -1,7 +1,11 @@
+<p align="center"><img src="Resources/AppIcon-256.png" width="128" alt=""></p>
+
 # SingTogether
 
 A macOS menu bar app that transposes sheet music to the key you can actually sing.
 Drag a score, pick a key, and a transposed copy appears next to the original. The original is never touched.
+
+**[Download the latest version](https://github.com/Jongwan93/SingTogether/releases/latest)** · Apple Silicon Mac (M1 or later), macOS 12 or later · free and open source
 
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
@@ -10,9 +14,22 @@ Song.png       →  drop on −2  →  Song (-2, F).pdf   (+ a review window)
 Chart.jpg      →  drop on +2  →  Chart (+2, A).jpg   (same image, new chords)
 ```
 
+## Install
+
+1. Download `SingTogether-<version>.dmg` from the [latest release](https://github.com/Jongwan93/SingTogether/releases/latest).
+2. Open it and drag SingTogether to Applications.
+3. The first time, macOS blocks the app because it is not notarized. Allow it once:
+   - macOS 15 or later: double-click the app, click **Done**, then open **System Settings → Privacy & Security**,
+     scroll down to *"SingTogether" was blocked* and click **Open Anyway**.
+   - macOS 14 or earlier: right-click the app and choose **Open**, then **Open** again.
+4. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
+   If the app was opened from Downloads or the disk image, it offers to move itself to Applications.
+
+macOS may ask once for permission to access the Desktop or Documents folder.
+
 ## How to use
 
-1. Launch SingTogether. A ♪ icon appears in the menu bar.
+1. Click the ♪ icon to check it is running.
 2. In Finder, start dragging a score file and hold **Shift** (or ⌘⇧).
 3. A ring with −5 … +5 appears around the cursor. For text and MusicXML files it also shows the key each slot gives you.
 4. Drop the file on a slot. The transposed copy is created in the same folder. Drop on the center to cancel.
@@ -26,41 +43,21 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 | `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F`; spelling follows the new key (E major's `B/D#` becomes `C#/E#` in F♯) | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
 | `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, rendered to a new PDF | depends on image quality, see below |
-| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI CLI, 80–96% without |
+| `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI reader, 80–96% without |
 
-## Install
+## AI reader for chords and lyrics (optional)
 
-**Download** (no developer tools needed, Apple Silicon Macs):
+Notes are always read on your Mac. Chords and lyrics are read much more accurately when an AI command-line tool is installed and signed in:
 
-1. Download `SingTogether-<version>.dmg` from the [latest release](https://github.com/Jongwan93/SingTogether/releases/latest).
-2. Open it and drag SingTogether to Applications.
-3. The first time, macOS blocks the app because it is not notarized. Allow it once:
-   - macOS 15 or later: double-click the app, click **Done**, then open **System Settings → Privacy & Security**,
-     scroll down to *"SingTogether" was blocked* and click **Open Anyway**.
-   - macOS 14 or earlier: right-click the app and choose **Open**, then **Open** again.
-4. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
+- **Claude:** [Claude Code](https://claude.com/claude-code) (`claude`), signed in with a Claude account.
+- **Gemini:** Google [Antigravity](https://antigravity.google) (`agy`), or the Gemini CLI (`gemini`) on a paid plan.
 
-**From source:**
+When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
+If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu or in Settings.
+If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 
-```bash
-xcode-select --install          # once, if you don't have the Command Line Tools
-./build.sh                      # builds build/SingTogether.app and build/singtogether-transpose
-open build/SingTogether.app
-```
-
-A source build reads image and PDF scores through the Python package in `tools/ocr`. Install it once:
-
-```bash
-cd tools/ocr && uv sync         # Python 3.13 environment with homr (OMR) and Verovio
-```
-
-- Chords and lyrics are read much more accurately with an AI command-line tool that is installed and logged in on the Mac:
-  [Claude Code](https://claude.com/claude-code) (`claude`) or Google [Antigravity](https://antigravity.google) (`agy`).
-  When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
-  If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu.
-  If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
-- A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
-- macOS may ask once for permission to access the Desktop or Documents folder.
+**Privacy:** with an AI reader, the score image is sent to that service (Anthropic or Google) under your own account.
+With **Apple Vision only**, nothing leaves your Mac.
 
 ## Settings
 
@@ -69,7 +66,7 @@ cd tools/ocr && uv sync         # Python 3.13 environment with homr (OMR) and Ve
 - **Open SingTogether at login.**
 - **Ask which AI to use when the app starts.** Turn it off once you have chosen.
 - **Open the review window after reading an image score**, and **play a sound** when a file is created.
-- **Reading image scores:** Claude, Gemini, or Apple Vision only, with the sign-in status and a **Check sign-in** button.
+- **Reading image scores:** Claude, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
 - **Recognition cache:** how much space the remembered results take, and a button to clear it.
 
 ## Image scores: recognize, transpose, review
@@ -84,7 +81,7 @@ Recognition is never perfect, so every image score opens a review window:
 - For bigger changes use **Edit Text…**, which opens the score as plain text (format below), then **Rebuild from Text**.
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
-To try it without dragging: `open build/SingTogether.app --args --sheet score.png -2`
+To try it without dragging, quit SingTogether and run `open -a SingTogether --args --sheet score.png -2`.
 
 ### Chord charts
 
@@ -129,12 +126,17 @@ Edit the file, then drop it on the ring or run `singtogether-ocr fixed.txt --tra
 
 ## Command line
 
+Both tools ship inside the app:
+
 ```bash
-.build/release/singtogether-transpose Song.musicxml -2            # same rules as the app, any supported file
-tools/ocr/.venv/bin/singtogether-ocr score.jpg                     # → score.musicxml, score.txt, score.review.json, score-p1.review.png
-tools/ocr/.venv/bin/singtogether-ocr score.jpg --transpose -2 --render     # + transposed copy and PDFs
-tools/ocr/.venv/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → image with new chords + .txt
+APP=/Applications/SingTogether.app/Contents
+$APP/MacOS/singtogether-transpose Song.musicxml -2                     # same rules as the app, any supported file
+$APP/Resources/ocr/bin/singtogether-ocr score.jpg                      # → score.musicxml, score.txt, score.review.json, score-p1.review.png
+$APP/Resources/ocr/bin/singtogether-ocr score.jpg --transpose -2 --render     # + transposed copy and PDFs
+$APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → image with new chords + .txt
 ```
+
+In a source build they are `.build/release/singtogether-transpose` and `tools/ocr/.venv/bin/singtogether-ocr`.
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
 `--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|gemini` to report whether it is installed and signed in,
@@ -149,6 +151,17 @@ Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads not
 
 ## Development
 
+Build from source:
+
+```bash
+xcode-select --install          # once, if you don't have the Command Line Tools
+./build.sh                      # builds build/SingTogether.app and build/singtogether-transpose
+cd tools/ocr && uv sync         # once: Python 3.13 environment for the recognizer (homr, Verovio); needs uv
+open build/SingTogether.app
+```
+
+A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
+
 ```
 Sources/App/        menu bar app: ring, drag detection, review window, note editor
 Sources/Transpose/  transposition logic shared by app and CLI, plus the bridge to the recognizer
@@ -158,7 +171,7 @@ tools/ocr/truth/    hand-checked ground truth for the evaluation
 ```
 
 ```bash
-./dist.sh                                               # self-contained dist/SingTogether.app and dist/SingTogether-1.0.dmg (needs uv)
+./dist.sh                                               # self-contained dist/SingTogether.app and dist/SingTogether-<version>.dmg (needs uv)
 .build/release/singtogether-transpose --selftest        # text transposition and note editing checks
 cd tools/ocr
 .venv/bin/singtogether-eval --engines homr hybrid       # recognition accuracy against truth/ → out/report.md
@@ -172,6 +185,9 @@ Sample scores go in `music_scores/korean` and `music_scores/english` (not in the
 and signs everything. With `DEVELOPER_ID="Developer ID Application: …"` and `NOTARY_PROFILE=<notarytool keychain profile>` set,
 it signs with that identity and notarizes the disk image. SVG to PDF rendering uses WebKit through `singtogether-transpose --svg-to-pdf`,
 so no Homebrew packages are needed at run time.
+
+To publish a release: raise `CFBundleShortVersionString` in `Info.plist`, run `./dist.sh`, then
+`gh release create v<version> dist/SingTogether-<version>.dmg`.
 
 ## License
 
