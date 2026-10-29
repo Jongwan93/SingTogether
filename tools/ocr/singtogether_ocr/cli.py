@@ -42,7 +42,7 @@ def cache_get(key: str, out: Path) -> list[Path] | None:
     out.parent.mkdir(parents=True, exist_ok=True)
     copied = []
     for f in sorted(d.iterdir()):
-        target = out.with_suffix(f.suffix)
+        target = out.with_name(out.stem + f.name[len("result"):])     # result.review.json → <이름>.review.json
         shutil.copy(f, target)
         copied.append(target)
     return copied
@@ -53,7 +53,16 @@ def cache_put(key: str, files: list[Path]) -> None:
     d = CACHE_DIR / key
     d.mkdir(parents=True, exist_ok=True)
     for f in files:
-        shutil.copy(f, d / f.name.replace(f.stem, "result"))
+        shutil.copy(f, d / ("result" + "".join(f.suffixes)))           # <이름>.review.json → result.review.json
+
+
+def page_images(folder: Path, stem: str, kind: str) -> list[str]:
+    """folder 안의 <stem>-p<n>.<kind>.png 목록. 앱(Finder)은 NFD, 터미널은 NFC로 이름을 넘기므로 정규화해서 비교한다."""
+    import re
+    import unicodedata
+    want = unicodedata.normalize("NFC", stem)
+    pat = re.compile(rf"^{re.escape(want)}-p\d+\.{kind}\.png$")
+    return [str(p) for p in sorted(folder.iterdir()) if pat.match(unicodedata.normalize("NFC", p.name))] if folder.is_dir() else []
 
 
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
@@ -260,9 +269,8 @@ def main(argv=None) -> None:
         else:
             # 확인 그림은 캐시에 없지만, 같은 작업 폴더에서 전에 돌렸으면 아직 거기 있다 (앱의 클릭 수정에 필요)
             for kind in ("review", "page"):
-                found = sorted(out_base.parent.glob(f"{a.input.stem}-p*.{kind}.png"))
-                if found:
-                    result[f"{kind}_png"] = [str(p) for p in found]
+                if found := page_images(out_base.parent, a.input.stem, kind):
+                    result[f"{kind}_png"] = found
         if a.transpose:
             main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
             tr = transpose(main_out, a.transpose, result)
@@ -339,8 +347,8 @@ def main(argv=None) -> None:
           f"{len(t.notes)} notes, {n_chords} chords, {n_lyr} syllables, {t.seconds:.0f}s")
     print(f"→ {out}\n→ {txt}")
     result.update({"musicxml": str(out), "txt": str(txt), "review_json": str(rev_path), "summary": s_, "key": t.key_name,
-                   "review_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.review.png"))],
-                   "page_png": [str(p) for p in sorted(out_base.parent.glob(f"{a.input.stem}-p*.page.png"))]})
+                   "review_png": page_images(out_base.parent, a.input.stem, "review"),
+                   "page_png": page_images(out_base.parent, a.input.stem, "page")})
     if not a.no_cache:
         cache_put(key_, [out, txt, rev_path])
 

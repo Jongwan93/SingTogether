@@ -7,6 +7,7 @@ package enum SheetOCR {
         package var transposed: URL?        // 이조된 악보 (오선 악보면 .musicxml, 코드 차트면 .txt)
         package var transposedPDF: URL?     // 이조된 악보를 그린 PDF (오선 악보만)
         package var text: URL?              // 사람이 고칠 수 있는 압축 텍스트
+        package var reviewJSON: URL?        // 음표·코드·가사 자리와 신뢰도 (없으면 text 옆의 <이름>.review.json)
         package var reviewPNGs: [URL]       // 원본 위에 확인할 곳을 표시한 그림 (쪽마다)
         package var pagePNGs: [URL] = []    // 표시 없는 쪽 그림 (review.json 좌표와 같은 픽셀). 앱이 그 위에 직접 표시를 그린다
         package var keys: String?           // "G -> A"
@@ -186,7 +187,7 @@ package enum SheetOCR {
                 summary = "Chord chart: made a text version of chords and lyrics"
             }
         }
-        return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"),
+        return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"), reviewJSON: url("review_json"),
                       reviewPNGs: ((dict["review_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       pagePNGs: ((dict["page_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       keys: dict["keys"] as? String, summary: summary,

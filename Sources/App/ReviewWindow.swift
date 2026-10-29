@@ -169,7 +169,7 @@ final class ReviewWindowController: NSWindowController {
             imageView.frame = NSRect(origin: .zero, size: img.size)
             imageScroll.magnification = min(1, (imageScroll.bounds.width - 4) / max(1, img.size.width))
             if imageView.spots.isEmpty, let t = result.text {
-                imageView.load(reviewJSON: t.deletingPathExtension().appendingPathExtension("review.json"))
+                imageView.load(reviewJSON: result.reviewJSON ?? t.deletingPathExtension().appendingPathExtension("review.json"))
             }
         } else if let img = NSImage(contentsOf: original) {
             imageView.image = img
@@ -407,8 +407,9 @@ final class ReviewWindowController: NSWindowController {
             do {
                 var r = try SheetOCR.rerun(text: t, semitones: self.semitones,
                                            source: self.result.isChordSheet ? self.original : nil, font: self.chartFont)
-                r.reviewPNGs = self.result.reviewPNGs     // 확인 그림은 처음 것을 그대로 둔다
+                r.reviewPNGs = self.result.reviewPNGs     // 확인 그림과 자리 정보는 처음 것을 그대로 둔다
                 r.pagePNGs = self.result.pagePNGs
+                r.reviewJSON = self.result.reviewJSON
                 r.text = t
                 try? FileManager.default.removeItem(at: self.delivered)
                 let made = try SheetOCR.deliver(r, next: self.original, semitones: self.semitones)
