@@ -63,6 +63,8 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
     pairs = align(vision, claude, lambda v, c: cost(v[3], c), gap_a, gap_b)
     matched = sum(1 for i, j in pairs if i is not None and j is not None)
     ratio = matched / max(1, len(claude))
+    # 글자가 똑같이 읽힌 짝만 센 비율. 한글 음절끼리는 비슷하면 짝이 되므로(OCR 혼동 허용) 엉뚱한 곡도 matched는 꽤 나온다
+    exact = sum(1 for i, j in pairs if i is not None and j is not None and cost(vision[i][3], claude[j]) == 0) / max(1, len(claude))
     out: list[Placed] = []
     pending: list[str] = []                        # 앵커 사이에 낀 Claude 전용 항목
     last_anchor: Placed | None = None
@@ -108,7 +110,7 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
                 out.append(Placed(si, x, y, text, conf, "vision"))
     flush(None)
     out.sort(key=lambda p: (p.system, p.x))
-    return out, ratio
+    return out, ratio, exact
 
 
 # MARK: 코드
@@ -123,19 +125,32 @@ def _chord_cost(v: str, c: str) -> float:
     return 1.3
 
 
+def trust(exact_ratio: float, n_ai: int, n_vision: int) -> bool:
+    """AI 전사를 믿을지. 글자가 똑같이 읽힌 앵커가 너무 적으면 AI가 다른 곡을 읽었거나 지어낸 것이다.
+    Vision이 거의 못 읽은 쪽이면 비교할 수 없으니 AI를 믿는다. 기준값은 cli의 실측 주석 참고."""
+    if n_ai == 0:
+        return False
+    if n_vision < 3:
+        return True
+    return exact_ratio >= TRUST_MIN
+
+
+TRUST_MIN = 0.3
+
+
 def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: list[System], il: float
-                 ) -> tuple[list[list[TextBox]], float]:
-    """Vision 코드 상자(오선별) + Claude 코드 열 → 오선별 TextBox (글자는 Claude). (결과, 앵커 비율)"""
+                 ) -> tuple[list[list[TextBox]], float, float]:
+    """Vision 코드 상자(오선별) + Claude 코드 열 → 오선별 TextBox (글자는 Claude). (결과, 앵커 비율, 똑같이 읽힌 비율)"""
     v_items = [(si, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.text, b.conf) for si, boxes in enumerate(vision) for b in boxes]
     c_items = [n.chord for n in claude_t.notes if n.chord]
     if not c_items:
-        return vision, 0.0
+        return vision, 0.0, 0.0
     # Claude에 없는 Vision 코드는 잡음일 때가 많다. 여러 번 읽어도 같았던 것(확신도 0.75+)만 남긴다
-    placed, ratio = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= 0.75)
+    placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= 0.75)
     out: list[list[TextBox]] = [[] for _ in systems]
     for p in placed:
         out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il), p.source))
-    return out, ratio
+    return out, ratio, exact
 
 
 # MARK: 가사
@@ -151,11 +166,11 @@ def _lyric_cost(v: str, c: str) -> float:
 
 
 def merge_lyrics(vision: list[list[list[Syllable]]], claude_t: Transcription, systems: list[System], il: float
-                 ) -> tuple[list[list[list[Syllable]]], float]:
-    """Vision 음절(오선별·절별) + Claude 가사(음표별) → 오선별·절별 Syllable (글자는 Claude). (결과, 1절 앵커 비율)"""
+                 ) -> tuple[list[list[list[Syllable]]], float, float]:
+    """Vision 음절(오선별·절별) + Claude 가사(음표별) → 오선별·절별 Syllable (글자는 Claude). (결과, 1절 앵커 비율, 1절 똑같이 읽힌 비율)"""
     n_verses = max((len(n.lyrics) for n in claude_t.notes), default=0)
     out: list[list[list[Syllable]]] = [[] for _ in systems]
-    ratio0 = 0.0
+    ratio0 = exact0 = 0.0
     for v in range(n_verses):
         c_items = [n.lyrics[v] if v < len(n.lyrics) else "" for n in claude_t.notes if not n.is_rest]
         if not any(c_items):
@@ -164,10 +179,10 @@ def merge_lyrics(vision: list[list[list[Syllable]]], claude_t: Transcription, sy
         if not v_items:                             # Vision이 그 절을 못 봤으면 자리 정보가 없다 → 건너뜀
             continue
         # Claude가 빠뜨린 음절(회수율 ~90%)을 Vision이 읽었으면 남긴다. 한글·영어 글자만 (기호 잡음은 버림)
-        placed, ratio = place(v_items, c_items, _lyric_cost, systems,
+        placed, ratio, exact = place(v_items, c_items, _lyric_cost, systems,
                               keep_vision_only=lambda text, conf: bool(text) and (bool(_HANGUL.search(text)) or text.isalpha()))
         if v == 0:
-            ratio0 = ratio
+            ratio0, exact0 = ratio, exact
         for row in out:
             while len(row) <= v:
                 row.append([])
@@ -179,4 +194,4 @@ def merge_lyrics(vision: list[list[list[Syllable]]], claude_t: Transcription, sy
                 out[si].append(list(sylls))
             elif not out[si][v]:
                 out[si][v] = list(sylls)
-    return out, ratio0
+    return out, ratio0, exact0

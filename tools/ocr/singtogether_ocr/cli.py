@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-28c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-28d"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -81,6 +81,7 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
             symbols = notes.find_symbols(page, systems, debug_dir)
             assemble.place_notes(t, systems, symbols)
             claude_t = None
+            ai_used = False
             if claude_eng:
                 try:
                     claude_t = claude_eng.transcribe(page, work, debug_dir)
@@ -89,8 +90,15 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
             if chords:
                 chord_boxes = text.read_chords(page, systems, debug_dir)
                 if claude_t:
-                    chord_boxes, ratio = hybrid.merge_chords(chord_boxes, claude_t, systems, page.interline)
-                    print(f"hybrid chords: {who} {sum(1 for n in claude_t.notes if n.chord)}, anchored {ratio:.0%}")
+                    # 실측(주님의 임재 앞에서): 제대로 읽으면 exact 코드 92%·가사 80%, 다른 곡의 답을 주면 코드 2%·가사 11%
+                    merged_boxes, ratio, exact = hybrid.merge_chords(chord_boxes, claude_t, systems, page.interline)
+                    n_ai = sum(1 for n in claude_t.notes if n.chord)
+                    if hybrid.trust(exact, n_ai, sum(len(b) for b in chord_boxes)):
+                        chord_boxes = merged_boxes
+                        ai_used = True
+                        print(f"hybrid chords: {who} {n_ai}, anchored {ratio:.0%} (exact {exact:.0%})")
+                    else:                    # AI가 엉뚱한 답(다른 곡·지어낸 코드)을 냈다: Vision만 쓴다
+                        print(f"hybrid chords: {who} answer does not match the image (exact anchors {exact:.0%}, {n_ai} chords), using Vision only")
                 assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord])
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
@@ -100,15 +108,21 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
             if lyrics_:
                 sylls = lyrics.read_lyrics(page, systems, debug_dir)
                 if claude_t:
-                    sylls, ratio = hybrid.merge_lyrics(sylls, claude_t, systems, page.interline)
-                    print(f"hybrid lyrics: anchored {ratio:.0%}")
+                    merged_sylls, ratio, exact = hybrid.merge_lyrics(sylls, claude_t, systems, page.interline)
+                    n_ai = sum(1 for n in claude_t.notes if n.lyrics and n.lyrics[0])
+                    if hybrid.trust(exact, n_ai, sum(len(v) for verses in sylls for v in verses)):
+                        sylls = merged_sylls
+                        ai_used = True
+                        print(f"hybrid lyrics: anchored {ratio:.0%} (exact {exact:.0%})")
+                    else:
+                        print(f"hybrid lyrics: {who} answer does not match the image (exact anchors {exact:.0%}), using Vision only")
                 lyrics.attach_lyrics(t, sylls, page.interline)
-                if claude_t and claude_t.title:
+                if claude_t and ai_used and claude_t.title:
                     t.title, t.composer = claude_t.title, claude_t.composer
                 if not t.title:
                     t.title, t.composer = lyrics.read_title(page, systems)
             review.check_rhythm(t)
-            if claude_t:
+            if claude_t and ai_used:
                 review.mark_claude(t, claude_t)
             if debug_dir:
                 assemble.overlay(page, t, debug_dir)
@@ -193,7 +207,7 @@ def transpose(musicxml: Path, semitones: int, result: dict | None = None) -> Pat
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="singtogether-ocr", description="Score image/PDF → MusicXML, transposed copy, review files")
-    ap.add_argument("input", type=Path)
+    ap.add_argument("input", type=Path, nargs="?")
     ap.add_argument("--out", type=Path, help="output MusicXML (default: <name>.musicxml next to the input)")
     ap.add_argument("--engine", default="homr", choices=list(engines.NAMES) + ["auto"],
                     help="auto = hybrid when an AI CLI (--llm) is available, otherwise homr")
@@ -210,7 +224,16 @@ def main(argv=None) -> None:
                     help="AI CLI that reads chords and lyrics: claude (Claude Code) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
     ap.add_argument("--no-cache", action="store_true", help="neither read nor write the result cache (~/Library/Caches/SingTogether/ocr)")
     ap.add_argument("--json", action="store_true", help="print result paths and summary as one JSON line at the end (used by the app)")
+    ap.add_argument("--check-llm", metavar="NAME", choices=llm.PROVIDERS, help="report whether that AI CLI is installed and signed in, then exit")
     a = ap.parse_args(argv)
+    if a.check_llm:
+        status = llm.check(a.check_llm)
+        print(status["message"])
+        if a.json:
+            print("JSON " + json.dumps(status))
+        return
+    if a.input is None:
+        ap.error("input file is required")
     if a.engine == "auto":
         a.engine = "hybrid" if llm.pick(a.llm) != "none" else "homr"
     a.llm = llm.pick(a.llm)          # 캐시 키에 실제로 쓸 것을 넣는다
@@ -286,6 +309,7 @@ def main(argv=None) -> None:
     t = recognize(a.input, a.engine, a.work, a.debug, chords=not a.no_chords, interline=a.interline, lyrics_=not a.no_lyrics,
                   mask_text=not a.no_mask, review_dir=out_base.parent, llm_name=a.llm)
     rev = review.assess(t)
+    rev["interline"] = a.interline          # review.png 위 코드·가사 상자 위치 계산용 (앱)
     out, txt = write_outputs(t, out_base)
     rev_path = out.with_suffix(".review.json")
     rev_path.write_text(json.dumps(rev, ensure_ascii=False, indent=1))

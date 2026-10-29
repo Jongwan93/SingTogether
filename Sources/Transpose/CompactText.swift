@@ -107,6 +107,67 @@ package struct CompactText {
         return nil
     }
 
+    // MARK: 코드 기호 — 음표 바로 앞의 `[X]` 토큰
+
+    /// index번째 음표 앞에 붙은 코드 토큰의 위치 (앞 음표와 이 음표 사이에서 찾는다).
+    private static func chordSlot(_ loc: (line: Int, head: String, toks: [String], tail: String, at: Int)) -> Int? {
+        var i = loc.at - 1
+        while i >= 0, parse(loc.toks[i]) == nil {
+            if loc.toks[i].hasPrefix("["), loc.toks[i].hasSuffix("]") { return i }
+            i -= 1
+        }
+        return nil
+    }
+
+    package func chord(measure: Int, index: Int) -> String? {
+        guard let loc = locate(measure: measure, index: index), let i = Self.chordSlot(loc) else { return nil }
+        return String(loc.toks[i].dropFirst().dropLast())
+    }
+
+    /// 코드를 바꾸거나(없으면 음표 앞에 끼워 넣고) 지운다(nil 또는 빈 문자열).
+    @discardableResult
+    package mutating func setChord(measure: Int, index: Int, _ chord: String?) -> Bool {
+        guard let loc = locate(measure: measure, index: index) else { return false }
+        var toks = loc.toks
+        let clean = chord?.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "") ?? ""
+        if let i = Self.chordSlot(loc) {
+            if clean.isEmpty { toks.remove(at: i) } else { toks[i] = "[\(clean)]" }
+        } else if !clean.isEmpty {
+            toks.insert("[\(clean)]", at: loc.at)
+        }
+        write(loc, toks)
+        return true
+    }
+
+    // MARK: 가사 — `|` 뒤 1절, 쉼표가 아닌 음표마다 한 음절
+
+    /// (1절 음절 배열, 이 음표의 음절 위치, 나머지 절 문자열들). 쉼표면 nil.
+    private func lyricSlot(_ loc: (line: Int, head: String, toks: [String], tail: String, at: Int)) -> (verse: [String], k: Int, others: [String])? {
+        guard let t = Self.parse(loc.toks[loc.at]), t.step != nil else { return nil }
+        let k = loc.toks[..<loc.at].filter { Self.parse($0).map { $0.step != nil } ?? false }.count
+        let verses = loc.tail.split(separator: "|", omittingEmptySubsequences: false).dropFirst().map(String.init)
+        let verse = (verses.first ?? "").split(separator: " ").map(String.init)
+        return (verse, k, Array(verses.dropFirst()))
+    }
+
+    package func lyric(measure: Int, index: Int) -> String? {
+        guard let loc = locate(measure: measure, index: index), let slot = lyricSlot(loc) else { return nil }
+        guard slot.k < slot.verse.count else { return nil }
+        return slot.verse[slot.k] == "_" ? "" : slot.verse[slot.k]
+    }
+
+    /// 1절 음절을 바꾼다. 빈 문자열은 `_`(새 음절 없음). 음절이 모자라면 `_`로 채운 뒤 넣는다.
+    @discardableResult
+    package mutating func setLyric(measure: Int, index: Int, _ syllable: String) -> Bool {
+        guard let loc = locate(measure: measure, index: index), var slot = lyricSlot(loc) else { return false }
+        let s = syllable.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "")
+        while slot.verse.count <= slot.k { slot.verse.append("_") }
+        slot.verse[slot.k] = s.isEmpty ? "_" : s
+        let tail = (["| " + slot.verse.joined(separator: " ")] + slot.others.map { "|" + $0 }).joined(separator: " ")
+        lines[loc.line] = loc.head + " " + loc.toks.joined(separator: " ") + " " + tail
+        return true
+    }
+
     /// 계이름 한 칸(음이름 글자) 위·아래. 임시표는 조표를 따른다 (G장조에서 E→F는 F♯).
     package mutating func shiftStep(measure: Int, index: Int, by delta: Int) -> Token? {
         let f = fifths

@@ -48,7 +48,7 @@ final class ReviewWindowController: NSWindowController {
         imageScroll.allowsMagnification = true
         imageScroll.minMagnification = 0.25
         imageScroll.maxMagnification = 4
-        let left = labeled("Original — red: notes to check, orange: chords, purple: lyrics · click a note to fix it (green: fixed)", imageScroll)
+        let left = labeled("Original — red: notes to check, orange: chords, purple: lyrics · click any note, chord or syllable to fix it (green: fixed)", imageScroll)
         imageView.onPick = { [weak self] spot, rect in self?.pick(spot, at: rect) }
 
         pdfView.autoScales = true
@@ -140,35 +140,57 @@ final class ReviewWindowController: NSWindowController {
         }
     }
 
-    /// 그림에서 음표를 클릭: 팝오버를 띄우고, 고칠 때마다 .txt에 쓰고 잠시 뒤 PDF를 다시 만든다
+    /// 그림에서 음표·코드·가사를 클릭: 팝오버를 띄우고, 고칠 때마다 .txt에 쓰고 잠시 뒤 PDF를 다시 만든다
     private func pick(_ spot: ReviewImageView.Spot, at rect: NSRect) {
         guard let textURL = result.text else { return }
         popover?.close()
-        let editor = NoteEditorController(spot: spot) { [weak self] edit in
-            guard let self, var text = (try? String(contentsOf: textURL, encoding: .utf8)).map(CompactText.init) else { return nil }
-            var newName: String? = nil
-            var newLength: String? = nil
-            switch edit {
-            case .step(let d):
-                newName = text.shiftStep(measure: spot.measure, index: spot.index, by: d)?.name
-            case .accidental(let a):
-                newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; if t.step != nil { t.alter = a }; return t }?.name
-            case .length(let l):
-                newLength = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.length = l; return t }?.length
-            case .rest:
-                newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.step = nil; t.tie = false; return t }?.name
-            case .delete:
-                text.update(measure: spot.measure, index: spot.index) { _ in nil }
+        let read = { (try? String(contentsOf: textURL, encoding: .utf8)).map(CompactText.init) }
+        let editor: NSViewController
+        switch spot.kind {
+        case .note:
+            editor = NoteEditorController(spot: spot, chord: read()?.chord(measure: spot.measure, index: spot.index)) { [weak self] edit in
+                guard let self, var text = read() else { return nil }
+                var newName: String? = nil
+                var newLength: String? = nil
+                switch edit {
+                case .step(let d):
+                    newName = text.shiftStep(measure: spot.measure, index: spot.index, by: d)?.name
+                case .accidental(let a):
+                    newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; if t.step != nil { t.alter = a }; return t }?.name
+                case .length(let l):
+                    newLength = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.length = l; return t }?.length
+                case .rest:
+                    newName = text.update(measure: spot.measure, index: spot.index) { var t = $0; t.step = nil; t.tie = false; return t }?.name
+                case .delete:
+                    text.update(measure: spot.measure, index: spot.index) { _ in nil }
+                case .chord(let c):
+                    text.setChord(measure: spot.measure, index: spot.index, c)
+                }
+                try? text.text.write(to: textURL, atomically: true, encoding: .utf8)
+                switch edit {
+                case .delete:
+                    self.imageView.remove(measure: spot.measure, index: spot.index)
+                case .chord(let c):
+                    self.imageView.update(.chord, measure: spot.measure, index: spot.index, name: c)
+                default:
+                    self.imageView.update(.note, measure: spot.measure, index: spot.index, name: newName, duration: newLength)
+                }
+                self.scheduleRebuild()
+                if case .delete = edit { return nil }
+                return newName ?? self.imageView.spots.first { $0.kind == .note && $0.measure == spot.measure && $0.index == spot.index }?.name ?? spot.name
             }
-            try? text.text.write(to: textURL, atomically: true, encoding: .utf8)
-            if case .delete = edit {
-                self.imageView.remove(measure: spot.measure, index: spot.index)
-            } else {
-                self.imageView.update(measure: spot.measure, index: spot.index, name: newName, duration: newLength)
+        case .chord, .lyric:
+            editor = TextEditorController(spot: spot) { [weak self] value in
+                guard let self, var text = read() else { return }
+                if spot.kind == .chord {
+                    text.setChord(measure: spot.measure, index: spot.index, value)
+                } else {
+                    text.setLyric(measure: spot.measure, index: spot.index, value ?? "")
+                }
+                try? text.text.write(to: textURL, atomically: true, encoding: .utf8)
+                self.imageView.update(spot.kind, measure: spot.measure, index: spot.index, name: value ?? (spot.kind == .chord ? "" : "_"))
+                self.scheduleRebuild()
             }
-            self.scheduleRebuild()
-            if case .delete = edit { return nil }
-            return newName ?? self.imageView.spots.first { $0.measure == spot.measure && $0.index == spot.index }?.name ?? spot.name
         }
         let pop = NSPopover()
         pop.contentViewController = editor

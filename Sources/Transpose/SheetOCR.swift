@@ -48,6 +48,39 @@ package enum SheetOCR {
         return names.contains { n in dirs.contains { FileManager.default.isExecutableFile(atPath: $0 + "/" + n) } }
     }
 
+    /// 마지막 로그인 확인 결과. false면 인식할 때 AI를 건너뛴다 (실패를 기다리느라 시간을 버리지 않게).
+    package static var llmReady: Bool?
+
+    /// 고른 AI CLI가 설치·로그인돼 있는지 (`singtogether-ocr --check-llm`). Claude는 0.1초, Gemini는 약 7초 걸린다.
+    package static func check(llm name: String) -> (ok: Bool, message: String) {
+        guard llmChoices.contains(where: { $0.id == name }) else { return (false, "No AI selected") }
+        guard let tool = locate() else { return (false, Failure.notInstalled.localizedDescription) }
+        let p = Process()
+        p.executableURL = tool
+        p.arguments = ["--check-llm", name, "--json"]
+        p.environment = environment()
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        do { try p.run() } catch { return (false, error.localizedDescription) }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self)
+        guard let line = text.components(separatedBy: "\n").last(where: { $0.hasPrefix("JSON ") }),
+              let dict = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(5).utf8)) as? [String: Any] else {
+            return (false, "Could not check \(name): " + text.suffix(200))
+        }
+        let ok = dict["signed_in"] as? Bool == true
+        llmReady = ok
+        return (ok, dict["message"] as? String ?? "")
+    }
+
+    private static func environment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:" + FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        return env
+    }
+
     static func readerName(_ method: String) -> String {
         method.replacingOccurrences(of: "claude", with: "Claude").replacingOccurrences(of: "gemini", with: "Gemini").replacingOccurrences(of: "vision", with: "Apple Vision")
             .replacingOccurrences(of: "none", with: "Apple Vision")
@@ -92,15 +125,16 @@ package enum SheetOCR {
 
     private static func invoke(input: URL, semitones: Int, out: URL?, work: URL) throws -> Result {
         guard let tool = locate() else { throw Failure.notInstalled }
-        var args = [input.path, "--engine", "auto", "--llm", llm, "--transpose", String(semitones), "--render", "--json",
+        // 로그인 확인에 실패한 AI는 다시 한 번 확인해 보고, 그래도 안 되면 Apple Vision만 쓴다
+        var reader = llm
+        if llmReady == false, !check(llm: llm).ok { reader = "none" }
+        var args = [input.path, "--engine", "auto", "--llm", reader, "--transpose", String(semitones), "--render", "--json",
                     "--work", work.appendingPathComponent("work").path]
         if let out { args += ["--out", out.path] }
         let p = Process()
         p.executableURL = tool
         p.arguments = args
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:" + FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
-        p.environment = env
+        p.environment = environment()
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe

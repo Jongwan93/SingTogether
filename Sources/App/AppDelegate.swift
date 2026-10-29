@@ -178,10 +178,42 @@ extension AppDelegate {
         let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         if choices.indices.contains(index) { SheetOCR.llm = choices[index].id }
         updateReaderItem()
+        verifyReader()
+    }
+
+    /// 고른 AI가 로그인돼 있는지 뒤에서 확인한다. 안 돼 있으면 알리고, 그동안은 Apple Vision만 쓴다.
+    func verifyReader() {
+        let name = SheetOCR.llm
+        guard SheetOCR.llmChoices.contains(where: { $0.id == name }) else { return }
+        readerItem.title = "Reading with \(label(name)) — checking sign-in…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = SheetOCR.check(llm: name)
+            DispatchQueue.main.async {
+                guard let self, SheetOCR.llm == name else { return }
+                self.updateReaderItem()
+                guard !r.ok else { return }
+                let alert = NSAlert()
+                alert.messageText = "\(self.label(name)) is not signed in"
+                alert.informativeText = r.message + "\n\nUntil then, image scores are read with Apple Vision only (less accurate). Sign in, then choose Check again."
+                alert.addButton(withTitle: "OK")
+                alert.addButton(withTitle: "Check again")
+                alert.addButton(withTitle: "Choose another AI")
+                NSApp.activate(ignoringOtherApps: true)
+                switch alert.runModal() {
+                case .alertSecondButtonReturn: self.verifyReader()
+                case .alertThirdButtonReturn: self.chooseReader()
+                default: break
+                }
+            }
+        }
+    }
+
+    private func label(_ id: String) -> String {
+        SheetOCR.llmChoices.first { $0.id == id }?.label ?? "Apple Vision"
     }
 
     func updateReaderItem() {
-        let name = SheetOCR.llmChoices.first { $0.id == SheetOCR.llm }?.label ?? "Apple Vision"
-        readerItem.title = "Reading with \(name) — Change…"
+        let state = SheetOCR.llmReady == false ? " (not signed in → Apple Vision)" : ""
+        readerItem.title = "Reading with \(label(SheetOCR.llm))\(state) — Change…"
     }
 }

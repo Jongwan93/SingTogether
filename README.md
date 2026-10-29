@@ -45,7 +45,9 @@ brew install librsvg            # rsvg-convert, used to write the PDF
 
 - Chords and lyrics are read much more accurately with an AI command-line tool that is installed and logged in on the Mac:
   [Claude Code](https://claude.com/claude-code) (`claude`) or Google [Antigravity](https://antigravity.google) (`agy`).
-  When the app starts it asks *Which AI should read your scores?* with a button for each. Change it later with **Reading with … — Change…** in the ♪ menu. Without either, the app uses Apple Vision only.
+  When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
+  If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu.
+  If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 - The app looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 - To start at login: System Settings → General → Login Items → add SingTogether.
 - macOS may ask once for permission to access the Desktop or Documents folder.
@@ -56,7 +58,8 @@ Recognition is never perfect, so every image score opens a review window:
 
 - **Left:** the original with suspicious spots marked. Red boxes are notes, orange are chords, purple are lyric syllables. Each note is labeled with its measure number and what was read.
 - **Right:** the transposed score. Notes that need checking are drawn in red.
-- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete. The PDF is rebuilt right away. Fixed notes get a green outline.
+- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The PDF is rebuilt right away. Fixed items get a green outline.
+- **Click a chord or a lyric syllable** (the orange and purple boxes, but any chord or syllable works) to retype it or remove it.
 - For bigger changes use **Edit Text…**, which opens the score as plain text (format below), then **Rebuild from Text**.
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
@@ -110,13 +113,13 @@ tools/ocr/.venv/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # cho
 ```
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
-`--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
+`--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|gemini` to report whether it is installed and signed in,
+`--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 
 ## Limits
 
 - Single-line melody with chords and lyrics is the target. Whole notes, tuplets, multiple voices and two-staff piano scores are not handled.
 - Accuracy follows image quality. Upscaling the image does not help (tested); a better source file does.
-- Chords and lyrics can only be fixed through the text editor for now.
 - The app depends on the Python environment in this repository and on `rsvg-convert` from Homebrew. Sharing it with other Macs means bundling those first.
 
 ## Development

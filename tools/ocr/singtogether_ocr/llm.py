@@ -56,6 +56,39 @@ def available() -> dict[str, str]:
     return {p: b[1] for p in PROVIDERS if (b := binary(p))}
 
 
+def check(provider: str, timeout: int = 45) -> dict:
+    """설치·로그인 상태. {"provider", "installed", "signed_in", "message"}. 앱이 시작할 때와 AI를 고를 때 부른다.
+    claude는 `claude auth status`(0.1초), agy는 상태 명령이 없어 한 단어 답을 시켜 본다(약 7초)."""
+    import subprocess
+    found = binary(provider)
+    label = LABELS.get(provider, provider)
+    if not found:
+        return {"provider": provider, "installed": False, "signed_in": False, "message": f"{label} CLI is not installed"}
+    name, path = found
+    try:
+        if name == "claude":
+            p = subprocess.run([path, "auth", "status"], capture_output=True, text=True, timeout=timeout)
+            out = p.stdout.strip()
+            ok = bool(json.loads(out[out.index("{"):]).get("loggedIn")) if "{" in out else False
+            hint = "Open Terminal and run: claude"
+        elif name == "agy":
+            p = subprocess.run([path, "--print-timeout", f"{timeout - 5}s", "-p=Reply with exactly the word OK and nothing else."],
+                               capture_output=True, text=True, timeout=timeout)
+            out = p.stdout + p.stderr
+            ok = p.returncode == 0 and "OK" in out and not re.search(r"sign in|log ?in|unauthorized|not authenticated", out, re.I)
+            hint = "Open Terminal and run: agy"
+        else:
+            p = subprocess.run([path, "--approval-mode", "plan", "-p", "Reply with exactly the word OK."],
+                               capture_output=True, text=True, timeout=timeout)
+            out = p.stdout + p.stderr
+            ok = p.returncode == 0 and "OK" in out and not re.search(r"IneligibleTierError|Error authenticating", out)
+            hint = "Set GEMINI_API_KEY or install Antigravity (agy)"
+    except Exception as e:   # 시간 초과 등
+        return {"provider": provider, "installed": True, "signed_in": False, "message": f"{label} did not answer ({type(e).__name__})"}
+    return {"provider": provider, "installed": True, "signed_in": ok,
+            "message": f"{label} is signed in" if ok else f"{label} is installed but not signed in. {hint}"}
+
+
 def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
     """그림 한 장과 지시문을 주고 답 글을 받는다. 지시문의 {image}는 그림의 절대 경로로 바뀐다."""
     found = binary(provider)
