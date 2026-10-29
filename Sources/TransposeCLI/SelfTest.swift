@@ -48,6 +48,10 @@ enum SelfTest {
         check(CompactText(sample.replacingOccurrences(of: "G major", with: "Eb major")).fifths == -3, "Eb major")
         check(CompactText(sample.replacingOccurrences(of: "G major", with: "E minor")).fifths == 1, "E minor")
         check(ChordText.transpose("Intro: Bb9-Dm7-Eb-F", semitones: 2).contains("C9-Em7-F-G"), "hyphenated chord run transposed")
+        check(ChordText.transpose("E    B/D#   A   C#m", semitones: 2) == "F#   C#/E#  B   D#m", "letter spelling: E major +2 gives C#/E#: \(ChordText.transpose("E    B/D#   A   C#m", semitones: 2))")
+        check(ChordText.transpose("Db   Gb   Ab   Bbm", semitones: 1) == "D    G    A    Bm", "flat key +1 loses the flats")
+        check(ChordText.transpose("G    D/F#  Em   C", semitones: -2) == "F    C/E   Dm   Bb", "G -2 → F uses flats")
+        check(ChordText.transpose("F#   C#/E#  B", semitones: 2) == "Ab   Eb/G   Db", "double sharp falls back to simple spelling")
         check(ChordText.detectKey("C G D Em\n") .map { $0.root } == 7, "C G D Em → G")
         print(failures == 0 ? "self-test passed" : "self-test failed: \(failures)")
         return failures == 0 ? 0 : 1

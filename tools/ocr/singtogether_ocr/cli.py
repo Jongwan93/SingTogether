@@ -157,14 +157,14 @@ def recognize_chordsheet(src: Path, llm: str = "auto", work: Path | None = None,
     return "\n".join(texts)
 
 
-def chart_overlay(src: Path, chart_text: str, semitones: int, transposed_txt: Path, result: dict) -> Path | None:
+def chart_overlay(src: Path, chart_text: str, semitones: int, transposed_txt: Path, result: dict, font: str | None = None) -> Path | None:
     """코드 차트: 원본 그림 위에서 코드만 바꾼 그림을 이조된 .txt 옆에 같은 이름으로 만든다 (확장자는 원본과 같게)."""
     from . import chordoverlay
     ext = src.suffix.lower() if src.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".pdf", ".bmp", ".tif", ".tiff") else ".png"
     out = transposed_txt.with_suffix(ext)
     review_png = transposed_txt.parent / f"{src.stem}-p1.review.png"
     try:
-        r = chordoverlay.overlay(src, chart_text, semitones, out, review_png)
+        r = chordoverlay.overlay(src, chart_text, semitones, out, review_png, font)
     except Exception as e:                          # 그림을 못 만들어도 .txt는 있다
         print(f"chord image failed (text is there): {e}")
         result["overlay_error"] = str(e)
@@ -225,6 +225,8 @@ def main(argv=None) -> None:
     ap.add_argument("--no-cache", action="store_true", help="neither read nor write the result cache (~/Library/Caches/SingTogether/ocr)")
     ap.add_argument("--json", action="store_true", help="print result paths and summary as one JSON line at the end (used by the app)")
     ap.add_argument("--check-llm", metavar="NAME", choices=llm.PROVIDERS, help="report whether that AI CLI is installed and signed in, then exit")
+    ap.add_argument("--source", type=Path, metavar="IMAGE", help="with a chord-chart .txt input: the original image to rewrite the chords on")
+    ap.add_argument("--chart-font", metavar="NAME", help="font for rewritten chords (see chordoverlay.FONTS); default: closest match to the original")
     a = ap.parse_args(argv)
     if a.check_llm:
         status = llm.check(a.check_llm)
@@ -260,7 +262,7 @@ def main(argv=None) -> None:
             tr = transpose(main_out, a.transpose, result)
             print(f"→ {tr}")
             if result.get("chordsheet") and a.input.suffix.lower() != ".txt":
-                chart_overlay(a.input, main_out.read_text(), a.transpose, tr, result)
+                chart_overlay(a.input, main_out.read_text(), a.transpose, tr, result, a.chart_font)
             if a.render and tr.suffix != ".txt":
                 from .render import render
                 for p in (main_out, tr):
@@ -268,6 +270,16 @@ def main(argv=None) -> None:
                         print(f"→ {f}")
                         if f.suffix == ".pdf":
                             result["transposed_pdf" if p == tr else "pdf"] = str(f)
+        finish()
+        return
+
+    if a.input.suffix.lower() == ".txt" and a.source:
+        # 사람이 고친 코드 차트 텍스트 + 원본 그림 → 이조한 텍스트와, 원본 위에서 코드만 바꾼 그림
+        result["chordsheet"], result["txt"] = True, str(a.input)
+        if a.transpose:
+            tr = transpose(a.input, a.transpose, result)
+            print(f"→ {tr}")
+            chart_overlay(a.source, a.input.read_text(), a.transpose, tr, result, a.chart_font)
         finish()
         return
 
@@ -301,7 +313,7 @@ def main(argv=None) -> None:
         if a.transpose:
             tr = transpose(out, a.transpose, result)
             print(f"→ {tr}")
-            chart_overlay(a.input, chart, a.transpose, tr, result)
+            chart_overlay(a.input, chart, a.transpose, tr, result, a.chart_font)
         finish()
         return
 

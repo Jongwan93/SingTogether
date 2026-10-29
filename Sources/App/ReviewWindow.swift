@@ -18,6 +18,10 @@ final class ReviewWindowController: NSWindowController {
     private var rebuildWork: DispatchWorkItem?
     private let imageScroll = NSScrollView()
     private let spinner = NSProgressIndicator()
+    private var history: [(text: String, spots: [ReviewImageView.Spot], edited: Set<String>)] = []
+    private let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var chartFont: String?        // 코드 차트: 사용자가 고른 글꼴 (nil = 자동)
 
     init(original: URL, semitones: Int, result: SheetOCR.Result, delivered: URL) {
         self.original = original
@@ -65,10 +69,20 @@ final class ReviewWindowController: NSWindowController {
         let redo = NSButton(title: "Rebuild from Text", target: self, action: #selector(rebuild))
         redo.keyEquivalent = "\r"
         let reveal = NSButton(title: "Show Result in Finder", target: self, action: #selector(revealResult))
+        undoButton.target = self
+        undoButton.action = #selector(undo(_:))
+        undoButton.toolTip = "Undo the last click-fix (⌘Z)"
+        undoButton.isEnabled = false
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isHidden = true
-        let bar = NSStackView(views: [summary, NSView(), spinner, fix, redo, reveal])
+        // 코드 차트: 코드 글꼴을 직접 고를 수 있다 (자동 판별이 세리프 글꼴을 잘 못 알아본다)
+        fontPopup.addItem(withTitle: "Font: Automatic")
+        fontPopup.addItems(withTitles: SheetOCR.chartFonts)
+        fontPopup.target = self
+        fontPopup.action = #selector(fontChanged)
+        fontPopup.isHidden = !result.isChordSheet
+        let bar = NSStackView(views: [summary, NSView(), spinner, fontPopup, undoButton, fix, redo, reveal])
         bar.orientation = .horizontal
         bar.spacing = 10
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 10, right: 14)
@@ -109,6 +123,10 @@ final class ReviewWindowController: NSWindowController {
 
     private func load() {
         summary.stringValue = "\(result.summary)   ·   \(result.keys ?? "")   ·   \(result.engine)"
+        if let f = result.chartFont, chartFont == nil, let i = SheetOCR.chartFonts.firstIndex(of: f) {
+            fontPopup.selectItem(at: i + 1)
+            fontPopup.itemArray[0].title = "Font: Automatic (\(f))"
+        }
         if let png = result.reviewPNGs.first, let img = NSImage(contentsOf: png) {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
@@ -150,6 +168,7 @@ final class ReviewWindowController: NSWindowController {
         case .note:
             editor = NoteEditorController(spot: spot, chord: read()?.chord(measure: spot.measure, index: spot.index)) { [weak self] edit in
                 guard let self, var text = read() else { return nil }
+                self.snapshot(text.text)
                 var newName: String? = nil
                 var newLength: String? = nil
                 switch edit {
@@ -182,6 +201,7 @@ final class ReviewWindowController: NSWindowController {
         case .chord, .lyric:
             editor = TextEditorController(spot: spot) { [weak self] value in
                 guard let self, var text = read() else { return }
+                self.snapshot(text.text)
                 if spot.kind == .chord {
                     text.setChord(measure: spot.measure, index: spot.index, value)
                 } else {
@@ -199,11 +219,35 @@ final class ReviewWindowController: NSWindowController {
         popover = pop
     }
 
+    /// 클릭 수정 전의 텍스트와 표시 상태를 쌓아 둔다 (⌘Z / Undo 버튼).
+    private func snapshot(_ text: String) {
+        history.append((text, imageView.spots, imageView.edited))
+        if history.count > 50 { history.removeFirst() }
+        undoButton.isEnabled = true
+    }
+
+    @objc func undo(_ sender: Any?) {
+        guard let textURL = result.text, let last = history.popLast() else { NSSound.beep(); return }
+        popover?.close()
+        try? last.text.write(to: textURL, atomically: true, encoding: .utf8)
+        imageView.spots = last.spots
+        imageView.edited = last.edited
+        imageView.needsDisplay = true
+        undoButton.isEnabled = !history.isEmpty
+        scheduleRebuild()
+    }
+
     private func scheduleRebuild() {
         rebuildWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.rebuild() }
         rebuildWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+    }
+
+    @objc private func fontChanged() {
+        let i = fontPopup.indexOfSelectedItem
+        chartFont = i == 0 ? nil : SheetOCR.chartFonts[i - 1]
+        rebuild()
     }
 
     @objc private func openText() {
@@ -224,7 +268,8 @@ final class ReviewWindowController: NSWindowController {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             do {
-                var r = try SheetOCR.rerun(text: t, semitones: self.semitones)
+                var r = try SheetOCR.rerun(text: t, semitones: self.semitones,
+                                           source: self.result.isChordSheet ? self.original : nil, font: self.chartFont)
                 r.reviewPNGs = self.result.reviewPNGs     // 확인 그림은 처음 것을 그대로 둔다
                 r.text = t
                 try? FileManager.default.removeItem(at: self.delivered)

@@ -407,6 +407,8 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
         hs = row_h.get((c.col, c.row if c.row is not None else ("y", band(t))), [t[3] - t[1]])
         ref = float(np.median(hs)) if len(hs) >= 2 else page_h
         own = t[3] - t[1]
+        if (t[2] - t[0]) >= 2.5 * own:                    # 넓은 상자는 낱말 전체를 잡은 것이다: 제 높이를 믿는다 (작게 쓴 Intro 줄 등)
+            return own
         return own if 0.8 * ref <= own <= 1.3 * ref else ref
     for k, (c, t) in enumerate(zip(chords, boxes)):
         if not t or not c.new or c.new == c.text:
@@ -429,12 +431,21 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             y0 = y1 - hgt
         font = _fit_font(font_path, c.text, hgt)           # 크기는 원래 코드 글자로 정한다 (새 코드에 같은 크기)
         mask = _render_mask(font, c.new)
+        # 고른 글꼴이 원래 글자보다 넓으면(좁은 글꼴로 찍은 악보) 원래 낱말 폭에 맞게 가로로 좁힌다. 낱말 전체를 잡은 상자만 믿는다
+        own_w = _render_mask(font, c.text).shape[1] - 2
+        ratio = (x1 - x0) / max(1, own_w)
+        if ratio < 0.92 and (x1 - x0) >= (y1 - y0):
+            cond = max(0.6, ratio)
+            mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
         avail = int(max(x1 - x0, limit - x0))
-        if mask.shape[1] > avail:                          # 자리가 모자라면 고르게 줄인다 (75%까지, 바닥선 유지). 그래도 넘치면 넘친다
+        if mask.shape[1] > avail:                          # 자리가 모자라면 고르게 줄인다 (75%까지, 바닥선 유지)
             scale = max(0.75, avail / mask.shape[1])
             font = _fit_font(font_path, c.text, max(6, int(round(hgt * scale))))
             mask = _render_mask(font, c.new)
             y0 = y1 - max(6, int(round(hgt * scale)))
+            if mask.shape[1] > avail:                      # 그래도 넘치면 가로로만 좁힌다 (60%까지). 그 뒤에는 넘친다
+                cond = max(0.6, avail / mask.shape[1])
+                mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
         # 첫 글자 윗선을 원래 윗선에 맞춘다
         top_old = font.getbbox(c.text)[1] - font.getbbox(c.text[0])[1]   # 원래 글자에서 근음 윗선이 전체 윗선보다 얼마나 아래인가
         top_new = font.getbbox(c.new)[1] - font.getbbox(c.new[0])[1]
@@ -464,8 +475,9 @@ def review_image(rgb: np.ndarray, chords: list[Chord], missed: list[tuple], ink:
 
 # MARK: 진입점
 
-def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review_png: Path | None = None) -> Result:
-    """원본 src 위의 코드를 semitones만큼 옮겨 out(같은 확장자 권장)에 쓴다."""
+def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review_png: Path | None = None,
+            font: str | None = None) -> Result:
+    """원본 src 위의 코드를 semitones만큼 옮겨 out(같은 확장자 권장)에 쓴다. font: FONTS의 이름, 없으면 자동 선택."""
     rgb = load_color(src)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     chords, missed, lh = find_chords(gray, chart_text)
@@ -482,7 +494,7 @@ def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review
         k += n_
     binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     ink = (binary < 128).astype(np.uint8)
-    r.font = pick_font(ink, chords)
+    r.font = font if font in FONTS else pick_font(ink, chords)
     result = draw(rgb, ink, chords, r.font, getattr(find_chords, "obstacles", ()))
     for line in getattr(find_chords, "lost_lines", []):
         r.notes.append(f"chord line not found in the image: {line}")

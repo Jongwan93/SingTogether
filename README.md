@@ -23,7 +23,7 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 
 | File | What gets transposed | Accuracy |
 |---|---|---|
-| `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F` | exact |
+| `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F`; spelling follows the new key (E major's `B/D#` becomes `C#/E#` in F♯) | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
 | `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, rendered to a new PDF | depends on image quality, see below |
 | `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI CLI, 80–96% without |
@@ -69,6 +69,7 @@ Recognition is never perfect, so every image score opens a review window:
 - **Right:** the transposed score. Notes that need checking are drawn in red.
 - **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The PDF is rebuilt right away. Fixed items get a green outline.
 - **Click a chord or a lyric syllable** (the orange and purple boxes, but any chord or syllable works) to retype it or remove it.
+- **Undo** (⌘Z or the button) takes back the last click-fix.
 - For bigger changes use **Edit Text…**, which opens the score as plain text (format below), then **Rebuild from Text**.
 - A score is recognized only once. Results are cached by file content in `~/Library/Caches/SingTogether/`, so dropping the same image again is instant.
 
@@ -80,6 +81,9 @@ Sheets that only have chords above lyrics (no staff) are not redrawn. The app ke
 it erases each chord, then writes the new one in the same place, colour and size, in the closest matching system font.
 Title, lyrics, layout and watermarks stay exactly as they were. Hyphenated runs like `Bb9-Dm7-Eb-F` are rewritten as a whole.
 If a chord could not be found in the image, the review window says so and marks the spot.
+The font is guessed from the original letters, which works for sans-serif charts but often misses serif ones (Times, Georgia):
+pick the right one from the **Font** menu in the review window and the image is redrawn. The same window's **Edit Text…** and
+**Rebuild from Text** work for chord charts too, rewriting the chords on the image.
 
 ### What to expect
 
@@ -123,6 +127,7 @@ tools/ocr/.venv/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # cho
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
 `--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|gemini` to report whether it is installed and signed in,
+`--source IMAGE` with a chord-chart `.txt` to rewrite the chords on that image, `--chart-font NAME` to force the font,
 `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 
 ## Limits

@@ -12,7 +12,13 @@ package enum SheetOCR {
         package var summary: String         // "To check: notes 31/118, chords 2/25, lyrics 2/80"
         package var isChordSheet: Bool
         package var engine: String
+        package var chartFont: String?      // 코드 차트: 코드를 다시 쓸 때 쓴 글꼴
     }
+
+    /// 코드 차트의 코드를 다시 쓸 때 고를 수 있는 글꼴 (tools/ocr chordoverlay.FONTS와 같은 이름)
+    package static let chartFonts = ["Arial", "Arial Bold", "Helvetica", "Helvetica Bold", "Futura", "Futura Bold", "Avenir", "Avenir Heavy",
+                                     "Gill Sans", "Gill Sans Bold", "Verdana", "Verdana Bold", "Trebuchet", "Trebuchet Bold",
+                                     "Times", "Times Bold", "Georgia", "Georgia Bold"]
 
     package enum Failure: LocalizedError {
         case notInstalled, failed(String)
@@ -119,11 +125,12 @@ package enum SheetOCR {
     }
 
     /// 사용자가 고친 압축 텍스트로 다시 만들기 (인식 없이 바로 이조·렌더링).
-    package static func rerun(text: URL, semitones: Int) throws -> Result {
-        try invoke(input: text, semitones: semitones, out: nil, work: text.deletingLastPathComponent())
+    /// 코드 차트면 source(원본 그림)를 주어 그 위에 코드를 다시 쓴다. font는 코드 글꼴 (nil = 자동).
+    package static func rerun(text: URL, semitones: Int, source: URL? = nil, font: String? = nil) throws -> Result {
+        try invoke(input: text, semitones: semitones, out: nil, work: text.deletingLastPathComponent(), source: source, font: font)
     }
 
-    private static func invoke(input: URL, semitones: Int, out: URL?, work: URL) throws -> Result {
+    private static func invoke(input: URL, semitones: Int, out: URL?, work: URL, source: URL? = nil, font: String? = nil) throws -> Result {
         guard let tool = locate() else { throw Failure.notInstalled }
         // 로그인 확인에 실패한 AI는 다시 한 번 확인해 보고, 그래도 안 되면 Apple Vision만 쓴다
         var reader = llm
@@ -131,6 +138,8 @@ package enum SheetOCR {
         var args = [input.path, "--engine", "auto", "--llm", reader, "--transpose", String(semitones), "--render", "--json",
                     "--work", work.appendingPathComponent("work").path]
         if let out { args += ["--out", out.path] }
+        if let source { args += ["--source", source.path] }
+        if let font { args += ["--chart-font", font] }
         let p = Process()
         p.executableURL = tool
         p.arguments = args
@@ -171,7 +180,8 @@ package enum SheetOCR {
         return Result(transposed: url("transposed"), transposedPDF: url("transposed_pdf"), text: url("txt"),
                       reviewPNGs: ((dict["review_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       keys: dict["keys"] as? String, summary: summary,
-                      isChordSheet: dict["chordsheet"] as? Bool == true, engine: dict["engine"] as? String ?? "")
+                      isChordSheet: dict["chordsheet"] as? Bool == true, engine: dict["engine"] as? String ?? "",
+                      chartFont: (dict["chart"] as? [String: Any])?["font"] as? String)
     }
 
     /// 최종 결과물을 원본 옆에 "이름 (+2, A).pdf"로 복사한다. 코드 차트는 .txt.

@@ -25,11 +25,49 @@ enum Notes {
     static func keyName(_ k: MusicKey, from source: MusicKey? = nil) -> String {
         name(k.root, flats: source.map { usesFlats(k, from: $0) } ?? usesFlats(k)) + (k.minor ? "m" : "")
     }
+
+    static let letters = ["C", "D", "E", "F", "G", "A", "B"]
+    static let letterPC = [0, 2, 4, 5, 7, 9, 11]
+    static func letterIndex(of name: String) -> Int { letters.firstIndex(of: String(name.prefix(1))) ?? 0 }
+}
+
+/// 음이름 철자: 글자(C=0…B=6)와 임시표. 같은 pitch class라도 D♯와 E♭을 구별한다.
+struct Pitch: Equatable {
+    var letter: Int
+    var alter: Int
+    var pc: Int { Notes.mod12(Notes.letterPC[letter] + alter) }
+}
+
+/// 이조할 때 철자를 정하는 규칙. 조의 글자 간격(E→F♯는 한 글자)만큼 모든 근음의 글자를 옮기고 임시표로 맞춘다.
+/// 그래서 E장조의 B/D♯는 F♯장조에서 C♯/E♯가 된다. 겹임시표가 나오면 그때만 단순 철자(♯/♭ 표)로 돌아간다.
+struct Spelling {
+    var semitones: Int
+    var steps: Int          // 글자 몇 칸 (0–6)
+    var flats: Bool         // 겹임시표를 피할 때 쓰는 쪽
+
+    /// tonicLetter: 악보가 으뜸음을 어느 글자로 썼는지 (F♯ 악보인지 G♭ 악보인지). 모르면 조 이름의 글자.
+    init(semitones: Int, from source: MusicKey?, tonicLetter: Int? = nil) {
+        self.semitones = semitones
+        guard let src = source else { steps = 0; flats = false; return }
+        let dst = MusicKey(root: src.root + semitones, minor: src.minor)
+        flats = Notes.usesFlats(dst, from: src)
+        let from = tonicLetter ?? Notes.letterIndex(of: Notes.keyName(src))
+        steps = ((Notes.letterIndex(of: Notes.keyName(dst, from: src)) - from) % 7 + 7) % 7
+    }
+
+    func name(_ p: Pitch) -> String {
+        let letter = (p.letter + steps) % 7
+        let pc = Notes.mod12(p.pc + semitones)
+        var alter = Notes.mod12(pc - Notes.letterPC[letter])
+        if alter > 6 { alter -= 12 }
+        guard abs(alter) <= 1 else { return Notes.name(pc, flats: flats) }
+        return Notes.letters[letter] + (alter == 1 ? "#" : alter == -1 ? "b" : "")
+    }
 }
 
 /// 텍스트 코드 악보 (가사 위 코드 줄, [G]가사 인라인 형식)
 package enum ChordText {
-    struct Chord { var root: Int; var quality: String; var bass: Int? }
+    struct Chord { var root: Pitch; var quality: String; var bass: Pitch? }
 
     private static let chordRE = try! NSRegularExpression(
         pattern: "^([A-G])([#b♯♭]?)([^\\s/]*)(?:/([A-G])([#b♯♭]?))?$")
@@ -41,19 +79,14 @@ package enum ChordText {
     private static let bracketRE = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]")
     private static let tokenRE = try! NSRegularExpression(pattern: "\\S+")
 
-    private static let letterPC: [String: Int] = ["C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11]
-
     private static func fullMatch(_ re: NSRegularExpression, _ s: String) -> NSTextCheckingResult? {
         let r = NSRange(location: 0, length: (s as NSString).length)
         guard let m = re.firstMatch(in: s, range: r), m.range == r else { return nil }
         return m
     }
 
-    private static func pc(_ letter: String, _ acc: String) -> Int {
-        var p = letterPC[letter] ?? 0
-        if acc == "#" || acc == "♯" { p += 1 }
-        if acc == "b" || acc == "♭" { p -= 1 }
-        return Notes.mod12(p)
+    private static func pitch(_ letter: String, _ acc: String) -> Pitch {
+        Pitch(letter: Notes.letterIndex(of: letter), alter: acc == "#" || acc == "♯" ? 1 : acc == "b" || acc == "♭" ? -1 : 0)
     }
 
     static func parse(_ token: String) -> Chord? {
@@ -64,13 +97,13 @@ package enum ChordText {
         }
         let q = g(3)
         guard fullMatch(qualityRE, q) != nil else { return nil }
-        let bass = g(4).isEmpty ? nil : pc(g(4), g(5))
-        return Chord(root: pc(g(1), g(2)), quality: q, bass: bass)
+        let bass = g(4).isEmpty ? nil : pitch(g(4), g(5))
+        return Chord(root: pitch(g(1), g(2)), quality: q, bass: bass)
     }
 
-    private static func render(_ c: Chord, _ s: Int, _ flats: Bool) -> String {
-        var out = Notes.name(c.root + s, flats: flats) + c.quality
-        if let b = c.bass { out += "/" + Notes.name(b + s, flats: flats) }
+    private static func render(_ c: Chord, _ sp: Spelling) -> String {
+        var out = sp.name(c.root) + c.quality
+        if let b = c.bass { out += "/" + sp.name(b) }
         return out
     }
 
@@ -93,8 +126,8 @@ package enum ChordText {
         return chords.count == parts.count ? chords : nil
     }
 
-    private static func renderRun(_ run: [Chord], _ s: Int, _ flats: Bool) -> String {
-        run.map { render($0, s, flats) }.joined(separator: "-")
+    private static func renderRun(_ run: [Chord], _ sp: Spelling) -> String {
+        run.map { render($0, sp) }.joined(separator: "-")
     }
 
     private static func tokens(_ line: String) -> [NSTextCheckingResult] {
@@ -139,38 +172,38 @@ package enum ChordText {
         let chords = allChords(text)
         guard let first = chords.first else { return nil }
         let majorDegrees = [0, 2, 4, 5, 7, 9, 11], minorDegrees: Set<Int> = [2, 4, 9]
-        var best = (score: Int.min, root: first.root)
+        var best = (score: Int.min, root: first.root.pc)
         for tonic in 0..<12 {
             var score = 0
             for c in chords {
-                let d = Notes.mod12(c.root - tonic)
+                let d = Notes.mod12(c.root.pc - tonic)
                 guard majorDegrees.contains(d) else { score -= 1; continue }
                 score += 1
                 if d == 11 { continue }                          // vii°는 성질을 따지지 않는다
                 score += isMinor(c) == minorDegrees.contains(d) ? 1 : -1
             }
-            if score > best.score || (score == best.score && tonic == first.root) { best = (score, tonic) }
+            if score > best.score || (score == best.score && tonic == first.root.pc) { best = (score, tonic) }
         }
-        if isMinor(first) && Notes.mod12(first.root - best.root) == 9 { return MusicKey(root: first.root, minor: true) }
-        if isMinor(first) && first.root == best.root { return MusicKey(root: first.root, minor: true) }
+        if isMinor(first) && Notes.mod12(first.root.pc - best.root) == 9 { return MusicKey(root: first.root.pc, minor: true) }
+        if isMinor(first) && first.root.pc == best.root { return MusicKey(root: first.root.pc, minor: true) }
         return MusicKey(root: best.root, minor: false)
     }
 
-    static func transposeLine(_ line: String, _ s: Int, _ flats: Bool) -> String {
+    static func transposeLine(_ line: String, _ sp: Spelling) -> String {
         let ns = line as NSString
         if isChordLine(line) {
-            return transposeChordLine(line, s, flats)
+            return transposeChordLine(line, sp)
         }
-        return transposeLyricLine(line, ns, s, flats)
+        return transposeLyricLine(line, ns, sp)
     }
 
-    private static func transposeChordLine(_ line: String, _ s: Int, _ flats: Bool) -> String {
+    private static func transposeChordLine(_ line: String, _ sp: Spelling) -> String {
         let ns = line as NSString
         var out = ""
         for m in tokens(line) {
             let tok = ns.substring(with: m.range)
             let p = split(tok)
-            let t = parseRun(p.core).map { p.lead + renderRun($0, s, flats) + p.trail } ?? tok
+            let t = parseRun(p.core).map { p.lead + renderRun($0, sp) + p.trail } ?? tok
             let outLen = (out as NSString).length
             // 원래 열 위치를 유지하되, 코드가 길어지면 최소 한 칸 띄움
             let pos = outLen == 0 ? m.range.location : max(m.range.location, outLen + 1)
@@ -179,14 +212,14 @@ package enum ChordText {
         return out
     }
 
-    private static func transposeLyricLine(_ line: String, _ ns: NSString, _ s: Int, _ flats: Bool) -> String {
+    private static func transposeLyricLine(_ line: String, _ ns: NSString, _ sp: Spelling) -> String {
         // 코드 줄이 아니어도 "(Repeat Chorus) Eb-F (2x)"처럼 붙임표로 이은 코드 진행(2개 이상)은 옮긴다
         var runs = "", runLast = 0
         for m in tokens(line) {
             let tok = ns.substring(with: m.range), p = split(tok)
             guard p.core.contains("-"), let run = parseRun(p.core), run.count >= 2 else { continue }
             runs += ns.substring(with: NSRange(location: runLast, length: m.range.location - runLast))
-            runs += p.lead + renderRun(run, s, flats) + p.trail
+            runs += p.lead + renderRun(run, sp) + p.trail
             runLast = m.range.location + m.range.length
         }
         let line = runs + ns.substring(from: runLast)
@@ -195,7 +228,7 @@ package enum ChordText {
         for m in bracketRE.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
             out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
             let inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: CharacterSet.whitespaces)
-            if let c = parse(inner) { out += "[" + render(c, s, flats) + "]" }
+            if let c = parse(inner) { out += "[" + render(c, sp) + "]" }
             else { out += ns.substring(with: m.range) }
             last = m.range.location + m.range.length
         }
@@ -210,9 +243,11 @@ package enum ChordText {
         let crlf = body.contains("\r\n")
         if crlf { body = body.replacingOccurrences(of: "\r\n", with: "\n") }
 
-        let flats = detectKey(body).map { Notes.usesFlats(MusicKey(root: $0.root + s, minor: $0.minor), from: $0) } ?? false
+        let key = detectKey(body)
+        let tonicLetter = key.flatMap { k in allChords(body).first { $0.root.pc == Notes.mod12(k.root) }?.root.letter }
+        let sp = Spelling(semitones: s, from: key, tonicLetter: tonicLetter)
         var out = body.components(separatedBy: "\n")
-            .map { transposeLine($0, s, flats) }
+            .map { transposeLine($0, sp) }
             .joined(separator: crlf ? "\r\n" : "\n")
         if bom { out = "\u{FEFF}" + out }
         return out

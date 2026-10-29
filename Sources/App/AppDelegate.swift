@@ -37,6 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit SingTogether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
+        // 메뉴 막대 앱이라 보이는 메인 메뉴는 없지만, ⌘Z·⌘C·⌘V 같은 단축키는 메인 메뉴가 있어야 동작한다
+        let main = NSMenu()
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        edit.submenu = NSMenu(title: "Edit")
+        for (title, sel, key) in [("Undo", Selector(("undo:")), "z"), ("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
+                                  ("Paste", #selector(NSText.paste(_:)), "v"), ("Select All", #selector(NSText.selectAll(_:)), "a")] {
+            edit.submenu?.addItem(NSMenuItem(title: title, action: sel, keyEquivalent: key))
+        }
+        main.addItem(edit)
+        NSApp.mainMenu = main
+
         panel.contentView = ring
         ring.onDrop = { [weak self] semis, urls in self?.handleDrop(semis: semis, urls: urls) }
 
