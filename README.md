@@ -30,11 +30,15 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 
 ## Install
 
-**From the disk image** (no developer tools needed, Apple Silicon Macs):
+**Download** (no developer tools needed, Apple Silicon Macs):
 
-1. Open `SingTogether-1.0.dmg` and drag SingTogether to Applications.
-2. The first time, right-click the app and choose **Open** (the build is not notarized, so macOS asks once).
-3. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
+1. Download `SingTogether-<version>.dmg` from the [latest release](https://github.com/Jongwan93/SingTogether/releases/latest).
+2. Open it and drag SingTogether to Applications.
+3. The first time, macOS blocks the app because it is not notarized. Allow it once:
+   - macOS 15 or later: double-click the app, click **Done**, then open **System Settings → Privacy & Security**,
+     scroll down to *"SingTogether" was blocked* and click **Open Anyway**.
+   - macOS 14 or earlier: right-click the app and choose **Open**, then **Open** again.
+4. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
 
 **From source:**
 
@@ -141,7 +145,7 @@ Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads not
 
 - Single-line melody with chords and lyrics is the target. Whole notes, tuplets, multiple voices and two-staff piano scores are not handled.
 - Accuracy follows image quality. Upscaling the image does not help (tested); a better source file does.
-- The disk image is built for Apple Silicon only. It is signed ad hoc, not notarized, so the first launch needs right-click → Open.
+- The disk image is built for Apple Silicon only. It is signed ad hoc, not notarized, so the first launch has to be allowed once (see Install).
 
 ## Development
 
