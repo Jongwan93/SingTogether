@@ -65,6 +65,8 @@ def find_noteheads(region: np.ndarray, il: float, lines: list[int] | None = None
     open_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, int(0.8 * il)) | 1, max(3, int(0.6 * il)) | 1))
     close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(0.6 * il) | 1, int(0.6 * il) | 1))
     filled = _head_blobs(cv2.morphologyEx(ink, cv2.MORPH_OPEN, open_k), il)
+    # 꽉 찬 머리에도 기둥을 요구해 봤지만(2026-10, 8분음표 꼬리 끝이 가짜 머리가 되어 렌더링 악보의 마지막 온음표를 A4로
+    # 바꾼 사례) 꼬리 획이 기둥으로 잡혀 그 경우는 못 고치고 웹 캡처 음높이만 2–5점 떨어져서 뺐다.
     closed = cv2.morphologyEx(cv2.morphologyEx(ink, cv2.MORPH_CLOSE, close_k), cv2.MORPH_OPEN, open_k)
     hollow = []
     for h in _head_blobs(closed, il, median_filter=False):   # 닫힘으로 커진 꽉 찬 머리들이 중앙값을 끌어올리므로 크기 범위만 본다

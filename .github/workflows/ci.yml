@@ -1,0 +1,77 @@
+# Every push and pull request: build the app and the CLI, run the self-test, and recognize the
+# public-domain sample scores from a clean render (the assembly stage's regression test).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: macos-15          # Apple Silicon, like every Mac the app supports
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the app and the CLI
+        run: ./build.sh
+
+      - name: Self-test (text transposition, note editing, sharps/flats choice)
+        run: .build/release/singtogether-transpose --selftest
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/ocr/uv.lock
+
+      - name: Recognizer environment
+        run: cd tools/ocr && uv sync --frozen
+
+      - name: homr models (cached between runs)
+        id: models
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/homr-models
+            ~/Library/Caches/SingTogether/coreml
+          key: homr-models-${{ hashFiles('tools/ocr/uv.lock') }}
+
+      - name: Put the cached models in place
+        if: steps.models.outputs.cache-hit == 'true'
+        run: |
+          SP=$(tools/ocr/.venv/bin/python -c 'import homr, os; print(os.path.dirname(homr.__file__))')
+          cp -R ~/homr-models/. "$SP/"
+
+      - name: librsvg (rasterizes the rendered truth)
+        run: brew install librsvg
+
+      - name: Rendered regression on the public-domain samples
+        run: |
+          cd tools/ocr
+          .venv/bin/singtogether-eval --rendered --samples "Amazing Grace" "Silent Night" "Holy, Holy, Holy" --widths 1240 --fail-below 90
+
+      - name: Keep the downloaded models for the cache
+        if: always()
+        run: |
+          SP=$(tools/ocr/.venv/bin/python -c 'import homr, os; print(os.path.dirname(homr.__file__))')
+          mkdir -p ~/homr-models/transformer ~/homr-models/segmentation
+          cp "$SP"/transformer/*.onnx ~/homr-models/transformer/ 2>/dev/null || true
+          cp "$SP"/segmentation/*.onnx ~/homr-models/segmentation/ 2>/dev/null || true
+
+      - name: End to end, as the app does it (recognize, transpose, draw)
+        run: |
+          mkdir -p /tmp/e2e && cp "samples/Amazing Grace.png" /tmp/e2e/
+          .build/release/singtogether-transpose "/tmp/e2e/Amazing Grace.png" -2
+          ls -la /tmp/e2e
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rendered-regression
+          path: |
+            tools/ocr/out/rendered.md
+            /tmp/e2e
+          if-no-files-found: ignore

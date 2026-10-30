@@ -124,7 +124,7 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                     else:                    # AI가 엉뚱한 답(다른 곡·지어낸 코드)을 냈다: Vision만 쓴다
                         print(f"hybrid chords: {who} answer does not match the image (exact anchors {exact:.0%}, {n_ai} chords), using Vision only")
                 assemble.attach_chords(t, chord_boxes, page.interline)
-                inferred = key.infer_key([n.chord for n in t.notes if n.chord])
+                inferred = key.infer_key([n.chord for n in t.notes if n.chord], prefer=t.fifths)
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
                         and key.plausible_change(t, inferred[0]):
                     rekey(t, inferred[0], inferred[1])

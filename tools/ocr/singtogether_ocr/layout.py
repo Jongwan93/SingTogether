@@ -39,6 +39,12 @@ class System:
 def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     il = page.interline
     staves = fit_staves(page.binary, find_staff_lines(page.binary), il)
+    # 폭의 60%가 안 되는 짧은 오선(흔히 마지막 줄: 마디 두세 개)은 위에서 못 잡는다. 이미 찾은 오선 밖에서 낮은 문턱으로
+    # 한 번 더 찾되, 5줄이 전부 실제 줄로 있고 간격이 맞는 빗만 받는다 (가사·제목 글줄은 두께 제한에 걸린다).
+    covered = [(s.top - 1.5 * il, s.bottom + 1.5 * il) for s in staves]
+    loose = [y for y in find_staff_lines(page.binary, min_fraction=0.2, relative=False) if not any(a <= y <= b for a, b in covered)]
+    staves += fit_staves(page.binary, loose, il, complete=True)
+    staves.sort(key=lambda s: s.top)
     for s in staves:
         s.left, s.right = staff_extent(page.binary, s.lines)
     H = page.binary.shape[0]
@@ -62,12 +68,13 @@ def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     return systems
 
 
-def find_staff_lines(binary: np.ndarray, max_thickness: int = 6) -> list[int]:
-    """폭의 60% 이상을 가로지르는 얇은 검정 행 = 오선. 붙어 있는 행은 한 줄로 합친다.
-    가사 글줄도 폭을 꽤 채우지만 두껍고(글자 높이) 성기므로, 두께 제한과 높은 비율로 걸러낸다."""
+def find_staff_lines(binary: np.ndarray, max_thickness: int = 6, min_fraction: float = 0.6, relative: bool = True) -> list[int]:
+    """폭의 min_fraction 이상을 가로지르는 얇은 검정 행 = 오선. 붙어 있는 행은 한 줄로 합친다.
+    가사 글줄도 폭을 꽤 채우지만 두껍고(글자 높이) 성기므로, 두께 제한과 높은 비율로 걸러낸다.
+    relative: 가장 긴 행의 절반 이상도 요구한다 (짧은 오선을 찾는 두 번째 패스에서는 끈다)."""
     ink = binary < 128
     proj = ink.sum(axis=1)
-    thr = max(proj.max() * 0.5, ink.shape[1] * 0.6)
+    thr = max(proj.max() * 0.5 if relative else 0, ink.shape[1] * min_fraction)
     groups: list[list[int]] = []
     for y in np.flatnonzero(proj >= thr):
         if groups and y - groups[-1][-1] <= 1:
@@ -77,10 +84,11 @@ def find_staff_lines(binary: np.ndarray, max_thickness: int = 6) -> list[int]:
     return [int(np.mean(g)) for g in groups if len(g) <= max_thickness]
 
 
-def fit_staves(binary: np.ndarray, lines: list[int], interline: float) -> list[Staff]:
+def fit_staves(binary: np.ndarray, lines: list[int], interline: float, complete: bool = False) -> list[Staff]:
     """줄을 가까운 것끼리 묶고(간격 < 2il), 묶음마다 가로 투영에 가장 잘 맞는 5줄 빗(시작 y, 간격)을 찾는다.
 
     줄이 합쳐지거나 쪼개져 4줄·6줄로 보여도 복구된다.
+    complete: 빗의 5줄이 모두 찾은 줄(±1px)과 맞을 때만 받는다 (낮은 문턱으로 찾은 줄에서 가짜 오선을 거르려고).
     """
     if not lines:
         return []
@@ -104,7 +112,7 @@ def fit_staves(binary: np.ndarray, lines: list[int], interline: float) -> list[S
                 s = sum(proj[max(0, r - 1):r + 2].max() for r in rows)
                 if best is None or s > best[0]:
                     best = (s, rows)
-        if best:
+        if best and (not complete or all(any(abs(r - y) <= 1 for y in c) for r in best[1])):
             staves.append(Staff(best[1], 0, 0))
     return staves
 

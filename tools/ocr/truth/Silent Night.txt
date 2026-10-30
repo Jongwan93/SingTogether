@@ -1,0 +1,16 @@
+title: Silent Night
+composer: Franz Xaver Gruber, 1818 · words Joseph Mohr, tr. John Freeman Young
+key: D major
+time: 6/8
+1: [D] A4/8. B4/16 A4/8 F#4/4. | Si _ lent night
+2: A4/8. B4/16 A4/8 F#4/4. | ho _ ly night
+3: [A7] E5/4 E5/8 C#5/4. | all is calm
+4: [D] D5/4 D5/8 A4/4. | all is bright
+5: [G] B4/4 B4/8 D5/8. C#5/16 B4/8 | round yon vir _ gin
+6: [D] A4/8. B4/16 A4/8 F#4/4. | moth er and child
+7: [G] B4/4 B4/8 D5/8. C#5/16 B4/8 | ho ly in fant so
+8: [D] A4/8. B4/16 A4/8 F#4/4. | ten der and mild
+9: [A7] E5/4 E5/8 G5/8. E5/16 C#5/8 | sleep in heav en ly
+10: [D] D5/4. F#5/4 r/8 | peace _
+11: D5/8. A4/16 F#4/8 [A7] A4/8. G4/16 E4/8 | sleep _ in heav en ly
+12: [D] D4/4.~ D4/4 r/8 | peace _

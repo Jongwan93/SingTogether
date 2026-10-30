@@ -1,0 +1,20 @@
+title: Holy, Holy, Holy
+composer: John B. Dykes, 1861 (Nicaea) · words Reginald Heber, 1826
+key: D major
+time: 4/4
+1: [D] D4/4 D4/4 F#4/4 F#4/4 | Ho ly ho ly
+2: [A] A4/2 A4/2 | ho ly
+3: [Bm] B4/2 B4/4 B4/4 | Lord God Al
+4: [D] A4/2 [A] F#4/2 | might y
+5: [D] A4/4. A4/8 A4/4 A4/4 | Ear ly in the
+6: D5/2 [A] C#5/4 A4/4 | morn ing our
+7: [G] E4/4 [D] A4/4 [A] B4/4. A4/8 | song shall rise to
+8: [D] A4/1 | Thee
+9: D4/4 D4/4 F#4/4 F#4/4 | Ho ly ho ly
+10: [A] A4/2 A4/2 | ho ly
+11: [Bm] B4/4. B4/8 B4/4 B4/4 | mer ci ful and
+12: [D] A4/2 [A] A4/2 | might y
+13: [D] D5/2 A4/4 A4/4 | God in three
+14: [Bm] B4/2 [D] F#4/2 | Per sons
+15: [G] G4/4 [D] E4/4 [A] E4/4. D4/8 | bless ed Trin i
+16: [D] D4/1 | ty

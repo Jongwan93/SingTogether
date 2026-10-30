@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from fractions import Fraction
 
 from .model import STEP_PC
 
@@ -26,6 +27,8 @@ def infer_time(t) -> None:
     length, count = lengths.most_common(1)[0]
     if count < 0.6 * sum(lengths.values()):
         return
+    if length == Fraction(t.beats * 4, t.beat_type):   # 엔진이 읽은 박자표가 마디 길이와 맞으면 그대로 (6/8을 3/4로 바꾸지 않게)
+        return
     for beats, beat_type in ((4, 4), (3, 4), (2, 4), (6, 8), (2, 2)):
         if length == beats * 4 / beat_type:
             if (beats, beat_type) != (t.beats, t.beat_type) and not (length == 4 and (t.beats, t.beat_type) == (4, 4)):
@@ -48,12 +51,13 @@ def _quality(chord: str) -> str | None:
     return None
 
 
-def infer_key(chords: list[str]) -> tuple[int, str, float] | None:
+def infer_key(chords: list[str], prefer: int | None = None) -> tuple[int, str, float] | None:
     """(fifths, mode, 확신도 0–1). 코드가 3개 미만이면 None.
 
     장조 후보(-6…6)마다 근음이 음계 안에 있으면 +1, 코드 성질이 그 도수의 다이어토닉 3화음과 맞으면 +1, 틀리면 -1.
     (C장조와 A장조는 근음만으로는 구분이 안 되지만, E가 장화음이고 B가 단화음이면 A장조다.)
-    동점이면 최빈 코드·첫 코드가 으뜸화음인 쪽. 첫 코드가 단화음이고 vi도이면 단조.
+    동점이면 엔진이 읽은 조표(prefer), 그다음 최빈 코드·첫 코드가 으뜸화음인 쪽. 첫 코드가 단화음이고 vi도이면 단조.
+    (D A Bm만 읽힌 D장조 악보: D와 A가 동점인데 A를 골라 G가 G♯이 된 적이 있다 — 조표가 D라면 D.)
     """
     roots = [(c, _root_pc(c), _quality(c)) for c in chords]
     roots = [(c, pc, q) for c, pc, q in roots if pc is not None]
@@ -72,7 +76,7 @@ def infer_key(chords: list[str]) -> tuple[int, str, float] | None:
                 score += 1
                 if q is not None:
                     score += 1 if q == _DEGREE_QUALITY[degree] else -1
-        key_score = (score, common == tonic, first[1] == tonic)
+        key_score = (score, fifths == prefer, common == tonic, first[1] == tonic)
         if best is None or key_score > best[0]:
             best = (key_score, fifths, tonic, hits)
     _, fifths, tonic, hits = best

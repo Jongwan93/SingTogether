@@ -1,0 +1,71 @@
+# Push a tag vX.Y (annotated: its message body becomes the release notes) and this builds the
+# self-contained app with dist.sh and publishes the disk image as a GitHub release.
+# The tag must match CFBundleShortVersionString in Info.plist.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish again (vX.Y)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Tag and version must agree
+        id: v
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "tag $TAG does not match Info.plist version $VERSION"; exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v10
+
+      - name: Build the app and the disk image
+        run: ./dist.sh
+
+      - name: Check the disk image
+        run: |
+          DMG="dist/SingTogether-${{ steps.v.outputs.version }}.dmg"
+          MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
+          codesign --verify --deep --strict "$MNT/SingTogether.app"
+          "$MNT/SingTogether.app/Contents/MacOS/singtogether-transpose" --selftest
+          "$MNT/SingTogether.app/Contents/Resources/ocr/bin/singtogether-ocr" --help > /dev/null
+          hdiutil detach "$MNT" -quiet
+
+      - name: Release notes (tag message, then the install notes)
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          git tag -l --format='%(contents:body)' "$TAG" > notes.md
+          sed "s/__VERSION__/${{ steps.v.outputs.version }}/g" .github/release-footer.md >> notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          DMG="dist/SingTogether-${{ steps.v.outputs.version }}.dmg"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" --clobber
+            gh release edit "$TAG" --notes-file notes.md --latest
+          else
+            gh release create "$TAG" "$DMG" --title "SingTogether ${{ steps.v.outputs.version }}" --notes-file notes.md --verify-tag --latest
+          fi

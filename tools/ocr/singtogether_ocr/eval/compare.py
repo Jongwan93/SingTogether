@@ -26,7 +26,8 @@ from .score import Score, score
 
 OCR_ROOT = Path(__file__).resolve().parents[2]          # tools/ocr
 REPO = OCR_ROOT.parents[1]
-SCORES = REPO / "music_scores"
+SCORES = REPO / "music_scores"        # 저작권 있는 샘플 (git 밖)
+SAMPLES = REPO / "samples"            # 공개 도메인 찬송을 깨끗하게 그린 것 (저장소 안; CI와 README가 쓴다)
 TRUTH = OCR_ROOT / "truth"
 OUT = OCR_ROOT / "out"
 DEFAULT_ENGINES = ["homr", "oemer", "audiveris", "claude"]
@@ -41,7 +42,14 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".pdf")
 
 
 def score_images() -> dict[str, Path]:
-    return {_nfc(p.stem): p for p in SCORES.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES}
+    """이름(확장자 뺀 파일 이름) → 그림. music_scores/가 samples/보다 우선한다 (같은 이름이면 진짜 악보를 평가)."""
+    out: dict[str, Path] = {}
+    for root in (SCORES, SAMPLES):
+        if root.exists():
+            for p in sorted(root.rglob("*")):
+                if p.suffix.lower() in IMAGE_SUFFIXES:
+                    out.setdefault(_nfc(p.stem), p)
+    return out
 
 
 def samples(names: list[str] | None) -> list[tuple[str, Path]]:
@@ -132,13 +140,15 @@ def chordsheet_eval(llm: str, names: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> str:
+def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> tuple[str, int | None]:
     """정답 악보를 Verovio로 깨끗하게 그려 파이프라인에 넣는다 = 입력이 좋을 때의 상한이자 조립 단계의 회귀 검사.
-    엔진(homr)은 이 입력을 100% 읽으므로, 최종 점수가 100%에서 모자란 만큼이 조립 단계의 손실이다."""
+    엔진(homr)은 이 입력을 100% 읽으므로, 최종 점수가 100%에서 모자란 만큼이 조립 단계의 손실이다.
+    돌려주는 값: (표, 가장 낮은 음높이 점수 %). 실패한 행은 0으로 친다 (CI의 --fail-below용)."""
     import subprocess
 
     from ..render import render
 
+    worst: int | None = None
     lines = ["| sample | render width | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
     for truth_file in sorted(TRUTH.glob("*.txt")):
         name = _nfc(truth_file.stem)
@@ -156,12 +166,15 @@ def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> str:
                 t = recognize(png, "homr", d / f"work-{w}", None)
                 write_outputs(t, d / f"w{w}-result.musicxml")
                 row = score(t, truth).row()
+                pct = int(row["pitch"].split("%")[0]) if "%" in row["pitch"] else 0
             except Exception as e:
                 row = {c: "" for c in COLUMNS}
                 row["notes"] = f"failed: {str(e).splitlines()[0][:50]}"
+                pct = 0
+            worst = pct if worst is None else min(worst, pct)
             lines.append(f"| {name} | {w}px | " + " | ".join(row[c] for c in COLUMNS) + " |")
             print(lines[-1], flush=True)
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", worst
 
 
 def main(argv=None) -> None:
@@ -172,6 +185,8 @@ def main(argv=None) -> None:
     ap.add_argument("--interline", type=float, default=24.0)
     ap.add_argument("--chordsheets", action="store_true", help="evaluate chord charts (music_scores/english, truth/chordsheets)")
     ap.add_argument("--rendered", action="store_true", help="render the truth with Verovio and recognize it (assembly regression test) → out/rendered.md")
+    ap.add_argument("--widths", nargs="+", type=int, default=[2480, 1240, 620], metavar="PX", help="render widths for --rendered")
+    ap.add_argument("--fail-below", type=int, metavar="PCT", help="with --rendered: exit 1 when any pitch score is below PCT (CI gate)")
     ap.add_argument("--llm", default="auto", help="AI for chords and lyrics: auto|claude|gemini|none")
     ap.add_argument("--missing", action="store_true", help="list scores in music_scores/ that have no truth file yet")
     ap.add_argument("--tune", action="store_true", help="search review flag weights on out/hybrid results (prints a WEIGHTS dict for review.py)")
@@ -188,10 +203,12 @@ def main(argv=None) -> None:
         return
 
     if a.rendered:
-        report = rendered_eval(a.samples)
+        report, worst = rendered_eval(a.samples, tuple(a.widths))
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / "rendered.md").write_text("# Clean rendered input\n\n" + report)
         print("\n" + report)
+        if a.fail_below is not None and (worst is None or worst < a.fail_below):
+            sys.exit(f"pitch accuracy {worst}% is below the required {a.fail_below}%")
         return
     if a.chordsheets:
         report = chordsheet_eval(a.llm, a.samples)
@@ -202,7 +219,7 @@ def main(argv=None) -> None:
 
     items = samples(a.samples)
     if not items:
-        sys.exit("No score in music_scores/ matches a truth file (truth/*.txt)")
+        sys.exit("No score in music_scores/ or samples/ matches a truth file (truth/*.txt)")
     lines = ["# Engine comparison", "", "| sample | engine | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
     for name, img in items:
         for engine in a.engines:

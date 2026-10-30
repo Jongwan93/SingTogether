@@ -1,0 +1,19 @@
+title: Amazing Grace
+composer: John Newton, 1779 · New Britain (Virginia Harmony, 1831)
+key: G major
+time: 3/4
+0: D4/4 | A
+1: [G] G4/2 B4/8 G4/8 | maz ing _
+2: B4/2 A4/4 | grace how
+3: [C] G4/2 E4/4 | sweet the
+4: [G] D4/2 D4/4 | sound that
+5: G4/2 B4/8 G4/8 | saved a _
+6: [D] B4/2 A4/4 | wretch like
+7: [G] D5/2 B4/4 | me I
+8: D5/4. B4/8 D5/8 B4/8 | once _ was _
+9: G4/2 D4/4 | lost but
+10: [C] E4/4. G4/8 G4/8 E4/8 | now _ am _
+11: [G] D4/2 D4/4 | found was
+12: [Em] G4/2 B4/8 G4/8 | blind but _
+13: [D] B4/2 A4/4 | now I
+14: [G] G4/2. | see

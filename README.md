@@ -12,6 +12,8 @@ A macOS menu bar app that transposes sheet music to the key you can actually sin
 Drag a score, pick a key, and a transposed copy appears next to the original. The original is never touched.
 Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) all work.
 
+![Hold Shift, drag a score onto the ring, drop it on −2: Song (-2, F).png appears next to the original](docs/ring.gif)
+
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
 Song.musicxml  →  drop on −3  →  Song (-3, E).musicxml
@@ -51,6 +53,8 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
 | `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, redrawn as a new image of the same kind (PNG or JPEG; PDF in, PDF out) | depends on image quality, see below |
 | `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI reader, 80–96% without |
+
+Nothing to try it on? [`samples/`](samples/) has three public-domain hymns as clean score images: Amazing Grace, Silent Night and Holy, Holy, Holy. Drop one on the ring.
 
 ## AI reader for chords and lyrics (optional)
 
@@ -183,6 +187,9 @@ open build/SingTogether.app
 
 A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 
+**CI and releases.** Every push runs [`ci.yml`](.github/workflows/ci.yml) on a macOS runner: build, self-test, the rendered regression on the public-domain samples, and one end-to-end transposition of a sample image.
+A release is a pushed tag: bump the version in `Info.plist`, commit, then `git tag -a v1.4 -m "SingTogether 1.4" -m "<release notes>"` and push the tag. [`release.yml`](.github/workflows/release.yml) checks that the tag matches the plist, runs `dist.sh`, verifies the disk image and publishes it with the tag message as the notes.
+
 ```
 Sources/App/        menu bar app: ring, drag detection, review window, note editor
 Sources/Transpose/  transposition logic shared by app and CLI, plus the bridge to the recognizer
@@ -196,14 +203,16 @@ tools/ocr/truth/    hand-checked ground truth for the evaluation
 .build/release/singtogether-transpose --selftest        # text transposition and note editing checks
 cd tools/ocr
 .venv/bin/singtogether-eval --engines homr hybrid       # recognition accuracy against truth/ → out/report.md
-.venv/bin/singtogether-eval --rendered                  # clean-render regression test for the assembly stage
+.venv/bin/singtogether-eval --rendered                  # clean-render regression test for the assembly stage (all truth files, three widths)
+.venv/bin/singtogether-eval --rendered --samples "Amazing Grace" "Silent Night" "Holy, Holy, Holy" --widths 1240 --fail-below 90   # what CI runs
 .venv/bin/singtogether-eval --chordsheets --llm none    # chord charts
 .venv/bin/singtogether-eval --missing                   # sample scores that have no ground truth yet
 .venv/bin/singtogether-eval --tune                      # refit the review-flag weights (review.WEIGHTS) on the hybrid results
 .venv/bin/singtogether-eval --engines claude+page claude homr@staff    # experiments: AI on the whole page vs per-system crops (default), preprocessing variants
 ```
 
-Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted).
+Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted);
+the public-domain hymns in `samples/` are rendered from their truth files and are evaluated the same way.
 The evaluation pairs each image with `tools/ocr/truth/<same name>.txt`. The quickest way to add a truth file is the app:
 drop the score, fix everything in the review window, then **Save as Truth…** — when the app runs from this repository it
 offers `tools/ocr/truth/` directly and copies the image into `music_scores/` if it is not there yet. Chord charts go to
