@@ -80,13 +80,25 @@ enum SelfTest {
         """
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("singtogether-selftest-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let src = dir.appendingPathComponent("k.musicxml"), out = dir.appendingPathComponent("k+1.musicxml")
-        try? xml.write(to: src, atomically: true, encoding: .utf8)
-        if (try? Converter.convert(src, semitones: 1, to: out)) != nil, let s = try? String(contentsOf: out, encoding: .utf8) {
+        func transposed(_ xml: String, _ name: String, by semis: Int) -> String? {
+            let src = dir.appendingPathComponent("\(name).musicxml"), out = dir.appendingPathComponent("\(name)+\(semis).musicxml")
+            try? xml.write(to: src, atomically: true, encoding: .utf8)
+            guard (try? Converter.convert(src, semitones: semis, to: out)) != nil else { return nil }
+            return try? String(contentsOf: out, encoding: .utf8)
+        }
+        if let s = transposed(xml, "k", by: 1) {
             check(s.contains("<root-step>F</root-step>") && !s.contains("<root-step>E</root-step><root-alter>1"), "chord E in a mis-keyed score +1 → F, not E#")
             check(s.contains("<root-step>D</root-step>"), "chord C#m +1 → Dm")
         } else {
             check(false, "musicxml chord respelling test could not run")
+        }
+        // 음표: E장조의 D♭(잘못 읽힌 음)을 +1 하면 E♭♭이 아니라 D
+        let xml2 = xml.replacingOccurrences(of: "<fifths>-3</fifths>", with: "<fifths>4</fifths>")
+            .replacingOccurrences(of: "<pitch><step>E</step><octave>4</octave></pitch>", with: "<pitch><step>D</step><alter>-1</alter><octave>4</octave></pitch>")
+        if let s = transposed(xml2, "n", by: 1) {
+            check(s.contains("<step>D</step><octave>4</octave>") && !s.contains("<alter>-2</alter>"), "note Db in E major +1 → D, not Ebb: \(s.components(separatedBy: "<pitch>").last?.prefix(60) ?? "")")
+        } else {
+            check(false, "musicxml note respelling test could not run")
         }
         try? FileManager.default.removeItem(at: dir)
         print(failures == 0 ? "self-test passed" : "self-test failed: \(failures)")

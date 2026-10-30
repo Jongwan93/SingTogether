@@ -87,6 +87,11 @@ package enum MusicXML {
         el.elements(forName: name).first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 겹임시표, 또는 조표가 품지 않는 E♯·B♯·F♭·C♭ (E♯은 F♯장조, C♭은 G♭장조에만 있다)
+    static func awkwardSpelling(_ letter: Int, _ alter: Int, fifths: Int) -> Bool {
+        abs(alter) == 2 || (alter == 1 && ((letter == 2 && fifths < 6) || letter == 6)) || (alter == -1 && ((letter == 0 && fifths > -6) || letter == 3))
+    }
+
     /// pitch class를 가장 단순하게 적는 (글자 index, 임시표): 자연음이면 그대로, 아니면 ♯ 또는 ♭ 하나
     static func simpleSpelling(_ pc: Int, sharps: Bool) -> (Int, Int) {
         if let i = stepPC.firstIndex(of: pc) { return (i, 0) }
@@ -115,6 +120,7 @@ package enum MusicXML {
         let oldFifths = firstKey(doc)?.fifths ?? 0
         let d = targetFifths(oldFifths, s) - oldFifths     // 5도권에서 움직인 거리
         let dia = ((d * 4) % 7 + 7) % 7                     // 계이름(음이름 글자) 이동량
+        let newFifths = oldFifths + d
 
         // 조표
         for f in elements(doc, "//attributes/key/fifths") {
@@ -137,11 +143,16 @@ package enum MusicXML {
             let frac = alterD - Double(alterI)                // 미분음 보존
 
             let midi = 12 * (oct + 1) + stepPC[i] + alterI + s
-            let ni = (i + dia) % 7
+            var ni = (i + dia) % 7
             var no = oct + (i + dia) / 7
             var a = midi - (12 * (no + 1) + stepPC[ni])
             while a > 6 { no += 1; a -= 12 }
             while a < -6 { no -= 1; a += 12 }
+            // 음표도 겹임시표나 E♯·B♯·F♭·C♭(조표가 품는 F♯·G♭장조 밖)은 읽기 쉬운 이름으로 (잘못 읽힌 D♭이 +1에서 E♭♭이 되던 것)
+            if frac == 0, awkwardSpelling(ni, a, fifths: newFifths) {
+                (ni, a) = simpleSpelling(Notes.mod12(midi), sharps: newFifths >= 0)
+                no = (midi - a - stepPC[ni]) / 12 - 1
+            }
 
             setStepAlter(pitch, stepName: "step", alterName: "alter", step: ni, alter: Double(a) + frac)
             pitch.elements(forName: "octave").first?.stringValue = String(no)
@@ -162,7 +173,6 @@ package enum MusicXML {
 
         // 코드 기호 (근음, 베이스). 글자는 조와 같이 움직이되, 결과가 E♯·B♯·F♭·C♭·겹임시표면 읽을 수 있는 이름으로
         // (조표를 품는 F♯·G♭장조만 예외). 인식된 조가 틀렸을 때 E장조 악보의 E가 E♯이 되던 것을 막는다.
-        let newFifths = oldFifths + d
         func shiftPC(_ el: XMLElement, _ stepName: String, _ alterName: String) {
             guard let st = text(el, stepName), let i = steps.firstIndex(of: st) else { return }
             let alter = Int((Double(text(el, alterName) ?? "0") ?? 0).rounded())
@@ -170,8 +180,7 @@ package enum MusicXML {
             var ni = (i + dia) % 7
             var a = Notes.mod12(target - stepPC[ni])
             if a > 6 { a -= 12 }
-            let awkward = abs(a) == 2 || (a == 1 && ((ni == 2 && newFifths < 6) || ni == 6)) || (a == -1 && ((ni == 0 && newFifths > -6) || ni == 3))
-            if awkward { (ni, a) = simpleSpelling(target, sharps: newFifths >= 0) }
+            if awkwardSpelling(ni, a, fifths: newFifths) { (ni, a) = simpleSpelling(target, sharps: newFifths >= 0) }
             setStepAlter(el, stepName: stepName, alterName: alterName, step: ni, alter: Double(a))
         }
         for r in elements(doc, "//harmony/root") { shiftPC(r, "root-step", "root-alter") }
