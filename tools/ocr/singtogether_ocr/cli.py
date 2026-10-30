@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-29c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-30a"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -125,9 +125,14 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                         print(f"hybrid chords: {who} answer does not match the image (exact anchors {exact:.0%}, {n_ai} chords), using Vision only")
                 assemble.attach_chords(t, chord_boxes, page.interline)
                 inferred = key.infer_key([n.chord for n in t.notes if n.chord], prefer=t.fifths)
+                # 엔진 조표와 멀어도, AI가 읽은 조표가 코드로 추론한 조와 같으면 두 독립 판독이 맞는 것이다
+                # (438px 웹 캡처: 엔진이 ♯4개를 ♭3개로 읽어 E장조가 E♭장조로 남았고, +1 이조가 E장조·E♯ 코드가 된 사례)
+                ai_agrees = claude_t is not None and inferred is not None and claude_t.fifths == inferred[0]
                 if inferred and inferred[2] >= 0.7 and (inferred[0], inferred[1]) != (t.fifths, t.mode) \
-                        and key.plausible_change(t, inferred[0]):
+                        and (key.plausible_change(t, inferred[0]) or ai_agrees):
+                    was = t.key_name
                     rekey(t, inferred[0], inferred[1])
+                    print(f"key: {was} → {t.key_name} from the chords" + (" and the AI reading" if ai_agrees else ""))
             key.infer_time(t)
             if lyrics_:
                 sylls = lyrics.read_lyrics(page, systems, debug_dir)

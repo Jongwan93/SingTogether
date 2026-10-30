@@ -67,6 +67,28 @@ enum SelfTest {
         check(ChordText.transpose("Bb   Eb   F", semitones: -4) == "F#   B    C#", "sharps preferred from a flat original")
         check(MusicXML.targetFifths(-2, -4) == 6 && MusicXML.targetFifths(1, 1) == -4, "sharps preferred only matters when both spellings exist (G +1 is still Ab)")
         Preferences.enharmonic = .original
+
+        // MusicXML 코드 기호: 조표가 틀리게 읽힌 악보(E♭장조로 적힌 E장조)를 +1 해도 E♯이 아니라 F
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <score-partwise version="3.1"><part-list><score-part id="P1"><part-name>M</part-name></score-part></part-list>
+        <part id="P1"><measure number="1"><attributes><divisions>1</divisions><key><fifths>-3</fifths></key></attributes>
+        <harmony><root><root-step>E</root-step></root><kind>major</kind></harmony>
+        <harmony><root><root-step>C</root-step><root-alter>1</root-alter></root><kind>minor</kind></harmony>
+        <note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note>
+        </measure></part></score-partwise>
+        """
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("singtogether-selftest-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let src = dir.appendingPathComponent("k.musicxml"), out = dir.appendingPathComponent("k+1.musicxml")
+        try? xml.write(to: src, atomically: true, encoding: .utf8)
+        if (try? Converter.convert(src, semitones: 1, to: out)) != nil, let s = try? String(contentsOf: out, encoding: .utf8) {
+            check(s.contains("<root-step>F</root-step>") && !s.contains("<root-step>E</root-step><root-alter>1"), "chord E in a mis-keyed score +1 → F, not E#")
+            check(s.contains("<root-step>D</root-step>"), "chord C#m +1 → Dm")
+        } else {
+            check(false, "musicxml chord respelling test could not run")
+        }
+        try? FileManager.default.removeItem(at: dir)
         print(failures == 0 ? "self-test passed" : "self-test failed: \(failures)")
         return failures == 0 ? 0 : 1
     }

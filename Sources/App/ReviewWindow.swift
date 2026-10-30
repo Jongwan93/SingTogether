@@ -37,8 +37,10 @@ final class ReviewWindowController: NSWindowController {
         self.result = result
         self.delivered = delivered
         self.extraPages = extraPages
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
-                         styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        // 화면을 가득 채워 연다: 왼쪽 반은 원본, 오른쪽 반은 이조한 악보 (마우스가 있는 화면)
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1180, height: 760)
+        let w = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         w.title = "Review: \(original.lastPathComponent) → \(delivered.lastPathComponent)"
         w.minSize = NSSize(width: 860, height: 500)
         super.init(window: w)
@@ -134,7 +136,9 @@ final class ReviewWindowController: NSWindowController {
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
         ])
+        // 두 쪽의 우선순위를 같게: 창 크기가 바뀌어도 반반을 유지한다 (한쪽만 늘어나던 것을 막는다)
         split.setHoldingPriority(.defaultLow, forSubviewAt: 0)
+        split.setHoldingPriority(.defaultLow, forSubviewAt: 1)
         DispatchQueue.main.async { [weak self] in
             guard let self, let w = self.window else { return }
             split.setPosition(w.frame.width * 0.5, ofDividerAt: 0)

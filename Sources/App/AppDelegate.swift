@@ -177,7 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard AppSettings.showReview else { return }
                     let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made[0], extraPages: Array(made.dropFirst()))
                     self.reviewWindows.append(wc)
-                    wc.window?.center()
                     wc.showWindow(nil)
                     NSApp.activate(ignoringOtherApps: true)
                     wc.window?.makeKeyAndOrderFront(nil)
