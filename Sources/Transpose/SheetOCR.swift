@@ -179,6 +179,10 @@ package enum SheetOCR {
         if let s = dict["summary"] as? [String: Any] {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }
             summary = "To check: notes \(pair("notes_flagged", "notes")), chords \(pair("chords_flagged", "chords")), lyrics \(pair("lyrics_flagged", "lyrics"))"
+            // 절반 넘게 의심스러우면 그림이 작은 것이다: 하나씩 고치기보다 더 큰 그림을 구하는 편이 낫다고 알려 준다
+            if let n = s["notes"] as? Int, let f = s["notes_flagged"] as? Int, n >= 10, f * 2 >= n {
+                summary += " · low-resolution image: most notes are doubtful, a larger image or the original PDF reads far better"
+            }
         } else if dict["chordsheet"] as? Bool == true {
             if let chart = dict["chart"] as? [String: Any] {
                 let notes = (chart["notes"] as? [String]) ?? []

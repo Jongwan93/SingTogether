@@ -62,6 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             edit.submenu?.addItem(NSMenuItem(title: title, action: sel, keyEquivalent: key))
         }
         main.addItem(edit)
+        // 확인 창의 악보 확대 (first responder → ReviewWindowController)
+        let view = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        view.submenu = NSMenu(title: "View")
+        for (title, sel, key) in [("Zoom In", #selector(ReviewWindowController.zoomIn(_:)), "="), ("Zoom Out", #selector(ReviewWindowController.zoomOut(_:)), "-"),
+                                  ("Fit Width", #selector(ReviewWindowController.zoomToFit(_:)), "0")] {
+            view.submenu?.addItem(NSMenuItem(title: title, action: sel, keyEquivalent: key))
+        }
+        main.addItem(view)
         NSApp.mainMenu = main
 
         panel.contentView = ring

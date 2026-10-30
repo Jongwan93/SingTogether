@@ -27,7 +27,7 @@ final class ReviewImageView: NSImageView {
     var top = 12
     var current: String? { didSet { needsDisplay = true } }      // 보고 있는 자리의 key
     var playing: String? { didSet { needsDisplay = true } }      // 울리는 중인 음표의 key
-    private var interline: CGFloat = 24
+    private(set) var interline: CGFloat = 24
 
     /// review.json → 자리 목록 (좌표는 page.png·review.png와 같은 이미지 픽셀, 원점 왼쪽 위).
     /// 코드 상자는 음표 위 2.2il, 가사 상자는 음표 아래 2.5il (review.overlay와 같은 자리).

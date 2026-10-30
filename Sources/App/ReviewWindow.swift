@@ -44,6 +44,8 @@ final class ReviewWindowController: NSWindowController {
         super.init(window: w)
         build()
         load()
+        NotificationCenter.default.addObserver(self, selector: #selector(windowResized(_:)), name: NSWindow.didResizeNotification, object: w)
+        NotificationCenter.default.addObserver(self, selector: #selector(userMagnified(_:)), name: NSScrollView.didEndLiveMagnifyNotification, object: imageScroll)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -169,7 +171,8 @@ final class ReviewWindowController: NSWindowController {
             imageView.drawsFlags = clean != nil
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
-            imageScroll.magnification = min(1, (imageScroll.bounds.width - 4) / max(1, img.size.width))
+            fitToWidth = true
+            applyFit()
             if imageView.spots.isEmpty, let t = result.text {
                 imageView.load(reviewJSON: result.reviewJSON ?? t.deletingPathExtension().appendingPathExtension("review.json"))
             }
@@ -183,7 +186,7 @@ final class ReviewWindowController: NSWindowController {
         tempoPopup.isHidden = !isStaff
         leftLabel.stringValue = result.isChordSheet
             ? "Original — orange: chords to check · click any chord or word to fix it (green: fixed)"
-            : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed)"
+            : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed) · ⌘+ ⌘− zoom"
         pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
             pdfView.document = doc
@@ -288,9 +291,42 @@ final class ReviewWindowController: NSWindowController {
         else if let cur = lastPicked, let i = list.firstIndex(where: { $0.rank > cur.rank }) { k = i }
         let spot = list[k]
         let rect = imageView.viewRect(spot)
+        // 웹 캡처처럼 작은 악보에서는 음표가 깨알만 하다: 오선 간격이 화면에서 10pt는 되게 당겨서 보여 준다
+        if imageView.interline > 0, imageView.interline * imageScroll.magnification < 10 {
+            fitToWidth = false
+            imageScroll.setMagnification(min(imageScroll.maxMagnification, 14 / imageView.interline), centeredAt: NSPoint(x: rect.midX, y: rect.midY))
+        }
         imageView.scrollToVisible(rect.insetBy(dx: -120, dy: -120))
         summary.stringValue = "Doubtful note \(k + 1) of \(list.count): measure \(spot.measure), \(spot.name) (confidence \(String(format: "%.2f", spot.conf)))"
         pick(spot, at: rect)
+    }
+
+    // MARK: 확대 — 창 너비에 맞추되(창을 키우면 따라 커진다), 손으로 확대하면 그 배율을 둔다. View 메뉴: ⌘= ⌘- ⌘0
+
+    private var fitToWidth = true
+
+    private func fitMagnification() -> CGFloat {
+        guard let img = imageView.image, img.size.width > 0 else { return 1 }
+        return max(imageScroll.minMagnification, min(imageScroll.maxMagnification, (imageScroll.bounds.width - 4) / img.size.width))
+    }
+
+    private func applyFit() {
+        guard fitToWidth else { return }
+        imageScroll.magnification = fitMagnification()
+    }
+
+    @objc private func windowResized(_ note: Notification) { applyFit() }
+    @objc private func userMagnified(_ note: Notification) { fitToWidth = false }
+
+    @objc func zoomIn(_ sender: Any?) { zoom(to: imageScroll.magnification * 1.25) }
+    @objc func zoomOut(_ sender: Any?) { zoom(to: imageScroll.magnification / 1.25) }
+    @objc func zoomToFit(_ sender: Any?) { fitToWidth = true; applyFit() }
+
+    private func zoom(to m: CGFloat) {
+        fitToWidth = false
+        let visible = imageScroll.contentView.bounds          // 문서 좌표의 보이는 영역 (배율이 반영돼 있다)
+        imageScroll.setMagnification(max(imageScroll.minMagnification, min(imageScroll.maxMagnification, m)),
+                                     centeredAt: NSPoint(x: visible.midX, y: visible.midY))
     }
 
     // MARK: 재생
