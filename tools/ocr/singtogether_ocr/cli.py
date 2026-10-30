@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-30c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-30d"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -48,12 +48,15 @@ def cache_get(key: str, out: Path) -> list[Path] | None:
     return copied
 
 
-def cache_put(key: str, files: list[Path]) -> None:
+def cache_put(key: str, files: list[tuple[Path, str]]) -> None:
+    """(파일, 이름 꼬리) 목록을 result<꼬리>로 저장한다: (<이름>.review.json, ".review.json") → result.review.json,
+    (<이름>-p1.page.png, "-p1.page.png") → result-p1.page.png. cache_get이 같은 꼬리로 되돌린다."""
     import shutil
     d = CACHE_DIR / key
     d.mkdir(parents=True, exist_ok=True)
-    for f in files:
-        shutil.copy(f, d / ("result" + "".join(f.suffixes)))           # <이름>.review.json → result.review.json
+    for f, tail in files:
+        if f.exists():
+            shutil.copy(f, d / ("result" + tail))
 
 
 def page_images(folder: Path, stem: str, kind: str) -> list[str]:
@@ -326,14 +329,20 @@ def main(argv=None) -> None:
             print(f"→ {f}")
         result["cached"] = True
         for f in hit:
-            result[{".musicxml": "musicxml", ".txt": "txt", ".json": "review_json"}.get(f.suffix, f.suffix)] = str(f)
+            if (k := {".musicxml": "musicxml", ".txt": "txt", ".json": "review_json"}.get(f.suffix)):
+                result[k] = str(f)
         if not any(f.suffix == ".musicxml" for f in hit):
             result["chordsheet"] = True
         else:
-            # 확인 그림은 캐시에 없지만, 같은 작업 폴더에서 전에 돌렸으면 아직 거기 있다 (앱의 클릭 수정에 필요)
+            # 확인 그림(review/page.png)도 캐시에 들어 있다 (앱이 표시를 그리고 클릭 수정을 하는 데 필요). 요약도 review.json에서
             for kind in ("review", "page"):
-                if found := page_images(out_base.parent, a.input.stem, kind):
+                if found := page_images(out_base.parent, out_base.stem, kind) or page_images(out_base.parent, a.input.stem, kind):
                     result[f"{kind}_png"] = found
+            if (rj := result.get("review_json")) and Path(rj).exists():
+                try:
+                    result["summary"] = json.loads(Path(rj).read_text())["summary"]
+                except (ValueError, KeyError):
+                    pass
         if a.transpose:
             main_out = next((f for f in hit if f.suffix in (".musicxml", ".txt")), hit[0])
             tr = transpose(main_out, a.transpose, result)
@@ -386,7 +395,7 @@ def main(argv=None) -> None:
         print(f"→ {out}")
         result["chordsheet"], result["txt"] = True, str(out)
         if not a.no_cache:
-            cache_put(key_, [out])
+            cache_put(key_, [(out, ".txt")])
         if a.transpose:
             tr = transpose(out, a.transpose, result)
             print(f"→ {tr}")
@@ -413,7 +422,8 @@ def main(argv=None) -> None:
                    "review_png": page_images(out_base.parent, a.input.stem, "review"),
                    "page_png": page_images(out_base.parent, a.input.stem, "page")})
     if not a.no_cache:
-        cache_put(key_, [out, txt, rev_path])
+        pngs = [(Path(p), Path(p).name[len(a.input.stem):]) for kind in ("review_png", "page_png") for p in result[kind]]
+        cache_put(key_, [(out, ".musicxml"), (txt, ".txt"), (rev_path, ".review.json")] + pngs)
 
     targets = [out]
     if a.transpose:

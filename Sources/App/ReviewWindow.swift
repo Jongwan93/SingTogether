@@ -12,6 +12,9 @@ final class ReviewWindowController: NSWindowController {
     private var result: SheetOCR.Result
     private var delivered: URL
     private var extraPages: [URL]         // 그림 결과가 여러 쪽일 때 둘째 쪽부터 (다시 만들 때 같이 지운다)
+    private let split = NSSplitView()
+    private var splitRatio: CGFloat = 0.5 // 왼쪽(원본) 너비 비율
+    private var pendingTop = true         // 처음 맞출 때 악보 맨 위가 보이게 (뒤집히지 않은 뷰라 기본은 아래쪽이 보인다)
 
     private let summary = NSTextField(labelWithString: "")
     private let pdfView = PDFView()
@@ -55,7 +58,6 @@ final class ReviewWindowController: NSWindowController {
 
     private func build() {
         guard let content = window?.contentView else { return }
-        let split = NSSplitView()
         split.isVertical = true
         split.dividerStyle = .thin
 
@@ -136,13 +138,9 @@ final class ReviewWindowController: NSWindowController {
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
         ])
-        // 두 쪽의 우선순위를 같게: 창 크기가 바뀌어도 반반을 유지한다 (한쪽만 늘어나던 것을 막는다)
-        split.setHoldingPriority(.defaultLow, forSubviewAt: 0)
-        split.setHoldingPriority(.defaultLow, forSubviewAt: 1)
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let w = self.window else { return }
-            split.setPosition(w.frame.width * 0.5, ofDividerAt: 0)
-        }
+        // 반반으로 나누고, 창 크기가 바뀌어도 그 비율을 지킨다 (delegate). 손으로 옮긴 비율은 기억한다.
+        // 레이아웃이 잡힐 때마다 악보를 왼쪽 너비에 맞춘다 (창을 만들 때는 아직 크기가 0이라 그때 맞추면 최소 배율이 된다)
+        split.delegate = self
         MelodyPlayer.shared.onEvent = { [weak self] e in self?.playing(e) }
     }
 
@@ -176,7 +174,8 @@ final class ReviewWindowController: NSWindowController {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
             fitToWidth = true
-            applyFit()
+            pendingTop = true
+            if applyFit(toTop: true) { pendingTop = false }
             if imageView.spots.isEmpty, let t = result.text {
                 imageView.load(reviewJSON: result.reviewJSON ?? t.deletingPathExtension().appendingPathExtension("review.json"))
             }
@@ -314,9 +313,19 @@ final class ReviewWindowController: NSWindowController {
         return max(imageScroll.minMagnification, min(imageScroll.maxMagnification, (imageScroll.bounds.width - 4) / img.size.width))
     }
 
-    private func applyFit() {
-        guard fitToWidth else { return }
+    /// 너비에 맞춘다. 레이아웃 전(너비 0)이면 아무것도 안 하고 false.
+    @discardableResult
+    private func applyFit(toTop: Bool = false) -> Bool {
+        guard fitToWidth, imageScroll.bounds.width > 10, imageView.image != nil else { return false }
         imageScroll.magnification = fitMagnification()
+        if toTop { scrollToTop() }
+        return true
+    }
+
+    private func scrollToTop() {
+        let clip = imageScroll.contentView
+        clip.scroll(to: NSPoint(x: 0, y: max(0, imageView.bounds.height - clip.bounds.height)))
+        imageScroll.reflectScrolledClipView(clip)
     }
 
     @objc private func windowResized(_ note: Notification) { applyFit() }
@@ -472,5 +481,22 @@ final class ReviewWindowController: NSWindowController {
                 }
             }
         }
+    }
+}
+
+/// 반반 분할: 창 크기가 바뀌어도 비율을 지키고, 레이아웃이 잡힐 때마다 악보를 왼쪽 너비에 맞춘다.
+extension ReviewWindowController: NSSplitViewDelegate {
+    func splitView(_ sv: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+        guard sv.subviews.count == 2 else { return }
+        let total = sv.bounds.width - sv.dividerThickness
+        let left = (total * splitRatio).rounded()
+        sv.subviews[0].frame = NSRect(x: 0, y: 0, width: left, height: sv.bounds.height)
+        sv.subviews[1].frame = NSRect(x: left + sv.dividerThickness, y: 0, width: total - left, height: sv.bounds.height)
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        let total = split.bounds.width - split.dividerThickness
+        if total > 0, let left = split.subviews.first { splitRatio = left.frame.width / total }
+        if applyFit(toTop: pendingTop) { pendingTop = false }
     }
 }
