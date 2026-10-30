@@ -17,9 +17,15 @@ enum Notes {
     static func usesFlats(_ k: MusicKey) -> Bool {
         k.minor ? flatMinor.contains(mod12(k.root)) : flatMajor.contains(mod12(k.root))
     }
-    /// 옮긴 뒤의 조가 F#/Gb(단조는 D#m/Ebm)처럼 둘 다 가능하면 원래 조가 쓰던 쪽(♯ 악보는 ♯)을 따른다
+    /// 옮긴 뒤의 조가 F#/Gb(단조는 D#m/Ebm)처럼 둘 다 가능하면 설정(Preferences.enharmonic)을 따른다.
+    /// 기본은 원래 조가 쓰던 쪽(♯ 악보는 ♯, C장조·A단조도 ♯).
     static func usesFlats(_ target: MusicKey, from source: MusicKey) -> Bool {
-        mod12(target.root) == (target.minor ? 3 : 6) ? usesFlats(source) : usesFlats(target)
+        guard mod12(target.root) == (target.minor ? 3 : 6) else { return usesFlats(target) }
+        switch Preferences.enharmonic {
+        case .sharps: return false
+        case .flats: return true
+        case .original: return usesFlats(source)
+        }
     }
     static func name(_ pc: Int, flats: Bool) -> String { (flats ? flat : sharp)[mod12(pc)] }
     static func keyName(_ k: MusicKey, from source: MusicKey? = nil) -> String {

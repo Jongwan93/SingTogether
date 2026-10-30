@@ -86,6 +86,7 @@ package enum SheetOCR {
     private static func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin:" + FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        env[Preferences.enharmonicVariable] = Preferences.enharmonic.rawValue    // 인식기가 부르는 CLI가 F♯/G♭ 선택을 따르게
         // 인식 도구가 이조·SVG→PDF에 쓰는 CLI. 앱 번들 안의 것을 쓰게 한다 (없으면 저장소의 빌드 결과를 찾는다)
         if env["SINGTOGETHER_TRANSPOSE"] == nil,
            let cli = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("singtogether-transpose"),
@@ -157,14 +158,16 @@ package enum SheetOCR {
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
+        let started = Date()
         try p.run()
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let stdout = String(data: outData, encoding: .utf8) ?? ""
+        let stderr = String(data: errData, encoding: .utf8) ?? ""
+        log(args: args, status: p.terminationStatus, stdout: stdout, stderr: stderr, seconds: Date().timeIntervalSince(started))
         guard p.terminationStatus == 0 else {
-            let err = String(data: errData, encoding: .utf8) ?? ""
-            throw Failure.failed(String((err.isEmpty ? stdout : err).suffix(600)))
+            throw Failure.failed(String((stderr.isEmpty ? stdout : stderr).suffix(600)))
         }
         guard let line = stdout.split(separator: "\n").last(where: { $0.hasPrefix("JSON ") }),
               let data = line.dropFirst(5).data(using: .utf8),
@@ -193,6 +196,25 @@ package enum SheetOCR {
                       keys: dict["keys"] as? String, summary: summary,
                       isChordSheet: dict["chordsheet"] as? Bool == true, engine: dict["engine"] as? String ?? "",
                       chartFont: (dict["chart"] as? [String: Any])?["font"] as? String)
+    }
+
+    // MARK: 기록 — 마지막 인식 실행의 출력. 문제 신고(♪ 메뉴 → Report a Problem…)에 붙인다
+
+    package static var logDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/SingTogether", isDirectory: true)
+    }
+    package static var logFile: URL { logDirectory.appendingPathComponent("recognizer.log") }
+    package static var failureLogFile: URL { logDirectory.appendingPathComponent("recognizer-failed.log") }
+
+    /// 마지막 실행은 늘 recognizer.log에, 실패한 실행은 recognizer-failed.log에도 (그 뒤에 성공해도 남게)
+    private static func log(args: [String], status: Int32, stdout: String, stderr: String, seconds: TimeInterval) {
+        var s = "\(ISO8601DateFormatter().string(from: Date())) singtogether-ocr \(args.joined(separator: " "))\n"
+        s += "exit \(status) after \(Int(seconds.rounded())) s\n"
+        if !stdout.isEmpty { s += "--- stdout\n" + stdout + (stdout.hasSuffix("\n") ? "" : "\n") }
+        if !stderr.isEmpty { s += "--- stderr\n" + stderr + (stderr.hasSuffix("\n") ? "" : "\n") }
+        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        try? s.write(to: logFile, atomically: true, encoding: .utf8)
+        if status != 0 { try? s.write(to: failureLogFile, atomically: true, encoding: .utf8) }
     }
 
     // MARK: 정답(truth) 저장 — 확인 창에서 다 고친 악보를 평가 세트(tools/ocr/truth)에 넣는다
@@ -236,23 +258,47 @@ package enum SheetOCR {
         return dest
     }
 
-    /// 최종 결과물을 원본 옆에 "이름 (+2, A).pdf"로 복사한다. 코드 차트는 .txt.
-    package static func deliver(_ r: Result, next original: URL, semitones: Int) throws -> URL {
+    /// 최종 결과물을 원본 옆에 "이름 (+2, A).pdf"로 복사한다. 코드 차트는 코드를 다시 쓴 그림(없으면 .txt).
+    /// 그림 악보는 설정(Preferences.imageOutput)에 따라 PDF 대신 원본과 같은 종류의 그림으로 그린다
+    /// (쪽이 여럿이면 "이름 (+2, A) p1.png", "… p2.png"). 돌려주는 값: 만든 파일들, 첫 번째가 대표.
+    package static func deliverAll(_ r: Result, next original: URL, semitones: Int) throws -> [URL] {
         let src: URL
         if let pdf = r.transposedPDF { src = pdf }
         else if let t = r.transposed { src = t }
         else { throw Failure.failed("No transposed file was produced") }
         let sign = semitones > 0 ? "+\(semitones)" : "\(semitones)"
         let newKey = r.keys?.components(separatedBy: " -> ").last.map { ", \($0)" } ?? ""
-        let base = original.deletingPathExtension().lastPathComponent
+        let base = "\(original.deletingPathExtension().lastPathComponent) (\(sign)\(newKey))"
         let dir = original.deletingLastPathComponent()
-        var dest = dir.appendingPathComponent("\(base) (\(sign)\(newKey)).\(src.pathExtension)")
-        var n = 2
-        while FileManager.default.fileExists(atPath: dest.path) {
-            dest = dir.appendingPathComponent("\(base) (\(sign)\(newKey)) \(n).\(src.pathExtension)")
+
+        if Preferences.imageOutput, src.pathExtension.lowercased() == "pdf", let format = Raster.format(forExtension: original.pathExtension) {
+            // 원본보다 작지 않게, A4 200dpi(1654px)보다는 크게 그린다
+            let width = min(max(Raster.pixelWidth(of: original) ?? 0, 1654), 4000)
+            let pages = try Raster.pages(of: src, width: width, format: format)
+            let urls = outputURLs(dir, base: base, ext: format.ext, pages: pages.count)
+            for (u, data) in zip(urls, pages) { try data.write(to: u, options: .withoutOverwriting) }
+            return urls
+        }
+        let dest = outputURLs(dir, base: base, ext: src.pathExtension, pages: 1)[0]
+        try FileManager.default.copyItem(at: src, to: dest)
+        return [dest]
+    }
+
+    @discardableResult
+    package static func deliver(_ r: Result, next original: URL, semitones: Int) throws -> URL {
+        try deliverAll(r, next: original, semitones: semitones)[0]
+    }
+
+    /// 아직 없는 이름들: "base.ext", 쪽이 여럿이면 "base p1.ext"…; 있으면 "base 2.ext" / "base 2 p1.ext"…
+    private static func outputURLs(_ dir: URL, base: String, ext: String, pages: Int) -> [URL] {
+        let fm = FileManager.default
+        var n = 1
+        while true {
+            let stem = base + (n == 1 ? "" : " \(n)")
+            let urls = pages == 1 ? [dir.appendingPathComponent("\(stem).\(ext)")]
+                                  : (1...pages).map { dir.appendingPathComponent("\(stem) p\($0).\(ext)") }
+            if !urls.contains(where: { fm.fileExists(atPath: $0.path) }) { return urls }
             n += 1
         }
-        try FileManager.default.copyItem(at: src, to: dest)
-        return dest
     }
 }

@@ -9,11 +9,17 @@ package enum MusicXML {
 
     package struct KeySig { var fifths: Int; var minor: Bool }
 
-    /// 반음 s만큼 옮긴 뒤의 조표(-6…6). F#/Gb처럼 둘 다 가능하면 플랫 쪽.
-    static func targetFifths(_ old: Int, _ s: Int) -> Int {
+    /// 반음 s만큼 옮긴 뒤의 조표(-6…6). F#/Gb처럼 둘 다 가능하면 설정(Preferences.enharmonic)을 따른다:
+    /// 기본은 원래 조표의 쪽(♯ 조표면 ♯, C장조도 ♯), 아니면 늘 ♯ 또는 늘 ♭.
+    package static func targetFifths(_ old: Int, _ s: Int) -> Int {
         let d0 = Notes.mod12(7 * s)
         let candidates = (-3...3).map { old + d0 + 12 * $0 }.filter { (-6...6).contains($0) }
-        return candidates.min() ?? old
+        guard let lo = candidates.min(), let hi = candidates.max() else { return old }
+        switch Preferences.enharmonic {
+        case .sharps: return hi
+        case .flats: return lo
+        case .original: return old >= 0 ? hi : lo
+        }
     }
 
     static func keyName(_ k: KeySig) -> String {

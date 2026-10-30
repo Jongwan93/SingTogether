@@ -15,7 +15,8 @@ Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) al
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
 Song.musicxml  →  drop on −3  →  Song (-3, E).musicxml
-Song.png       →  drop on −2  →  Song (-2, F).pdf   (+ a review window)
+Song.png       →  drop on −2  →  Song (-2, F).png   (redrawn in the new key, + a review window)
+Song.pdf       →  drop on −2  →  Song (-2, F).pdf
 Chart.jpg      →  drop on +2  →  Chart (+2, A).jpg   (same image, new chords)
 ```
 
@@ -48,7 +49,7 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 |---|---|---|
 | `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F`; spelling follows the new key (E major's `B/D#` becomes `C#/E#` in F♯) | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
-| `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, rendered to a new PDF | depends on image quality, see below |
+| `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, redrawn as a new image of the same kind (PNG or JPEG; PDF in, PDF out) | depends on image quality, see below |
 | `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI reader, 80–96% without |
 
 ## AI reader for chords and lyrics (optional)
@@ -63,7 +64,7 @@ If it is not, the app tells you how to sign in and uses Apple Vision alone until
 If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 
 **Privacy:** with an AI reader, the score image is sent to that service (Anthropic or Google) under your own account.
-With **Apple Vision only**, nothing leaves your Mac.
+With **Apple Vision only**, nothing leaves your Mac except the once-a-day version check described under [Updates](#updates-and-problems), which you can turn off.
 
 ## Settings
 
@@ -72,8 +73,15 @@ With **Apple Vision only**, nothing leaves your Mac.
 - **Open SingTogether at login.**
 - **Ask which AI to use when the app starts.** Turn it off once you have chosen.
 - **Open the review window after reading an image score**, and **play a sound** when a file is created.
+- **Check for updates when the app starts.**
+- **Transposing:** when the new key can be written both ways (F♯ or G♭), follow the original (a ♯ score gets F♯, a ♭ score gets G♭), always sharps, or always flats. And whether transposed image scores come back as images (PNG or JPEG, the default) or as PDF.
 - **Reading image scores:** Claude, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
 - **Recognition cache:** how much space the remembered results take, and a button to clear it.
+
+## Updates and problems
+
+- **Updates:** once a day at start, the app asks GitHub for the latest release. If there is a newer one, an **Update to SingTogether …** item appears at the top of the ♪ menu and opens the download page; the app tells you once per new version. **Check for Updates…** in the ♪ menu asks right away. Nothing but the version request is sent.
+- **Report a Problem…** in the ♪ menu opens a new GitHub issue with the app and macOS versions and the last recognizer log filled in. You see the exact text first, your scores are never included, and the same text is copied to the clipboard in case the page cuts it short. The log is also at `~/Library/Logs/SingTogether/recognizer.log`.
 
 ## Image scores: recognize, transpose, review
 
@@ -82,7 +90,7 @@ Recognition is never perfect, so every image score opens a review window:
 - **Left:** the original with suspicious spots marked. Red boxes are notes (thick for the 12 most doubtful, thin for the rest), orange are chords, purple are lyric syllables. Each note is labeled with its measure number and what was read.
 - **Right:** the transposed score. Notes that need checking are drawn in red.
 - **Next doubtful** (or the **N** key) jumps to the next unfixed note, most doubtful first, scrolls to it and opens its editor, so you can walk through the flags in order instead of hunting for them.
-- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The PDF is rebuilt right away. Fixed items get a green outline. The editor also says why the note was flagged.
+- **Click a note** on the left to fix it on the spot: a step up or down, ♯/♭, length, turn into a rest, delete, or type the chord that sits over it. The transposed file is rebuilt right away. Fixed items get a green outline. The editor also says why the note was flagged.
 - **Hear it.** Clicking a note plays it as it was read, and so does every step up or down. **▶ Note** and **▶ Measure** in the editor replay the note or its measure; **▶ Play** above the image (or the space bar) plays the whole melody from the start, highlighting each note as it sounds. Tempo is in the ♩ menu. Nothing plays until you ask.
 - **Click a chord or a lyric syllable** (the orange and purple boxes, but any chord or syllable works) to retype it or remove it.
 - **Undo** (⌘Z or the button) takes back the last click-fix.
@@ -142,6 +150,8 @@ Both tools ship inside the app:
 ```bash
 APP=/Applications/SingTogether.app/Contents
 $APP/MacOS/singtogether-transpose Song.musicxml -2                     # same rules as the app, any supported file
+$APP/MacOS/singtogether-transpose Song.txt 4 --flats                   # Gb rather than F# when both fit (--sharps; or SINGTOGETHER_ENHARMONIC=flats)
+$APP/MacOS/singtogether-transpose Song.png -2 --pdf                    # image score → PDF instead of an image
 $APP/Resources/ocr/bin/singtogether-ocr score.jpg                      # → score.musicxml, score.txt, score.review.json, score-p1.review.png
 $APP/Resources/ocr/bin/singtogether-ocr score.jpg --transpose -2 --render     # + transposed copy and PDFs
 $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → image with new chords + .txt

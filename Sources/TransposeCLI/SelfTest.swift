@@ -53,6 +53,20 @@ enum SelfTest {
         check(ChordText.transpose("G    D/F#  Em   C", semitones: -2) == "F    C/E   Dm   Bb", "G -2 → F uses flats")
         check(ChordText.transpose("F#   C#/E#  B", semitones: 2) == "Ab   Eb/G   Db", "double sharp falls back to simple spelling")
         check(ChordText.detectKey("C G D Em\n") .map { $0.root } == 7, "C G D Em → G")
+
+        // F♯/G♭ 선택: 기본은 원본 쪽, 아니면 늘 ♯ / 늘 ♭ (텍스트 코드와 MusicXML 조표가 같은 쪽을 고른다)
+        Preferences.enharmonic = .original
+        check(ChordText.transpose("D    G    A", semitones: 4) == "F#   B    C#", "sharp original +4 → F#: \(ChordText.transpose("D    G    A", semitones: 4))")
+        check(ChordText.transpose("Bb   Eb   F", semitones: -4) == "Gb   Cb   Db", "flat original −4 → Gb: \(ChordText.transpose("Bb   Eb   F", semitones: -4))")
+        check(MusicXML.targetFifths(2, 4) == 6 && MusicXML.targetFifths(-2, -4) == -6 && MusicXML.targetFifths(0, 6) == 6, "key signature follows the original side")
+        Preferences.enharmonic = .flats
+        check(ChordText.transpose("C    F    G", semitones: 6) == "Gb   Cb   Db", "flats preferred: \(ChordText.transpose("C    F    G", semitones: 6))")
+        check(MusicXML.targetFifths(2, 4) == -6, "flats preferred → 6 flats")
+        Preferences.enharmonic = .sharps
+        check(ChordText.transpose("C    F    G", semitones: 6) == "F#   B    C#", "sharps preferred: \(ChordText.transpose("C    F    G", semitones: 6))")
+        check(ChordText.transpose("Bb   Eb   F", semitones: -4) == "F#   B    C#", "sharps preferred from a flat original")
+        check(MusicXML.targetFifths(-2, -4) == 6 && MusicXML.targetFifths(1, 1) == -4, "sharps preferred only matters when both spellings exist (G +1 is still Ab)")
+        Preferences.enharmonic = .original
         print(failures == 0 ? "self-test passed" : "self-test failed: \(failures)")
         return failures == 0 ? 0 : 1
     }

@@ -14,12 +14,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var reviewWindows: [ReviewWindowController] = []
     private var busy = false
     private let readerItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "", action: #selector(openUpdate), keyEquivalent: "")   // 새 버전이 있을 때만 보인다
+    private let updateSeparator = NSMenuItem.separator()
+    private var latest: UpdateCheck.Release?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppSettings.applyTransposePreferences()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "SingTogether")
 
         let menu = NSMenu()
+        updateItem.target = self
+        updateItem.isHidden = true
+        updateSeparator.isHidden = true
+        menu.addItem(updateItem)
+        menu.addItem(updateSeparator)
         let info = NSMenuItem(title: "Hold Shift while dragging a score file", action: nil, keyEquivalent: "")
         info.isEnabled = false
         menu.addItem(info)
@@ -33,6 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        menu.addItem(.separator())
+        let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
+        check.target = self
+        menu.addItem(check)
+        let report = NSMenuItem(title: "Report a Problem…", action: #selector(reportProblem), keyEquivalent: "")
+        report.target = self
+        menu.addItem(report)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit SingTogether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -61,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다 (설정에서 끌 수 있다)
         DispatchQueue.main.async { [weak self] in
             if AppSettings.askAtLaunch { self?.chooseReader() } else { self?.verifyReader() }
+        }
+        // 하루에 한 번, 시작하고 잠시 뒤에 새 버전이 나왔는지 본다 (설정에서 끌 수 있다)
+        if AppSettings.checkUpdates, Date().timeIntervalSince(AppSettings.lastUpdateCheck) > 20 * 3600 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in self?.checkForUpdates(manual: false) }
         }
 
         // 개발용: SingTogether --sheet <이미지> <반음> 으로 띄우면 드래그 없이 인식 → 확인 창까지 간다
@@ -138,15 +158,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let r = try SheetOCR.run(url, semitones: semis)
-                let made = try SheetOCR.deliver(r, next: url, semitones: semis)
+                let made = try SheetOCR.deliverAll(r, next: url, semitones: semis)
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.busy = false
-                    self.ring.message = "Created\n\(made.lastPathComponent)\n\(r.summary)"
+                    let pages = made.count > 1 ? " (\(made.count) pages)" : ""
+                    self.ring.message = "Created\n\(made[0].lastPathComponent)\(pages)\n\(r.summary)"
                     if AppSettings.playSound { NSSound(named: "Glass")?.play() }
                     self.scheduleHide(after: 2.5)
                     guard AppSettings.showReview else { return }
-                    let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made)
+                    let wc = ReviewWindowController(original: url, semitones: semis, result: r, delivered: made[0], extraPages: Array(made.dropFirst()))
                     self.reviewWindows.append(wc)
                     wc.window?.center()
                     wc.showWindow(nil)
@@ -236,6 +257,58 @@ extension AppDelegate {
     func updateReaderItem() {
         let state = SheetOCR.llmReady == false ? " (not signed in → Apple Vision)" : ""
         readerItem.title = "Reading with \(label(SheetOCR.llm))\(state) — Change…"
+    }
+}
+
+/// 새 버전 확인(GitHub Releases)과 문제 신고(GitHub 이슈).
+extension AppDelegate {
+    /// manual: 메뉴에서 눌렀을 때. 결과가 무엇이든 알려 준다. 자동 확인은 새 버전이 있을 때만, 버전마다 한 번 알린다.
+    func checkForUpdates(manual: Bool) {
+        UpdateCheck.fetch { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let release):
+                    AppSettings.lastUpdateCheck = Date()
+                    guard UpdateCheck.isNewer(release.version, than: UpdateCheck.current) else {
+                        self.latest = nil
+                        self.updateItem.isHidden = true
+                        self.updateSeparator.isHidden = true
+                        if manual { self.alert("SingTogether is up to date", "\(UpdateCheck.current) is the latest version.") }
+                        return
+                    }
+                    self.latest = release
+                    self.updateItem.title = "Update to SingTogether \(release.version)…"
+                    self.updateItem.isHidden = false
+                    self.updateSeparator.isHidden = false
+                    guard manual || AppSettings.notifiedVersion != release.version else { return }
+                    AppSettings.notifiedVersion = release.version
+                    let a = NSAlert()
+                    a.messageText = "SingTogether \(release.version) is available"
+                    a.informativeText = "You have \(UpdateCheck.current). The release notes and the download are on GitHub. "
+                        + "The ♪ menu keeps an Update to SingTogether \(release.version)… item until you install it."
+                    a.addButton(withTitle: "Open Download Page")
+                    a.addButton(withTitle: "Later")
+                    NSApp.activate(ignoringOtherApps: true)
+                    if a.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(release.page) }
+                case .failure(let error):
+                    if manual { self.alert("Could not check for updates", error.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    @objc func checkForUpdatesNow() { checkForUpdates(manual: true) }
+    @objc func openUpdate() { if let latest { NSWorkspace.shared.open(latest.page) } }
+    @objc func reportProblem() { ProblemReport.run() }
+
+    private func alert(_ title: String, _ text: String) {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = text
+        a.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
     }
 }
 

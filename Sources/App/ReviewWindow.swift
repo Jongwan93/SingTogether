@@ -11,6 +11,7 @@ final class ReviewWindowController: NSWindowController {
     private let semitones: Int
     private var result: SheetOCR.Result
     private var delivered: URL
+    private var extraPages: [URL]         // 그림 결과가 여러 쪽일 때 둘째 쪽부터 (다시 만들 때 같이 지운다)
 
     private let summary = NSTextField(labelWithString: "")
     private let pdfView = PDFView()
@@ -30,11 +31,12 @@ final class ReviewWindowController: NSWindowController {
     private let truthButton = NSButton(title: "Save as Truth…", target: nil, action: nil)
     private var lastPicked: ReviewImageView.Spot?
 
-    init(original: URL, semitones: Int, result: SheetOCR.Result, delivered: URL) {
+    init(original: URL, semitones: Int, result: SheetOCR.Result, delivered: URL, extraPages: [URL] = []) {
         self.original = original
         self.semitones = semitones
         self.result = result
         self.delivered = delivered
+        self.extraPages = extraPages
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         w.title = "Review: \(original.lastPathComponent) → \(delivered.lastPathComponent)"
@@ -411,13 +413,14 @@ final class ReviewWindowController: NSWindowController {
                 r.pagePNGs = self.result.pagePNGs
                 r.reviewJSON = self.result.reviewJSON
                 r.text = t
-                try? FileManager.default.removeItem(at: self.delivered)
-                let made = try SheetOCR.deliver(r, next: self.original, semitones: self.semitones)
+                for old in [self.delivered] + self.extraPages { try? FileManager.default.removeItem(at: old) }
+                let made = try SheetOCR.deliverAll(r, next: self.original, semitones: self.semitones)
                 DispatchQueue.main.async {
                     self.result = r
-                    self.delivered = made
+                    self.delivered = made[0]
+                    self.extraPages = Array(made.dropFirst())
                     self.load()
-                    self.summary.stringValue = "Rebuilt from the edited text → \(made.lastPathComponent)"
+                    self.summary.stringValue = "Rebuilt from the edited text → \(made[0].lastPathComponent)"
                     self.spinner.stopAnimation(nil); self.spinner.isHidden = true
                     if AppSettings.playSound { NSSound(named: "Glass")?.play() }
                 }
