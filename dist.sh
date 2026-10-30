@@ -91,9 +91,13 @@ cat > "$ENTITLEMENTS" <<'EOF'
     <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
 </dict></plist>
 EOF
-IDENTITY="${DEVELOPER_ID:--}"
-SIGN=(codesign --force --sign "$IDENTITY" --timestamp --options runtime --entitlements "$ENTITLEMENTS")
-[ "$IDENTITY" = "-" ] && SIGN=(codesign --force --sign -)
+# Developer ID → hardened runtime + timestamp (notarizable). Otherwise the local certificate "SingTogether Local Signing"
+# (tools/make-signing-cert.sh, or SINGTOGETHER_SIGN) if present, else ad-hoc. A stable certificate keeps the macOS
+# Files and Folders permission across builds and versions; ad-hoc makes every build a new app that asks again.
+IDENTITY="${DEVELOPER_ID:-${SINGTOGETHER_SIGN:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"SingTogether Local Signing"' | head -1 | tr -d '"')}}"
+[ -z "$IDENTITY" ] && IDENTITY="-"
+SIGN=(codesign --force --sign "$IDENTITY")
+case "$IDENTITY" in "Developer ID"*) SIGN+=(--timestamp --options runtime --entitlements "$ENTITLEMENTS") ;; esac
 # every Mach-O inside the bundle first (dylibs, .so, python binaries), the app last
 find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -u+x \) | while read -r f; do
     if file "$f" | grep -q "Mach-O"; then "${SIGN[@]}" "$f" 2>/dev/null || true; fi
@@ -110,7 +114,11 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "SingTogether" -srcfolder "$STAGE" -ov -format UDZO -quiet "$DMG"
 rm -rf "$STAGE"
-[ "$IDENTITY" != "-" ] && codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+case "$IDENTITY" in
+    "Developer ID"*) codesign --force --sign "$IDENTITY" --timestamp "$DMG" ;;
+    -) ;;
+    *) codesign --force --sign "$IDENTITY" "$DMG" ;;
+esac
 
 if [ -n "${NOTARY_PROFILE:-}" ]; then
     echo "▸ notarize"
@@ -121,5 +129,9 @@ fi
 
 du -sh "$APP" "$DMG"
 echo "Done: $DMG"
-[ "$IDENTITY" = "-" ] && echo "Ad-hoc signed: recipients allow it once on first launch, see README Install (or set DEVELOPER_ID and NOTARY_PROFILE)."
+case "$IDENTITY" in
+    -) echo "Ad-hoc signed: recipients allow it once on first launch, see README Install (or set DEVELOPER_ID and NOTARY_PROFILE)." ;;
+    "Developer ID"*) ;;
+    *) echo "Signed with \"$IDENTITY\": not notarized (allow once on first launch), but macOS keeps its file permissions across builds." ;;
+esac
 exit 0

@@ -187,6 +187,8 @@ open build/SingTogether.app
 
 A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 
+**Signing and the Files and Folders permission.** The app is signed ad hoc by default, and macOS ties its permission to read your Desktop or Documents to that exact build, so every rebuild or update asks again. `tools/make-signing-cert.sh` creates a self-signed certificate named *SingTogether Local Signing* in your keychain; `build.sh` and `dist.sh` then sign with it and the permission survives rebuilds. Gatekeeper still treats the app as unsigned (allow once on first launch). To give releases the same stable identity, store the certificate as the repository secrets `SIGNING_P12_BASE64` and `SIGNING_P12_PASSWORD`; the release workflow picks them up when present.
+
 **CI and releases.** Every push runs [`ci.yml`](.github/workflows/ci.yml) on a macOS runner: build, self-test, the rendered regression on the public-domain samples, and one end-to-end transposition of a sample image.
 A release is a pushed tag: bump the version in `Info.plist`, commit, then `git tag -a v1.4 -m "SingTogether 1.4" -m "<release notes>"` and push the tag. [`release.yml`](.github/workflows/release.yml) checks that the tag matches the plist, runs `dist.sh`, verifies the disk image and publishes it with the tag message as the notes. A tag like `v1.4-dry` runs the same build and checks without publishing.
 

@@ -41,6 +41,28 @@ jobs:
 
       - uses: astral-sh/setup-uv@v10.3.3     # setup-uv publishes no floating major tag past v7
 
+      # Optional: the repository secrets SIGNING_P12_BASE64 (base64 of the .p12 made by tools/make-signing-cert.sh) and
+      # SIGNING_P12_PASSWORD let every release be signed with the same certificate, so macOS keeps the Files and Folders
+      # permission from one version to the next. Without them the app is signed ad hoc, as before.
+      - name: Signing certificate (optional)
+        env:
+          P12: ${{ secrets.SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "no signing secret: ad-hoc signature"; exit 0; fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p temp "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p temp "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign -A
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k temp "$KC" > /dev/null
+          openssl pkcs12 -in "$RUNNER_TEMP/signing.p12" -clcerts -nokeys -passin pass:"$P12_PASSWORD" -out "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          security find-identity -v -p codesigning
+          echo "SINGTOGETHER_SIGN=SingTogether Local Signing" >> "$GITHUB_ENV"
+
       - name: Build the app and the disk image
         run: ./dist.sh
 
