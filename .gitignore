@@ -39,6 +39,12 @@ tools/ocr/dbg/
 # 예시 악보 (저작권)
 music_scores/
 
+# 정답(truth) 전사도 곡의 멜로디·코드·가사 전체라 올리지 않는다. 공개 도메인 찬송만 예외로 든다
+tools/ocr/truth/*
+!tools/ocr/truth/Amazing Grace.txt
+!tools/ocr/truth/Holy, Holy, Holy.txt
+!tools/ocr/truth/Silent Night.txt
+
 # 에디터 / 로컬 설정
 .vscode/
 .idea/

@@ -213,7 +213,8 @@ cd tools/ocr
 
 Sample scores go in `music_scores/korean` and `music_scores/english` (not in the repository, they are copyrighted);
 the public-domain hymns in `samples/` are rendered from their truth files and are evaluated the same way.
-The evaluation pairs each image with `tools/ocr/truth/<same name>.txt`. The quickest way to add a truth file is the app:
+The evaluation pairs each image with `tools/ocr/truth/<same name>.txt`. Truth files are a full transcription of a song, so they are
+ignored by git as well; only the public-domain hymns are listed as exceptions in `.gitignore`. The quickest way to add a truth file is the app:
 drop the score, fix everything in the review window, then **Save as Truth…** — when the app runs from this repository it
 offers `tools/ocr/truth/` directly and copies the image into `music_scores/` if it is not there yet. Chord charts go to
 `truth/chordsheets/`.
