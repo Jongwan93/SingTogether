@@ -1,6 +1,7 @@
 # Push a tag vX.Y (annotated: its message body becomes the release notes) and this builds the
 # self-contained app with dist.sh and publishes the disk image as a GitHub release.
 # The tag must match CFBundleShortVersionString in Info.plist.
+# A tag vX.Y-dry runs the same build and checks but publishes nothing (to try the workflow).
 name: Release
 
 on:
@@ -29,11 +30,14 @@ jobs:
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
-          if [ "$TAG" != "v$VERSION" ]; then
+          DRY=false
+          case "$TAG" in *-dry) DRY=true ;; esac
+          if [ "${TAG%-dry}" != "v$VERSION" ]; then
             echo "tag $TAG does not match Info.plist version $VERSION"; exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dry=$DRY" >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@v10.3.3     # setup-uv publishes no floating major tag past v7
 
@@ -58,6 +62,7 @@ jobs:
           cat notes.md
 
       - name: Publish
+        if: steps.v.outputs.dry != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

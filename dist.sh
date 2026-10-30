@@ -22,10 +22,32 @@ cp -R build/SingTogether.app "$APP"
 
 echo "▸ python $PYVER (uv managed, relocatable)"
 uv python install "$PYVER" >/dev/null 2>&1 || true
-PYHOME=$(dirname "$(dirname "$(uv python find "$PYVER" --managed-python)")")
+# uv may hand back a symlink (newer versions put one in ~/.local/bin); the install itself is what gets copied
+FOUND=$(uv python find "$PYVER" --managed-python)
+PYHOME=$(dirname "$(dirname "$("$FOUND" -c 'import os, sys; print(os.path.realpath(sys.executable))')")")
+echo "  from $PYHOME"
 cp -R "$PYHOME" "$RES/python"
 PY="$RES/python/bin/python$PYVER"
 [ -x "$PY" ] || { echo "no python at $PY"; exit 1; }
+# codesign --strict rejects a symbolic link that points outside the bundle: replace such links with copies
+"$PY" -I - "$RES/python" <<'EOF'
+import os, shutil, sys
+root = os.path.realpath(sys.argv[1])
+for d, dirs, files in os.walk(root):
+    for name in dirs + files:
+        p = os.path.join(d, name)
+        if not os.path.islink(p):
+            continue
+        real = os.path.realpath(p)
+        if real.startswith(root + os.sep) and os.path.exists(real):
+            continue
+        os.unlink(p)
+        if os.path.isdir(real):
+            shutil.copytree(real, p, symlinks=False)
+        elif os.path.exists(real):
+            shutil.copy2(real, p)
+        print(f"  link replaced by a copy: {os.path.relpath(p, root)} -> {real}")
+EOF
 
 echo "▸ recognizer and its packages"
 uv pip install --python "$PY" --break-system-packages --quiet ./tools/ocr

@@ -188,7 +188,7 @@ open build/SingTogether.app
 A source build looks for `tools/ocr/.venv/bin/singtogether-ocr` inside this repository. If it lives elsewhere, point the `SINGTOGETHER_OCR` environment variable at it.
 
 **CI and releases.** Every push runs [`ci.yml`](.github/workflows/ci.yml) on a macOS runner: build, self-test, the rendered regression on the public-domain samples, and one end-to-end transposition of a sample image.
-A release is a pushed tag: bump the version in `Info.plist`, commit, then `git tag -a v1.4 -m "SingTogether 1.4" -m "<release notes>"` and push the tag. [`release.yml`](.github/workflows/release.yml) checks that the tag matches the plist, runs `dist.sh`, verifies the disk image and publishes it with the tag message as the notes.
+A release is a pushed tag: bump the version in `Info.plist`, commit, then `git tag -a v1.4 -m "SingTogether 1.4" -m "<release notes>"` and push the tag. [`release.yml`](.github/workflows/release.yml) checks that the tag matches the plist, runs `dist.sh`, verifies the disk image and publishes it with the tag message as the notes. A tag like `v1.4-dry` runs the same build and checks without publishing.
 
 ```
 Sources/App/        menu bar app: ring, drag detection, review window, note editor
