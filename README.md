@@ -123,7 +123,7 @@ Measured on four Korean worship lead sheets with hand-checked ground truth:
 | Image saved from a web search (500–800 px) | 32–80% | 28–74% | 91–100% | 41–87% |
 | Clean PDF or high-resolution scan | 92–100% | 86–100% | – | – |
 
-Most church teams use web images, so expect to fix some notes; very small images (about 500 px wide) can lose whole measures.
+Most church teams use web images, so expect to fix some notes. On very small images (staff lines less than 7 px apart, roughly 500 px wide for a full page) the note engine is unusable, so the notes come from the AI reading instead when one is available; chords and lyrics are still cross-checked against the image.
 Measure boundaries are taken from the barlines in the image, so chords stay on the right measure even when the note engine
 splits or merges one, and the AI reads the page one staff line at a time, which is what makes chords and lyrics this reliable.
 The review marks catch 71–95% of the real errors, and **Next doubtful** takes you through them most-likely-wrong first. If you can get the original PDF from the publisher, use that: the engine reads clean input almost perfectly.

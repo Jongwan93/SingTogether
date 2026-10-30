@@ -22,8 +22,10 @@ def staff_pitch(staff, y: float) -> tuple[str, int]:
     return "EFGABCD"[step % 7], 4 + (step + 2) // 7
 
 
-def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSymbols]) -> None:
-    """오선별 마디줄 수만큼 마디를 순서대로 배정하고, 오선 안 음표 머리와 음표를 순서대로 짝짓는다."""
+def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSymbols], keep_pitch: bool = False) -> None:
+    """오선별 마디줄 수만큼 마디를 순서대로 배정하고, 오선 안 음표 머리와 음표를 순서대로 짝짓는다.
+    keep_pitch: 머리의 오선 위치가 달라도 음높이를 바꾸지 않고 신호(head_pitch)만 남긴다
+    (작은 이미지에서 AI 읽기를 바탕으로 쓸 때: 5px 오선의 머리 위치는 AI보다 못 믿는다)."""
     if not systems:
         return
     heads_per_system = [len(s.noteheads) for s in symbols]
@@ -64,6 +66,10 @@ def place_notes(t: Transcription, systems: list[System], symbols: list[SystemSym
             """오선 위치에서 음높이를 다시 읽는다. 엔진이 같은 음이름·옥타브면 엔진 것을 둔다 (임시표 보존)."""
             letter, octave = position_pitch(h)
             if (n.step, n.octave) != (letter, octave):
+                if keep_pitch:
+                    n.reasons.append(f"staff position reads {letter}{octave}")
+                    n.signals.append("head_pitch")
+                    return
                 if os.environ.get("SINGTOGETHER_DEBUG_PITCH"):
                     print(f"    override[{why}] staff{si} x={h.x:.0f}: {n.step}{n.octave} → {letter}{octave}")
                 n.reasons.append(f"pitch fixed from staff position (engine read {n.name})")
@@ -240,7 +246,7 @@ _ALT = (Fraction(2), Fraction(1, 2), Fraction(3, 2), Fraction(2, 3))   # 길이 
 FIX_MAX_COST = 0.7                                                     # 이보다 비싸면(근거 없는 고침) 안 고친다
 
 
-def fill_missing(t: Transcription, systems: list[System], symbols: list[SystemSymbols]) -> int:
+def fill_missing(t: Transcription, systems: list[System], symbols: list[SystemSymbols], keep_pitch: bool = False, insert: bool = True) -> int:
     """박자 합이 모자라는 마디를 엔진이 건너뛴 머리로 채운다 (1-b, 빠진 음표).
 
     작은 웹 이미지에서 엔진은 음표를 통째로 빼먹는데(주님 한 분만으로: 101개 중 46개만) 머리 검출은 대부분 찾는다.
@@ -272,12 +278,16 @@ def fill_missing(t: Transcription, systems: list[System], symbols: list[SystemSy
             n.x, n.y, n.head, n.evidence, h.taken = h.x, h.y, True, h.evidence, True
             letter, octave = staff_pitch(st, h.y)
             if (n.step, n.octave) != (letter, octave):
+                if keep_pitch:
+                    n.reasons.append(f"staff position reads {letter}{octave}")
+                    n.signals.append("head_pitch")
+                    continue
                 n.reasons.append(f"pitch fixed from staff position (engine read {n.name})")
                 n.engine_read = n.name
                 n.step, n.octave, n.alter = letter, octave, key_alter(letter, t.fifths)
         free = [h for h in free if not h.taken]
         missing = expected - m.length
-        if missing <= 0 or not free or at_edge:
+        if missing <= 0 or not free or at_edge or not insert:
             continue
         # ② 남은 머리 전부의 이미지 길이 단서 합이 모자란 만큼과 똑같을 때만 넣는다 (머리 하나를 멋대로 늘이면 가짜 머리가 음표가 된다)
         ev_durs = [h.evidence.quarters()[0] if h.evidence else None for h in free]

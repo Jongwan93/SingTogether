@@ -85,7 +85,12 @@ def from_text(text: str, engine: str = "text") -> Transcription:
                 while len(note.lyrics) <= v:
                     note.lyrics.append("")
                 note.lyrics[v] = "" if s == "_" else s
-        t.measures.append(meas)
+        # 같은 번호가 다시 나오면 나중 것이 이긴다 (AI가 답 뒤에 "Correction: …"으로 고친 줄을 다시 쓰는 경우)
+        dup = next((i for i, m_ in enumerate(t.measures) if m_.number == meas.number), None)
+        if dup is None:
+            t.measures.append(meas)
+        else:
+            t.measures[dup] = meas
     return t
 
 

@@ -21,7 +21,7 @@ from .model import Transcription, rekey
 from .musicxml_out import to_musicxml
 
 REPO = Path(__file__).resolve().parents[3]
-PIPELINE_VERSION = "2026-10-30b"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
+PIPELINE_VERSION = "2026-10-30c"          # 인식 논리가 바뀌면 올린다 → 옛 캐시 무시
 CACHE_DIR = Path(os.environ.get("SINGTOGETHER_CACHE") or Path.home() / "Library/Caches/SingTogether/ocr")
 
 
@@ -65,6 +65,22 @@ def page_images(folder: Path, stem: str, kind: str) -> list[str]:
     return [str(p) for p in sorted(folder.iterdir()) if pat.match(unicodedata.normalize("NFC", p.name))] if folder.is_dir() else []
 
 
+TINY_INTERLINE = 7.0     # 원본 오선 간격(px)이 이보다 작으면 homr 음표 대신 AI 읽기 (6.2px 악보: 음높이 32% → AI 57%; 7.7px부터는 homr가 같거나 낫다)
+HEAD_TRUST = 0.5         # AI 음표 바탕일 때, 짝지어진 머리의 이 비율 이상이 AI 음높이와 같으면 머리를 믿는다 (6.2px 악보 60%, 5.2px 악보 33%)
+
+
+def ai_notes_base(claude_t: Transcription) -> Transcription:
+    """AI 읽기를 음표의 바탕으로: 코드·가사는 떼어 낸다 (뒤에서 Vision 상자와 맞춘 하이브리드 코드·가사가 다시 붙는다)."""
+    import copy
+    t = copy.deepcopy(claude_t)
+    for n in t.notes:
+        n.chord, n.lyrics = None, []
+    t.has_chords = t.has_lyrics = False
+    t.engine = "ai-notes"
+    t.claude_match = None
+    return t
+
+
 def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, debug_dir: Path | None = None,
               chords: bool = True, interline: float = ingest.TARGET_INTERLINE, lyrics_: bool = True,
               mask_text: bool = True, review_dir: Path | None = None, llm_name: str = "auto") -> Transcription:
@@ -89,23 +105,50 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
         t = eng.transcribe(page if hasattr(eng, "provider") else engine_page, work, debug_dir)
         if systems and not t.has_chords:
             symbols = notes.find_symbols(page, systems, debug_dir)
-            assemble.place_notes(t, systems, symbols)
-            key.infer_time(t)                      # 마디를 다시 나누기 전에 박자표부터 (엔진이 2/2·3/4로 읽는 경우)
-            if (moved := assemble.resegment(t, systems, symbols)):
-                print(f"measures re-cut from barlines and beat sums: {moved} boundaries moved → {len(t.measures)} measures")
-            if (added := assemble.fill_missing(t, systems, symbols)):
-                print(f"notes and rests added from skipped noteheads: {added}")
             claude_t = None
             ai_used = False
+            ai_notes = False
             if claude_eng:
                 try:
                     claude_t = claude_eng.transcribe(page, work, debug_dir)
                 except Exception as e:        # 로그인 만료, 가사 저작권 필터 등 → AI 없이 계속
                     print(f"{who} reading failed, using Apple Vision only: {str(e).strip().splitlines()[-1][:200]}")
-            # 박자 합이 안 맞는 마디의 길이를 AI 읽기·이미지 단서로 바로잡는다 (1-b)
+            # 작은 웹 캡처(원본 오선 간격 7px 미만)에서는 homr 음표가 거의 다 틀린다 (438px 악보: 마디와 리듬이 무너짐).
+            # 그럴 때는 AI 읽기를 음표의 바탕으로 쓰고, 머리 맞추기·마디 재분할·코드·가사·확인 표시는 그대로 돌린다.
+            source_interline = page.interline / page.scale
+            if claude_t and len(claude_t.measures) >= 8 and source_interline < TINY_INTERLINE:
+                t = ai_notes_base(claude_t)
+                ai_notes = True
+                print(f"small image (staff spacing {source_interline:.1f} px in the original): notes from the {who} reading instead of homr")
+            # AI 음표가 바탕이면 머리 위치로 음을 바꾸지 않고 신호만 남기며, 머리로 음표를 넣지도 않는다.
+            # 다만 머리 위치가 AI 음높이와 대체로 맞는 그림(6.2px: 머리를 따르면 57→64%)에서는 다른 것만 머리 쪽으로 고친다;
+            # 거의 안 맞으면(5.2px) 머리가 못 믿을 것이라 AI를 둔다.
+            assemble.place_notes(t, systems, symbols, keep_pitch=ai_notes)
+            heads_ok = True                        # 머리·마디줄 검출을 믿고 마디 재분할·빠진 음표 채우기를 돌릴지
+            if ai_notes:
+                matched = [(m, n) for m in t.measures for n in m.notes if n.head and not n.is_rest]
+                disagree = [(m, n) for m, n in matched if "head_pitch" in n.signals]
+                agreement = 1 - len(disagree) / max(1, len(matched))
+                heads_ok = agreement >= HEAD_TRUST
+                for m, n in disagree:
+                    n.signals.remove("head_pitch")
+                    n.reasons = [r for r in n.reasons if not r.startswith("staff position reads")]
+                    if heads_ok:
+                        letter, octave = assemble.staff_pitch(systems[m.system].staff, n.y)
+                        n.reasons.append(f"pitch fixed from staff position ({who} read {n.name})")
+                        n.engine_read = n.name
+                        n.step, n.octave, n.alter = letter, octave, assemble.key_alter(letter, t.fifths)
+                print(f"noteheads agree with the {who} pitch on {agreement:.0%} of {len(matched)} matched notes → "
+                      + ("the rest follow the noteheads" if heads_ok else f"{who} reading kept as is (noteheads and barlines not trusted)"))
+            key.infer_time(t)                      # 마디를 다시 나누기 전에 박자표부터 (엔진이 2/2·3/4로 읽는 경우)
+            if heads_ok and (moved := assemble.resegment(t, systems, symbols)):
+                print(f"measures re-cut from barlines and beat sums: {moved} boundaries moved → {len(t.measures)} measures")
+            if heads_ok and (added := assemble.fill_missing(t, systems, symbols, keep_pitch=ai_notes, insert=not ai_notes)):
+                print(f"notes and rests added from skipped noteheads: {added}")
+            # 박자 합이 안 맞는 마디의 길이를 AI 읽기·이미지 단서로 바로잡는다 (1-b). AI 음표가 바탕이면 비교 상대가 없다
             ai_pairs: dict = {}
             ai_trusted = False
-            if claude_t:
+            if claude_t and not ai_notes:
                 ratio, _, pairs = review.counterparts(t, claude_t)
                 ai_trusted = ratio >= review.AI_TRUST
                 ai_pairs = {k: o for k, (o, rel) in pairs.items() if rel in ("same", "dur")}
@@ -151,7 +194,7 @@ def recognize(src: Path, engine_name: str = "homr", work: Path | None = None, de
                 if not t.title:
                     t.title, t.composer = lyrics.read_title(page, systems)
             review.check_rhythm(t)
-            if claude_t and ai_used:
+            if claude_t and ai_used and not ai_notes:
                 review.mark_claude(t, claude_t)
             if debug_dir:
                 assemble.overlay(page, t, debug_dir)

@@ -29,6 +29,7 @@ WEIGHTS = {
     "head_mismatch": 0.6,        # 마디 안 머리 수 ≠ 음표 수
     "rhythm": 0.7,               # 마디 박자 합이 박자표와 다름
     "override": 0.55,            # 오선 위치로 음높이를 고침 (엔진과 오선 위치가 달랐다)
+    "head_pitch": 0.75,          # 오선 위치가 다른 음을 가리키지만 바꾸지 않음 (작은 이미지, AI 읽기가 바탕일 때)
     "ai_pitch": 0.6,             # AI가 다른 음높이로 읽음
     "ai_dur": 0.6,               # AI가 같은 음높이, 다른 길이로 읽음
     "ai_missing": 0.65,          # AI 전사에 없는 음표
@@ -51,6 +52,7 @@ _WHY = {
     "head_mismatch": "notehead count differs in measure",
     "rhythm": "beats do not add up",
     "override": "pitch fixed from staff position",
+    "head_pitch": "staff position suggests a different pitch",
     "ai_pitch": "AI read a different pitch",
     "ai_dur": "AI read a different length",
     "ai_missing": "not in AI reading",
