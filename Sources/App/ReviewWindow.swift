@@ -32,6 +32,9 @@ final class ReviewWindowController: NSWindowController {
     private let playButton = NSButton(title: "▶ Play", target: nil, action: nil)
     private let tempoPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let truthButton = NSButton(title: "Save as Truth…", target: nil, action: nil)
+    private let fixButton = NSButton(title: "Edit Text…", target: nil, action: nil)
+    private let rebuildButton = NSButton(title: "Rebuild from Text", target: nil, action: nil)
+    private let rightLabel = NSTextField(labelWithString: "Transposed — doubtful notes are red")
     private var lastPicked: ReviewImageView.Spot?
 
     init(original: URL, semitones: Int, result: SheetOCR.Result, delivered: URL, extraPages: [URL] = []) {
@@ -92,16 +95,18 @@ final class ReviewWindowController: NSWindowController {
 
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
-        let right = labeled(NSTextField(labelWithString: "Transposed — doubtful notes are red"), pdfView)
+        let right = labeled(rightLabel, pdfView)
 
         split.addArrangedSubview(left)
         split.addArrangedSubview(right)
 
         summary.font = .systemFont(ofSize: 13, weight: .medium)
         summary.lineBreakMode = .byTruncatingTail
-        let fix = NSButton(title: "Edit Text…", target: self, action: #selector(openText))
+        let fix = fixButton
+        fix.target = self; fix.action = #selector(openText)
         fix.toolTip = "Opens the score as text (.txt) in your default editor. Find lines by measure number."
-        let redo = NSButton(title: "Rebuild from Text", target: self, action: #selector(rebuild))
+        let redo = rebuildButton
+        redo.target = self; redo.action = #selector(rebuild)
         redo.keyEquivalent = "\r"
         let reveal = NSButton(title: "Show Result in Finder", target: self, action: #selector(revealResult))
         undoButton.target = self
@@ -183,13 +188,17 @@ final class ReviewWindowController: NSWindowController {
             imageView.image = img
             imageView.frame = NSRect(origin: .zero, size: img.size)
         }
-        let isStaff = !result.isChordSheet && result.text != nil
+        let isStaff = !result.isChordSheet && !result.isInPlace && result.text != nil
         nextButton.isHidden = !isStaff
         playButton.isHidden = !isStaff
         tempoPopup.isHidden = !isStaff
-        leftLabel.stringValue = result.isChordSheet
+        for b in [undoButton, fixButton, rebuildButton, truthButton] { b.isHidden = result.isInPlace }   // 제자리 이조: 고칠 인식 자료가 없다
+        leftLabel.stringValue = result.isInPlace ? "Original · ⌘+ ⌘− zoom"
+            : result.isChordSheet
             ? "Original — orange: chords to check · click any chord or word to fix it (green: fixed)"
             : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed) · ⌘+ ⌘− zoom"
+        rightLabel.stringValue = result.isInPlace ? "Transposed — notes, key signature and chords moved on the original picture"
+            : result.isChordSheet ? "Transposed — chords rewritten on the original" : "Transposed — doubtful notes are red"
         pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
             pdfView.document = doc

@@ -140,6 +140,9 @@ class DurationEvidence:
     stem: bool            # 기둥이 있나 (온음표는 없다)
     beams: int            # 빔·꼬리 수 (0 = 4분 이상, 1 = 8분, 2 = 16분)
     dot: bool             # 점
+    stem_x: int = 0       # 기둥 x (제자리 이조가 기둥 끝을 늘이고 줄일 때 쓴다)
+    stem_dir: int = 0     # -1 위로, +1 아래로, 0 없음
+    stem_len: int = 0     # 머리 가장자리(0.6il)부터 잰 길이 px
 
     def quarters(self) -> list[Fraction]:
         """단서와 맞는 길이들 (4분음표 = 1). 점은 1.5배."""
@@ -218,7 +221,7 @@ def duration_evidence(binary: np.ndarray, h: Notehead, il: float) -> DurationEvi
             x, y, w, hh, area = stats[i]
             if 0.12 * il <= w <= 0.45 * il and 0.12 * il <= hh <= 0.45 * il and area >= 0.5 * w * hh:
                 dot = True
-    return DurationEvidence(hollow, stem, min(beams, 2), dot)
+    return DurationEvidence(hollow, stem, min(beams, 2), dot, sx if stem else 0, d if stem else 0, length if stem else 0)
 
 
 def find_barlines(binary: np.ndarray, staff: Staff, il: float, heads: list[Notehead]) -> list[float]:

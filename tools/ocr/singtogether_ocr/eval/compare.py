@@ -177,6 +177,48 @@ def rendered_eval(names: list[str] | None, widths=(2480, 1240, 620)) -> tuple[st
     return "\n".join(lines) + "\n", worst
 
 
+def inplace_eval(names: list[str] | None, semitones: int, llm_name: str = "none") -> tuple[str, int | None]:
+    """제자리 이조 검사: 그림을 semitones만큼 제자리에서 옮긴 결과를 homr로 읽어 옮긴 정답과 비교한다.
+    같은 엔진으로 원본도 읽어 원본 정답과 비교한 줄(baseline)을 함께 두면, 두 줄의 차이가 제자리 이조가 끼친 손실이다."""
+    from .. import inplace
+    from ..cli import recognize, transpose, write_outputs
+    from ..model import from_musicxml
+
+    worst: int | None = None
+    lines = ["| sample | input | " + " | ".join(COLUMNS) + " |", "|" + "---|" * (len(COLUMNS) + 2)]
+    for name, img in samples(names):
+        truth_file = next(p for p in TRUTH.glob("*.txt") if _nfc(p.stem) == name)
+        truth = from_text(truth_file.read_text())
+        d = OUT / "inplace" / name
+        d.mkdir(parents=True, exist_ok=True)
+        rows = []
+        try:
+            t0 = recognize(img, "homr", d / "work-original", None)
+            rows.append(("original", score(t0, truth).row()))
+        except Exception as e:
+            rows.append(("original", {c: "" for c in COLUMNS} | {"notes": f"failed: {str(e).splitlines()[0][:50]}"}))
+        try:
+            out_png = d / f"{name} ({semitones:+d}).png"
+            rep = inplace.transpose_in_place(img, semitones, out_png, llm_name=llm_name, debug_dir=d / "dbg")
+            xml, _ = write_outputs(truth, d / "truth.musicxml")
+            truth_t = from_musicxml(transpose(xml, semitones), "truth")
+            t1 = recognize(out_png, "homr", d / "work-inplace", None)
+            write_outputs(truth_t, d / "truth-transposed.musicxml")      # 비교용 .txt도 같이 나온다
+            write_outputs(t1, d / "read-inplace.musicxml")
+            row = score(t1, truth_t).row()
+            row["sec"] = f"{rep.keys} ({rep.key_source}) · heads {rep.heads} · acc {rep.accidentals_found}→{rep.accidentals_drawn} · chords {rep.chords}"
+            rows.append((f"in-place {semitones:+d}", row))
+            pct = int(row["pitch"].split("%")[0]) if "%" in row["pitch"] else 0
+            worst = pct if worst is None else min(worst, pct)
+        except Exception as e:
+            rows.append((f"in-place {semitones:+d}", {c: "" for c in COLUMNS} | {"notes": f"failed: {str(e).splitlines()[0][:60]}"}))
+            worst = 0
+        for label, row in rows:
+            lines.append(f"| {name} | {label} | " + " | ".join(str(row[c]) for c in COLUMNS) + " |")
+            print(lines[-1], flush=True)
+    return "\n".join(lines) + "\n", worst
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="singtogether-eval", description="Compare recognition accuracy against hand-checked truth")
     ap.add_argument("--engines", nargs="+", default=DEFAULT_ENGINES)
@@ -185,6 +227,7 @@ def main(argv=None) -> None:
     ap.add_argument("--interline", type=float, default=24.0)
     ap.add_argument("--chordsheets", action="store_true", help="evaluate chord charts (music_scores/english, truth/chordsheets)")
     ap.add_argument("--rendered", action="store_true", help="render the truth with Verovio and recognize it (assembly regression test) → out/rendered.md")
+    ap.add_argument("--inplace", type=int, metavar="SEMITONES", help="transpose each sample image in place by SEMITONES, read the result with homr and compare with the transposed truth → out/inplace.md")
     ap.add_argument("--widths", nargs="+", type=int, default=[2480, 1240, 620], metavar="PX", help="render widths for --rendered")
     ap.add_argument("--fail-below", type=int, metavar="PCT", help="with --rendered: exit 1 when any pitch score is below PCT (CI gate)")
     ap.add_argument("--llm", default="auto", help="AI for chords and lyrics: auto|claude|gemini|none")
@@ -202,6 +245,14 @@ def main(argv=None) -> None:
         tune(OUT / "hybrid", TRUTH)
         return
 
+    if a.inplace is not None:
+        report, worst = inplace_eval(a.samples, a.inplace, a.llm)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / "inplace.md").write_text(f"# In-place transposition ({a.inplace:+d})\n\n" + report)
+        print("\n" + report)
+        if a.fail_below is not None and (worst is None or worst < a.fail_below):
+            sys.exit(f"pitch accuracy {worst}% is below the required {a.fail_below}%")
+        return
     if a.rendered:
         report, worst = rendered_eval(a.samples, tuple(a.widths))
         OUT.mkdir(parents=True, exist_ok=True)

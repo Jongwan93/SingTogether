@@ -385,7 +385,10 @@ def _colors(rgb: np.ndarray, ink: np.ndarray, box: tuple[int, int, int, int]) ->
     return bg, fg
 
 
-def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, obstacles=()) -> np.ndarray:
+def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, obstacles=(),
+         uniform: bool = False, erase_box: bool = False) -> np.ndarray:
+    """uniform: 모든 코드를 쪽 전체의 중앙값 높이로 쓴다 (오선 악보의 코드는 크기가 같다; 슬래시·윗첨자 상자가 커도 따라가지 않게).
+    erase_box: 글자 잉크만이 아니라 상자를 통째로 지운다 (흐린 그림은 잉크 둘레에 회색 테가 남아 옛 글자가 비친다)."""
     out = rgb.copy()
     h, w = ink.shape
     font_path = FONTS[font_name]
@@ -403,6 +406,8 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     all_h = [t[3] - t[1] for t in boxes if t]
     page_h = float(np.median(all_h)) if all_h else 12.0
     def height_for(c, t):
+        if uniform:
+            return page_h
         hs = row_h.get((c.col, c.row if c.row is not None else ("y", band(t))), [t[3] - t[1]])
         ref = float(np.median(hs)) if len(hs) >= 2 else page_h
         own = t[3] - t[1]
@@ -414,10 +419,13 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             continue
         x0, y0, x1, y1 = t
         bg, fg = _colors(rgb, ink, t)
-        # 지우기: 글자 잉크와 그 1px 둘레만 (배경 무늬·워터마크를 덜 해친다)
+        # 지우기: 글자 잉크와 그 1px 둘레만 (배경 무늬·워터마크를 덜 해친다). erase_box면 상자째
         m = np.zeros((h, w), np.uint8)
-        m[y0:y1, x0:x1] = ink[y0:y1, x0:x1]
-        m = cv2.dilate(m, np.ones((3, 3), np.uint8))
+        if erase_box:
+            m[max(0, y0 - 2):min(h, y1 + 2), max(0, x0 - 2):min(w, x1 + 2)] = 1
+        else:
+            m[y0:y1, x0:x1] = ink[y0:y1, x0:x1]
+            m = cv2.dilate(m, np.ones((3, 3), np.uint8))
         out[m > 0] = bg
         # 쓸 수 있는 폭: 같은 줄 오른쪽 코드 직전까지 (없으면 원래 폭의 3배, 이미지 끝)
         right = [b[0] for b, cc in zip(boxes, chords) if b and cc is not c

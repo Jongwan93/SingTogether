@@ -25,6 +25,7 @@ class Page:
     angle: float          # 보정한 기울기 (도)
     interline: float      # 오선 간격 추정 (확대 뒤 px)
     source: Path          # 원본 파일
+    base: np.ndarray | None = None   # 보정은 했고 확대는 안 한 회색 이미지 (제자리 이조가 결과를 원본 크기로 되돌릴 때 쓴다)
 
 
 def prepare(path: Path, dpi: int = 300, target_interline: float = TARGET_INTERLINE,
@@ -38,6 +39,7 @@ def prepare(path: Path, dpi: int = 300, target_interline: float = TARGET_INTERLI
         if "denoise" in steps:
             gray = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
         interline = estimate_interline(binarize(gray))
+        base = gray
         scale = 1.0
         if interline < target_interline * 0.8:            # 웹 이미지처럼 작은 악보는 키운다
             scale = target_interline / interline
@@ -51,7 +53,7 @@ def prepare(path: Path, dpi: int = 300, target_interline: float = TARGET_INTERLI
         if "binary" in steps:
             gray = binarize(gray)
         binary = binarize(gray)
-        page = Page(name, gray, binary, scale, angle, estimate_interline(binary), path)
+        page = Page(name, gray, binary, scale, angle, estimate_interline(binary), path, base)
         pages.append(page)
         if debug_dir:
             img = debug.canvas(binary)

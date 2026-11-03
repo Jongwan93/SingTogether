@@ -17,7 +17,7 @@ Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) al
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
 Song.musicxml  →  drop on −3  →  Song (-3, E).musicxml
-Song.png       →  drop on −2  →  Song (-2, F).png   (redrawn in the new key, + a review window)
+Song.png       →  drop on −2  →  Song (-2, F).png   (notes, key signature and chords moved on the picture)
 Song.pdf       →  drop on −2  →  Song (-2, F).pdf
 Chart.jpg      →  drop on +2  →  Chart (+2, A).jpg   (same image, new chords)
 ```
@@ -51,7 +51,7 @@ For images and PDFs the app first has to *read* the score, which takes 10 second
 |---|---|---|
 | `.txt` `.cho` `.chordpro` `.crd` (chord sheets) | chord lines above lyrics, inline `[G]` chords, runs like `Bb9-Dm7-Eb-F`; spelling follows the new key (E major's `B/D#` becomes `C#/E#` in F♯) | exact |
 | `.musicxml` `.xml` `.mxl` | every note, key signature, accidentals, chord symbols | exact (verified against music21 on 212 files) |
-| `.png` `.jpg` `.webp` `.pdf` with staff notation | recognized, transposed, redrawn as a new image of the same kind (PNG or JPEG; PDF in, PDF out) | depends on image quality, see below |
+| `.png` `.jpg` `.webp` `.pdf` with staff notation | noteheads, key signature, accidentals and chord symbols moved on the original picture, everything else untouched (see [Image scores: moved in place](#image-scores-moved-in-place)); or, in Settings, recognized and re-engraved with a review window | depends on image quality, see below |
 | `.png` `.jpg` `.webp` `.pdf` chord charts (chords + lyrics only) | chords rewritten in place on the original image | 97–100% with an AI reader, 80–96% without |
 
 Nothing to try it on? [`samples/`](samples/) has three public-domain hymns as clean score images: Amazing Grace, Silent Night and Holy, Holy, Holy. Drop one on the ring.
@@ -78,7 +78,7 @@ With **Apple Vision only**, nothing leaves your Mac except the once-a-day versio
 - **Ask which AI to use when the app starts.** Turn it off once you have chosen.
 - **Open the review window after reading an image score**, and **play a sound** when a file is created.
 - **Check for updates when the app starts.**
-- **Transposing:** when the new key can be written both ways (F♯ or G♭), follow the original (a ♯ score gets F♯, a ♭ score gets G♭), always sharps, or always flats. And whether transposed image scores come back as images (PNG or JPEG, the default) or as PDF.
+- **Transposing:** when the new key can be written both ways (F♯ or G♭), follow the original (a ♯ score gets F♯, a ♭ score gets G♭), always sharps, or always flats. Whether image scores are moved in place on the original picture (the default) or recognized and re-engraved. And whether re-engraved scores come back as images (PNG or JPEG, the default) or as PDF.
 - **Reading image scores:** Claude, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
 - **Recognition cache:** how much space the remembered results take, and a button to clear it.
 
@@ -86,6 +86,22 @@ With **Apple Vision only**, nothing leaves your Mac except the once-a-day versio
 
 - **Updates:** once a day at start, the app asks GitHub for the latest release. If there is a newer one, an **Update to SingTogether …** item appears at the top of the ♪ menu and opens the download page; the app tells you once per new version. **Check for Updates…** in the ♪ menu asks right away. Nothing but the version request is sent.
 - **Report a Problem…** in the ♪ menu opens a new GitHub issue with the app and macOS versions and the last recognizer log filled in. You see the exact text first, your scores are never included, and the same text is copied to the clipboard in case the page cuts it short. The log is also at `~/Library/Logs/SingTogether/recognizer.log`.
+
+## Image scores: moved in place
+
+For a picture of a single-line score (melody with chords and lyrics) the app does what you would do with correction fluid:
+it finds every notehead on the staff and moves it up or down by the number of staff steps the new key needs, lengthens or
+shortens the stem to match, replaces the key signature, recomputes the accidentals, and rewrites the chord symbols in the
+same font. Lyrics, slurs, ties, repeat signs, the title and everything else stay exactly as they were. No rhythm is read,
+so nothing can go wrong with measures or note lengths, and a mistake affects one note, not the whole score. It takes a few
+seconds. On a small, blurry capture the key signature is too smudged to count, so the app takes the key from the chord
+symbols instead; when they do not settle it, it asks the AI reader (if one is signed in) one short question, which adds a
+few seconds more. The result has the same size as the original.
+
+Limits of this first version: treble clef, one melody line; ties and slurs are left where they were, so a tied note keeps
+its old curve; a notehead the detector misses stays in the old key (it is easy to spot: it is the one note not on the
+new line). The old mode, which recognizes the score, re-engraves it and opens the review window, is still there:
+Settings → Transposing → turn off **Move the notes and chords on the original picture**.
 
 ## Image scores: recognize, transpose, review
 
@@ -157,7 +173,8 @@ $APP/MacOS/singtogether-transpose Song.musicxml -2                     # same ru
 $APP/MacOS/singtogether-transpose Song.txt 4 --flats                   # Gb rather than F# when both fit (--sharps; or SINGTOGETHER_ENHARMONIC=flats)
 $APP/MacOS/singtogether-transpose Song.png -2 --pdf                    # image score → PDF instead of an image
 $APP/Resources/ocr/bin/singtogether-ocr score.jpg                      # → score.musicxml, score.txt, score.review.json, score-p1.review.png
-$APP/Resources/ocr/bin/singtogether-ocr score.jpg --transpose -2 --render     # + transposed copy and PDFs
+$APP/Resources/ocr/bin/singtogether-ocr score.jpg --transpose -2 --inplace    # notes and chords moved on the picture (seconds)
+$APP/Resources/ocr/bin/singtogether-ocr score.jpg --transpose -2 --render     # recognize instead: + transposed copy and PDFs
 $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # chord chart → image with new chords + .txt
 ```
 
@@ -205,6 +222,7 @@ tools/ocr/truth/    hand-checked ground truth for the evaluation
 .build/release/singtogether-transpose --selftest        # text transposition and note editing checks
 cd tools/ocr
 .venv/bin/singtogether-eval --engines homr hybrid       # recognition accuracy against truth/ → out/report.md
+.venv/bin/singtogether-eval --inplace 2 --llm claude    # move each sample in place by +2, read the result with homr, compare with the transposed truth
 .venv/bin/singtogether-eval --rendered                  # clean-render regression test for the assembly stage (all truth files, three widths)
 .venv/bin/singtogether-eval --rendered --samples "Amazing Grace" "Silent Night" "Holy, Holy, Holy" --widths 1240 --fail-below 90   # what CI runs
 .venv/bin/singtogether-eval --chordsheets --llm none    # chord charts

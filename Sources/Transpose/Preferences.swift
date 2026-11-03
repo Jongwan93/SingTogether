@@ -13,6 +13,8 @@ package enum Preferences {
     package static var enharmonic: Enharmonic = .original
     /// 그림(PNG·JPEG…) 악보를 이조한 결과를 PDF 대신 같은 종류의 그림으로 (false면 PDF)
     package static var imageOutput = true
+    /// 오선 악보 그림: 원본 위에서 음표 머리·조표·임시표·코드만 옮긴다 (몇 초). false면 인식해서 새로 그리고 확인 창을 연다
+    package static var inPlace = true
 
     package static let enharmonicVariable = "SINGTOGETHER_ENHARMONIC"
 

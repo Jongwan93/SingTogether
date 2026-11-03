@@ -54,7 +54,10 @@ def normalize_chord(s: str) -> str:
 
 # (여백 배수, 최소 변 길이, 언어). Vision은 여백·크기·언어에 따라 결과가 달라서 여러 번 읽고 투표한다.
 # 한국어 모델은 윗첨자(C²)를 "2c2"처럼이라도 읽어 준다.
-_OCR_PASSES = [(0.4, 64, ("en-US",)), (1.0, 64, ("en-US",)), (1.0, 128, ("en-US",)), (1.0, 128, ("ko-KR", "en-US"))]
+# (여백 배율, 최소 변 px, 언어). Vision은 홑글자 코드(D, G)를 여백·크기 조합에 따라 읽거나 못 읽어서(0.4il·64px와 1.0il은 못 읽고
+# 0.4il·128px와 0.5il은 읽는 식) 조합을 여럿 돌려 표를 모은다
+_OCR_PASSES = [(0.4, 64, ("en-US",)), (0.4, 128, ("en-US",)), (0.5, 64, ("en-US",)), (1.0, 64, ("en-US",)), (1.0, 128, ("en-US",)),
+               (1.0, 128, ("ko-KR", "en-US"))]
 
 
 def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None) -> list[list[TextBox]]:
@@ -63,7 +66,7 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
     result, all_boxes, kept = [], [], []
     for sys_ in systems:
         y0, y1 = sys_.chord_band
-        found = []
+        found, unread = [], []
         for (bx0, by0, bx1, by1) in find_text_blobs(page.binary[y0:y1], il):
             box = (bx0, y0 + by0, bx1, y0 + by1)
             all_boxes.append(box)
@@ -86,6 +89,8 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                             rescued.setdefault(fixed, []).append(b.conf * 0.7)
             if not votes and rescued:                                # 직접 읽은 유효한 코드가 하나도 없을 때만 쓴다
                 votes = rescued
+            if not votes:
+                unread.append(box)
             weak = not votes or max(len(v) for v in votes.values()) < 2 or all(re.fullmatch(r"[A-G][#b]?", c) for c in votes)
             if weak:
                 # 윗첨자가 붙은 코드(A♭, C², D⁷)는 통째로 읽으면 자주 틀린다("A6", "C'"). 큰 글자와 윗첨자를 나눠 읽는다
@@ -97,6 +102,21 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                 tb = TextBox(chord, max(confs) * len(confs) / len(_OCR_PASSES), *box)
                 found.append(tb)
                 kept.append(tb)
+        # 어느 조합으로도 안 읽힌 덩어리(홑글자 G·D가 그렇다): 같은 조각을 이어 붙여 단어처럼 읽는다. 읽은 코드와 같은 줄·같은
+        # 키의 덩어리만 (띠 아래쪽에 걸친 음표 토막을 "A"로 읽어 내는 일이 있어서)
+        if found and unread:
+            ref_y0 = float(np.median([b.y0 for b in found]))
+            ref_h = float(np.median([b.y1 - b.y0 for b in found]))
+            for box in unread:
+                bh = box[3] - box[1]
+                if abs(box[1] - ref_y0) > 0.35 * ref_h or not 0.7 <= bh / ref_h <= 1.4:
+                    continue
+                for reps in (3, 5):
+                    if (tb := read_tiled(page, box, il, CHORD_VOCAB, reps)) and is_chord(chord := normalize_chord(tb.text)):
+                        tb = TextBox(chord, tb.conf * 0.9 / len(_OCR_PASSES), *box)
+                        found.append(tb)
+                        kept.append(tb)
+                        break
         found.sort(key=lambda b: b.x0)
         result.append(found)
     if debug_dir:
@@ -127,19 +147,8 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
     if not sups and not subs:
         return None
     def ocr(c, words, reps=3):
-        """Vision은 글자 하나짜리 조각을 무시하므로, 같은 조각을 reps번 이어 붙여 단어처럼 보이게 한다.
-        여백은 0.5il이 가장 잘 읽혔다 (1il 이상이면 자주 빈 결과)."""
         cx, cy, cw, ch = c
-        for pad in (int(0.5 * il), int(0.25 * il), int(il)):
-            g = page.gray[max(0, y0 + cy - pad):y0 + cy + ch + pad, max(0, x0 + cx - pad):x0 + cx + cw + pad]
-            gap = np.full((g.shape[0], max(4, int(0.3 * il))), 255, np.uint8)
-            tiled = np.hstack(sum(([g, gap] for _ in range(reps)), [])[:-1])
-            r = recognize(tiled, ("en-US",), correction=False, custom_words=words, min_side=128)
-            if r:
-                best = max(r, key=lambda b: b.conf)
-                first = best.text.split()[0] if best.text.split() else best.text    # 띄어 읽혔으면 첫 조각이 원본
-                return TextBox(_untile(first, reps), best.conf, best.x0, best.y0, best.x1, best.y1)
-        return None
+        return read_tiled(page, (x0 + cx, y0 + cy, x0 + cx + cw, y0 + cy + ch), il, words, reps)
 
     root = ocr(main, CHORD_VOCAB, reps=3) or ocr(main, CHORD_VOCAB, reps=5)
     rm = re.match(r"([A-G])([#b]?)(.*)", normalize_chord(root.text)) if root else None
@@ -176,6 +185,24 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
         bass = "/" + bass
     chord = letter + acc + quality + digits + bass
     return (chord, min(confs)) if is_chord(chord) else None
+
+
+def read_tiled(page: Page, box: tuple[int, int, int, int], il: float, words, reps: int = 3) -> TextBox | None:
+    """Vision은 글자 하나짜리 조각을 무시하므로, 같은 조각을 reps번 이어 붙여 단어처럼 보이게 한다.
+    여백은 0.5il이 가장 잘 읽혔다 (1il 이상이면 자주 빈 결과). 상자는 쪽 좌표."""
+    x0, y0, x1, y1 = box
+    for pad in (int(0.5 * il), int(0.25 * il), int(il)):
+        g = page.gray[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
+        if g.size == 0:
+            continue
+        gap = np.full((g.shape[0], max(4, int(0.3 * il))), 255, np.uint8)
+        tiled = np.hstack(sum(([g, gap] for _ in range(reps)), [])[:-1])
+        r = recognize(tiled, ("en-US",), correction=False, custom_words=words, min_side=128)
+        if r:
+            best = max(r, key=lambda b: b.conf)
+            first = best.text.split()[0] if best.text.split() else best.text    # 띄어 읽혔으면 첫 조각이 원본
+            return TextBox(_untile(first, reps), best.conf, best.x0, best.y0, best.x1, best.y1)
+    return None
 
 
 def _untile(text: str, reps: int) -> str:

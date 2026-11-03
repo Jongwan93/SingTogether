@@ -295,6 +295,7 @@ def main(argv=None) -> None:
                     help=f"target staff-line spacing after scaling (default {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="semitones; also writes a transposed copy (needs ./build.sh)")
     ap.add_argument("--render", action="store_true", help="render SVG/PDF (the transposed copy too)")
+    ap.add_argument("--inplace", action="store_true", help="with --transpose: move the noteheads, key signature, accidentals and chord symbols on the original image instead of recognizing and re-engraving the score (seconds; lyrics and everything else stay)")
     ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
                     help="AI CLI that reads chords and lyrics: claude (Claude Code) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
     ap.add_argument("--no-cache", action="store_true", help="neither read nor write the result cache (~/Library/Caches/SingTogether/ocr)")
@@ -319,6 +320,33 @@ def main(argv=None) -> None:
     def finish():
         if a.json:
             print("JSON " + json.dumps(result, ensure_ascii=False))
+
+    if a.inplace:
+        # 제자리 이조: 인식 없이 머리·조표·임시표·코드만 옮긴 그림을 낸다 (몇 초). 리듬·가사는 읽지 않는다
+        if a.transpose is None:
+            ap.error("--inplace needs --transpose N")
+        from . import inplace
+        src_ext = a.input.suffix.lower() if a.input.suffix.lower() in (".png", ".jpg", ".jpeg") else ".png"
+        base = (a.out.with_suffix("") if a.out else a.input.with_suffix(""))
+        tmp = base.with_name(base.name + f" ({a.transpose:+d}){src_ext}")
+        try:
+            rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug)
+        except RuntimeError as e:
+            if "no staff" not in str(e):
+                raise
+            rep = None
+            print("no staff lines: not a staff score, reading it as a chord chart")
+        if rep is not None:
+            final = base.with_name(base.name + f" ({a.transpose:+d}, {rep.keys.split(' -> ')[1]}){src_ext}")
+            tmp.replace(final)
+            print(f"in-place: {rep.keys} (key from {rep.key_source}), {rep.heads} noteheads moved {rep.steps:+d} steps, "
+                  f"accidentals {rep.accidentals_found}→{rep.accidentals_drawn}, chords rewritten {rep.chords}"
+                  + "".join(f"\n   ! {n}" for n in rep.notes_))
+            print(f"→ {final}")
+            result.update({"inplace": True, "transposed": str(final), "keys": rep.keys, "key_source": rep.key_source, "heads": rep.heads,
+                           "chords": rep.chords, "accidentals": [rep.accidentals_found, rep.accidentals_drawn], "notes": rep.notes_})
+            finish()
+            return
 
     key_ = cache_key(a.input, a.engine, a.llm, "chords" if not a.no_chords else "", "lyrics" if not a.no_lyrics else "",
                      f"il{a.interline:g}", "" if a.no_mask else "mask")

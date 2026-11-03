@@ -13,6 +13,7 @@ package enum SheetOCR {
         package var keys: String?           // "G -> A"
         package var summary: String         // "To check: notes 31/118, chords 2/25, lyrics 2/80"
         package var isChordSheet: Bool
+        package var isInPlace: Bool = false // 원본 위에서 음표·코드만 옮긴 그림 (인식 자료 없음)
         package var engine: String
         package var chartFont: String?      // 코드 차트: 코드를 다시 쓸 때 쓴 글꼴
     }
@@ -148,6 +149,7 @@ package enum SheetOCR {
         if llmReady == false, !check(llm: llm).ok { reader = "none" }
         var args = [input.path, "--engine", "auto", "--llm", reader, "--transpose", String(semitones), "--render", "--json",
                     "--work", work.appendingPathComponent("work").path]
+        if Preferences.inPlace, out != nil, extensions.contains(input.pathExtension.lowercased()) { args.append("--inplace") }
         if let out { args += ["--out", out.path] }
         if let source { args += ["--source", source.path] }
         if let font { args += ["--chart-font", font] }
@@ -176,7 +178,11 @@ package enum SheetOCR {
         }
         func url(_ k: String) -> URL? { (dict[k] as? String).map { URL(fileURLWithPath: $0) } }
         var summary = "No review data"
-        if let s = dict["summary"] as? [String: Any] {
+        if dict["inplace"] as? Bool == true {
+            summary = "Moved on the original: \(dict["heads"] ?? 0) notes, \(dict["chords"] ?? 0) chords"
+            if let src = dict["key_source"] as? String, src != "image" { summary += " · key from \(src)" }
+            if let notes = dict["notes"] as? [String], !notes.isEmpty { summary += " · ⚠︎ " + notes.joined(separator: " · ") }
+        } else if let s = dict["summary"] as? [String: Any] {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }
             summary = "To check: notes \(pair("notes_flagged", "notes")), chords \(pair("chords_flagged", "chords")), lyrics \(pair("lyrics_flagged", "lyrics"))"
             // 절반 넘게 의심스러우면 그림이 작은 것이다: 하나씩 고치기보다 더 큰 그림을 구하는 편이 낫다고 알려 준다
@@ -198,7 +204,8 @@ package enum SheetOCR {
                       reviewPNGs: ((dict["review_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       pagePNGs: ((dict["page_png"] as? [String]) ?? []).map { URL(fileURLWithPath: $0) },
                       keys: dict["keys"] as? String, summary: summary,
-                      isChordSheet: dict["chordsheet"] as? Bool == true, engine: dict["engine"] as? String ?? "",
+                      isChordSheet: dict["chordsheet"] as? Bool == true, isInPlace: dict["inplace"] as? Bool == true,
+                      engine: dict["engine"] as? String ?? "",
                       chartFont: (dict["chart"] as? [String: Any])?["font"] as? String)
     }
 
