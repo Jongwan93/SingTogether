@@ -94,7 +94,7 @@ EOF
 # Developer ID → hardened runtime + timestamp (notarizable). Otherwise the local certificate "SingTogether Local Signing"
 # (tools/make-signing-cert.sh, or SINGTOGETHER_SIGN) if present, else ad-hoc. A stable certificate keeps the macOS
 # Files and Folders permission across builds and versions; ad-hoc makes every build a new app that asks again.
-IDENTITY="${DEVELOPER_ID:-${SINGTOGETHER_SIGN:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"SingTogether Local Signing"' | head -1 | tr -d '"')}}"
+IDENTITY="${DEVELOPER_ID:-${SINGTOGETHER_SIGN:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"SingTogether Local Signing"' | head -1 | tr -d '"' || true)}}"
 [ -z "$IDENTITY" ] && IDENTITY="-"
 SIGN=(codesign --force --sign "$IDENTITY")
 case "$IDENTITY" in "Developer ID"*) SIGN+=(--timestamp --options runtime --entitlements "$ENTITLEMENTS") ;; esac

@@ -13,7 +13,8 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp .build/release/singtogether-transpose "$APP/Contents/MacOS/"   # 인식 도구가 이조와 SVG→PDF에 쓴다
 # 서명: 로그인 키체인에 "SingTogether Local Signing"(tools/make-signing-cert.sh)이 있으면 그걸로, 없으면 ad-hoc.
 # 같은 인증서로 서명해야 macOS가 파일 접근 권한을 빌드마다 다시 묻지 않는다.
-IDENTITY="${SINGTOGETHER_SIGN:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"SingTogether Local Signing"' | head -1 | tr -d '"')}"
+# (인증서가 없으면 grep이 1을 내는데 pipefail 아래서 그게 스크립트를 끝내 버린다 — CI가 그랬다 — 그래서 || true)
+IDENTITY="${SINGTOGETHER_SIGN:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"SingTogether Local Signing"' | head -1 | tr -d '"' || true)}"
 codesign --force --sign "${IDENTITY:--}" "$APP" >/dev/null
 cp .build/release/singtogether-transpose build/
 echo "Done: $APP, build/singtogether-transpose"
