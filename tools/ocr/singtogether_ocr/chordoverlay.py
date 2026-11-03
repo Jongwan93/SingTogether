@@ -314,6 +314,17 @@ def _tight(ink: np.ndarray, c: Chord, pad: int = 2) -> tuple[int, int, int, int]
     return X0 + int(xs.min()), Y0 + int(ys.min()), X0 + int(xs.max()) + 1, Y0 + int(ys.max()) + 1
 
 
+def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
+    """상자 안 근음 대문자의 상자: 가장 키 큰 덩어리 (같으면 왼쪽). 윗첨자·m·7은 더 작다. 상자 높이의 40% 안 되는 조각은 뺀다."""
+    x0, y0, x1, y1 = t
+    n, _, stats, _ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:x1].astype(np.uint8), 8)
+    comps = [stats[i] for i in range(1, n) if stats[i][3] >= 0.4 * (y1 - y0)]
+    if not comps:
+        return None
+    s = max(comps, key=lambda s: (s[3], -s[0]))
+    return x0 + int(s[0]), y0 + int(s[1]), x0 + int(s[0] + s[2]), y0 + int(s[1] + s[3])
+
+
 def _fit_font(face: tuple[str, int], text: str, height: int) -> ImageFont.FreeTypeFont:
     """글자 전체(근음 대문자 + ♯ 등)의 높이가 height가 되는 크기."""
     path, index = face
@@ -385,6 +396,9 @@ def _colors(rgb: np.ndarray, ink: np.ndarray, box: tuple[int, int, int, int]) ->
     return bg, fg
 
 
+LOG: list[tuple] = []      # draw가 코드마다 (원래, 새 글자, 상자, 오른쪽 한계, 새 글자 폭, 쓸 수 있는 폭, 높이)를 남긴다 (디버깅용)
+
+
 def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, obstacles=(),
          uniform: bool = False, erase_box: bool = False) -> np.ndarray:
     """uniform: 모든 코드를 쪽 전체의 중앙값 높이로 쓴다 (오선 악보의 코드는 크기가 같다; 슬래시·윗첨자 상자가 커도 따라가지 않게).
@@ -392,6 +406,7 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     out = rgb.copy()
     h, w = ink.shape
     font_path = FONTS[font_name]
+    LOG.clear()
     boxes = []
     for c in chords:
         t = _tight(ink, c)
@@ -405,6 +420,11 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             row_h.setdefault((c.col, c.row if c.row is not None else ("y", band(t))), []).append(t[3] - t[1])
     all_h = [t[3] - t[1] for t in boxes if t]
     page_h = float(np.median(all_h)) if all_h else 12.0
+    # 오선 악보(uniform): 상자 높이는 윗첨자(A♭의 ♭, C²의 ²)가 올라간 만큼 근음 글자보다 크다. 거기에 "Ab" 전체를 맞추면 글자가
+    # 1.3배쯤 커지고, 이웃이 가까운 코드만 다시 줄어 크기가 들쭉날쭉했다. 근음 대문자(상자 안 가장 키 큰 덩어리)의 높이에 맞춘다
+    roots = [_root_letter(ink, t) if (uniform and t) else None for t in boxes]
+    cap_hs = [r[3] - r[1] for r in roots if r]
+    page_cap = float(np.median(cap_hs)) if cap_hs else page_h
     def height_for(c, t):
         if uniform:
             return page_h
@@ -433,30 +453,53 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
         right += [b[0] for b in obstacles if b[0] >= x1 - 1 and y0 - 2 <= (b[1] + b[3]) / 2 <= y1 + 2
                   and (b[3] - b[1]) < 2.5 * (y1 - y0)]                 # 같은 줄의 낱말만 (가사 줄의 키 큰 상자는 빼고)
         limit = (min(right) - 2) if right else min(w - 2, x0 + 3 * (x1 - x0) + 4 * (y1 - y0))
-        hgt = int(round(height_for(c, t))) + 1
-        if hgt != y1 - y0:                                 # 상자가 글자 일부였다: 아래선(글자 바닥)을 기준으로 다시 잡는다
-            y0 = y1 - hgt
-        font = _fit_font(font_path, c.text, hgt)           # 크기는 원래 코드 글자로 정한다 (새 코드에 같은 크기)
-        mask = _render_mask(font, c.new)
-        # 고른 글꼴이 원래 글자보다 넓으면(좁은 글꼴로 찍은 악보) 원래 낱말 폭에 맞게 가로로 좁힌다. 낱말 전체를 잡은 상자만 믿는다
-        own_w = _render_mask(font, c.text).shape[1] - 2
-        ratio = (x1 - x0) / max(1, own_w)
-        if ratio < 0.92 and (x1 - x0) >= (y1 - y0):
-            cond = max(0.6, ratio)
-            mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
         avail = int(max(x1 - x0, limit - x0))
-        if mask.shape[1] > avail:                          # 자리가 모자라면 고르게 줄인다 (75%까지, 바닥선 유지)
-            scale = max(0.75, avail / mask.shape[1])
-            font = _fit_font(font_path, c.text, max(6, int(round(hgt * scale))))
+        if roots[k]:
+            # 근음 대문자 높이(쪽 중앙값)에 글꼴을 맞추고, 새 코드의 대문자 바닥을 원래 대문자 바닥에 놓는다
+            rx0, ry0, rx1, ry1 = roots[k]
+            cap = max(6, int(round(page_cap)))
+            font = _fit_font(font_path, c.text[0], cap)
             mask = _render_mask(font, c.new)
-            y0 = y1 - max(6, int(round(hgt * scale)))
-            if mask.shape[1] > avail:                      # 그래도 넘치면 가로로만 좁힌다 (60%까지). 그 뒤에는 넘친다
-                cond = max(0.6, avail / mask.shape[1])
+            own_w = _render_mask(font, c.text[0]).shape[1] - 2           # 글꼴이 원래 글자보다 넓으면 근음 글자 폭에 맞게 좁힌다
+            ratio = (rx1 - rx0) / max(1, own_w)
+            if ratio < 0.92:
+                cond = max(0.75, ratio)
                 mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
-        # 첫 글자 윗선을 원래 윗선에 맞춘다
-        top_old = font.getbbox(c.text)[1] - font.getbbox(c.text[0])[1]   # 원래 글자에서 근음 윗선이 전체 윗선보다 얼마나 아래인가
-        top_new = font.getbbox(c.new)[1] - font.getbbox(c.new[0])[1]
-        py, px = y0 - 1 - top_old + top_new, x0 - 1                # 근음 대문자 윗선을 맞춘다
+            LOG.append((c.text, c.new, (x0, y0, x1, y1), limit, mask.shape[1], avail, cap))
+            if mask.shape[1] > avail:                      # 자리가 모자라면 고르게 줄인다 (75%까지), 그래도 넘치면 가로로만 (60%까지)
+                cap = max(6, int(round(cap * max(0.75, avail / mask.shape[1]))))
+                font = _fit_font(font_path, c.text[0], cap)
+                mask = _render_mask(font, c.new)
+                if mask.shape[1] > avail:
+                    cond = max(0.6, avail / mask.shape[1])
+                    mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
+            bb_all, bb_cap = font.getbbox(c.new), font.getbbox(c.new[0])
+            py, px = ry1 - (bb_cap[3] - bb_cap[1]) - (bb_cap[1] - bb_all[1]) - 1, x0 - 1
+        else:
+            hgt = int(round(height_for(c, t))) + 1
+            if hgt != y1 - y0:                             # 상자가 글자 일부였다: 아래선(글자 바닥)을 기준으로 다시 잡는다
+                y0 = y1 - hgt
+            font = _fit_font(font_path, c.text, hgt)       # 크기는 원래 코드 글자로 정한다 (새 코드에 같은 크기)
+            mask = _render_mask(font, c.new)
+            # 고른 글꼴이 원래 글자보다 넓으면(좁은 글꼴로 찍은 악보) 원래 낱말 폭에 맞게 가로로 좁힌다. 낱말 전체를 잡은 상자만 믿는다
+            own_w = _render_mask(font, c.text).shape[1] - 2
+            ratio = (x1 - x0) / max(1, own_w)
+            if ratio < 0.92 and (x1 - x0) >= (y1 - y0):
+                cond = max(0.6, ratio)
+                mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
+            LOG.append((c.text, c.new, (x0, y0, x1, y1), limit, mask.shape[1], avail, hgt))
+            if mask.shape[1] > avail:                      # 자리가 모자라면 고르게 줄인다 (75%까지, 바닥선 유지)
+                scale = max(0.75, avail / mask.shape[1])
+                font = _fit_font(font_path, c.text, max(6, int(round(hgt * scale))))
+                mask = _render_mask(font, c.new)
+                y0 = y1 - max(6, int(round(hgt * scale)))
+                if mask.shape[1] > avail:                  # 그래도 넘치면 가로로만 좁힌다 (60%까지). 그 뒤에는 넘친다
+                    cond = max(0.6, avail / mask.shape[1])
+                    mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
+            # 첫 글자 윗선을 원래 윗선에 맞춘다
+            top_old = font.getbbox(c.text)[1] - font.getbbox(c.text[0])[1]   # 원래 글자에서 근음 윗선이 전체 윗선보다 얼마나 아래인가
+            top_new = font.getbbox(c.new)[1] - font.getbbox(c.new[0])[1]
+            py, px = y0 - 1 - top_old + top_new, x0 - 1            # 근음 대문자 윗선을 맞춘다
         mh, mw = mask.shape
         sy0, sx0 = max(0, -py), max(0, -px)
         py, px = max(0, py), max(0, px)
