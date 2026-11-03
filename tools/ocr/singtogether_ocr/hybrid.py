@@ -122,6 +122,8 @@ def _chord_cost(v: str, c: str) -> float:
     rv, rc = re.match(r"[A-G][#b]?", nv), re.match(r"[A-G][#b]?", nc)
     if rv and rc and rv.group(0) == rc.group(0):
         return 0.4
+    if rv and rc and rv.group(0)[0] == rc.group(0)[0]:   # Vision은 윗첨자 ♭을 6으로 읽는다 (A♭→A6): 글자만 같아도 짝이 된다
+        return 0.7
     return 1.3
 
 
@@ -140,15 +142,16 @@ def trust(exact_ratio: float, n_ai: int, n_vision: int) -> bool:
 TRUST_MIN = 0.3
 
 
-def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: list[System], il: float
-                 ) -> tuple[list[list[TextBox]], float, float]:
-    """Vision 코드 상자(오선별) + Claude 코드 열 → 오선별 TextBox (글자는 Claude). (결과, 앵커 비율, 똑같이 읽힌 비율)"""
+def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: list[System], il: float,
+                 keep_vision_min: float = 0.75) -> tuple[list[list[TextBox]], float, float]:
+    """Vision 코드 상자(오선별) + Claude 코드 열 → 오선별 TextBox (글자는 Claude). (결과, 앵커 비율, 똑같이 읽힌 비율)
+    keep_vision_min: Claude에 짝이 없는 Vision 코드를 남길 최소 확신도. 잡음일 때가 많아 여러 번 읽어도 같았던 것(0.75+)만
+    남기는 게 기본; 제자리 이조는 안 남기면 옛 코드가 그대로 남으니 0을 준다."""
     v_items = [(si, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.text, b.conf) for si, boxes in enumerate(vision) for b in boxes]
     c_items = [n.chord for n in claude_t.notes if n.chord]
     if not c_items:
         return vision, 0.0, 0.0
-    # Claude에 없는 Vision 코드는 잡음일 때가 많다. 여러 번 읽어도 같았던 것(확신도 0.75+)만 남긴다
-    placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= 0.75)
+    placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= keep_vision_min)
     out: list[list[TextBox]] = [[] for _ in systems]
     for p in placed:
         out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il), p.source))

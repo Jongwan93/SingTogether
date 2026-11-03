@@ -49,6 +49,7 @@ class Report:
     accidentals_drawn: int = 0
     chords: int = 0
     key_source: str = "image"
+    chord_source: str = "Apple Vision"
     notes_: list[str] = field(default_factory=list)
 
     @property
@@ -617,8 +618,10 @@ def stamp(img: np.ndarray, mask: np.ndarray, cx: float, cy: float) -> None:
 
 # MARK: 전체 흐름
 
-def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir: Path | None = None) -> Report:
-    """src 그림을 semitones만큼 제자리에서 이조해 out에 쓴다 (out 확장자대로 PNG/JPEG). 작업은 ingest가 키운 쪽 크기로 한다."""
+def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir: Path | None = None,
+                       work: Path | None = None) -> Report:
+    """src 그림을 semitones만큼 제자리에서 이조해 out에 쓴다 (out 확장자대로 PNG/JPEG). 작업은 ingest가 키운 쪽 크기로 한다.
+    work: AI 답을 캐시하는 폴더 (같은 그림을 다시 옮길 때 다시 묻지 않는다)."""
     page = ingest.prepare(src, debug_dir=debug_dir)[0]
     systems = layout.find_systems(page, debug_dir)
     if not systems:
@@ -628,13 +631,35 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     img = page.gray.copy()
     il = page.interline
     rep = Report()
+    work = work or out.parent / ".singtogether-work"
 
-    # 0. 코드 글자 (Vision): 조 추론과 다시 쓰기에 쓴다
+    # 0. 코드 글자: Vision 상자(자리)에 AI가 읽은 이름을 맞춘다 (인식 모드와 같은 hybrid.merge_chords; Vision은 윗첨자 ♭·숫자를
+    #    자주 틀려 흐린 캡처에서 48~62%, AI는 91~100%). AI가 없거나 답이 그림과 안 맞으면(다른 곡·지어냄) Vision 것을 쓴다.
+    #    AI 전사는 조표도 주므로 흐린 그림의 조표를 따로 묻지 않아도 된다
     try:
         chord_boxes = text.read_chords(page, systems)
     except Exception as e:
         chord_boxes = []
         rep.notes_.append(f"chords not read: {str(e).splitlines()[0][:120]}")
+    from . import llm
+    provider = llm.pick(llm_name) if llm_name != "none" else "none"
+    label = llm.LABELS.get(provider, provider)
+    ai_t = None
+    if provider != "none":
+        from . import hybrid
+        from .engines.claude import for_provider
+        try:
+            ai_t = for_provider(provider).transcribe(page, work, debug_dir)
+        except Exception as e:
+            rep.notes_.append(f"{label} did not read the score: {str(e).splitlines()[0][:120]}")
+        if ai_t is not None:
+            merged, _, exact = hybrid.merge_chords(chord_boxes, ai_t, systems, il, keep_vision_min=0.0)
+            n_ai, n_vision = sum(1 for n in ai_t.notes if n.chord), sum(len(r) for r in chord_boxes)
+            if hybrid.trust(exact, n_ai, n_vision):
+                chord_boxes, rep.chord_source = snap_to_blobs(page, systems, merged, il), label
+            else:
+                rep.notes_.append(f"{label}'s chords did not match the picture ({int(exact * 100)}% agree): kept Apple Vision's")
+                ai_t = None
     chord_names = [b.text for row in chord_boxes for b in row]
     from . import key as key_mod
     inferred = key_mod.infer_key(chord_names) if len(chord_names) >= 3 else None
@@ -657,11 +682,12 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     elif chord_f is not None:
         rep.old_fifths, rep.key_source = chord_f, "chords"
     else:
-        from . import llm
-        provider = llm.pick(llm_name) if llm_name != "none" else "none"
-        ai = ask_key(provider, page, systems[0].staff, out.parent / ".singtogether-work") if provider != "none" else None
+        if ai_t is not None:
+            ai = ai_t.fifths
+        else:
+            ai = ask_key(provider, page, systems[0].staff, work) if provider != "none" else None
         if ai is not None:
-            rep.old_fifths, rep.key_source = ai, llm.LABELS.get(provider, provider)
+            rep.old_fifths, rep.key_source = ai, label
         else:
             votes = [r[4][0] for r in read if r[4]] or [0]
             rep.old_fifths, rep.key_source = max(set(votes), key=votes.count), "estimate"
@@ -833,6 +859,28 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         debug.caption(dbg, f"{page.name}  in-place {rep.keys}  steps {rep.steps:+d}  heads {rep.heads}  accidentals {rep.accidentals_found}→{rep.accidentals_drawn}")
         debug.save(debug_dir / f"{page.name}-9-inplace.png", dbg)
     return rep
+
+
+def snap_to_blobs(page, systems: list[System], rows, il: float):
+    """hybrid.merge_chords가 준 상자는 Vision 중심 둘레의 작은 상자(x−0.3il…x+0.9il)라 옛 글자를 다 못 지운다(A♭의 윗첨자, Fm의 F).
+    코드 띠의 잉크 덩어리(find_text_blobs: 윗첨자까지 뭉친 상자) 중 그 자리에 있는 것으로 바꾼다. Vision 상자가 있던 것(both)을
+    먼저 붙이고, AI만 읽은 코드는 남은 덩어리에만 붙인다 (앞 오선 끝의 코드가 다음 오선 앞에 놓이는 일이 있어, 남의 덩어리를
+    뺏지 않게). 덩어리가 없으면 그대로 두고, 그리기는 잉크가 없어 건너뛴다."""
+    for sys_, row in zip(systems, rows):
+        y0, y1 = sys_.chord_band
+        blobs = [(bx0, y0 + by0, bx1, y0 + by1) for bx0, by0, bx1, by1 in text.find_text_blobs(page.binary[y0:y1], il)]
+        taken: set[int] = set()
+        for src in ("both", "claude"):
+            for b in row:
+                if b.src != src or not blobs:
+                    continue
+                cx = b.x0 + 0.3 * il
+                near = [k for k, bb in enumerate(blobs) if k not in taken and bb[0] - 0.5 * il <= cx <= bb[2] + 0.5 * il]
+                if near:
+                    k = min(near, key=lambda k: abs((blobs[k][0] + blobs[k][2]) / 2 - cx))
+                    taken.add(k)
+                    b.x0, b.y0, b.x1, b.y1 = blobs[k]
+    return rows
 
 
 def compose_output(page, img: np.ndarray, src: Path) -> np.ndarray:

@@ -93,10 +93,11 @@ For a picture of a single-line score (melody with chords and lyrics) the app doe
 it finds every notehead on the staff and moves it up or down by the number of staff steps the new key needs, lengthens or
 shortens the stem to match, replaces the key signature, recomputes the accidentals, and rewrites the chord symbols in the
 same font. Lyrics, slurs, ties, repeat signs, the title and everything else stay exactly as they were. No rhythm is read,
-so nothing can go wrong with measures or note lengths, and a mistake affects one note, not the whole score. It takes a few
-seconds. On a small, blurry capture the key signature is too smudged to count, so the app takes the key from the chord
-symbols instead; when they do not settle it, it asks the AI reader (if one is signed in) one short question, which adds a
-few seconds more. The result has the same size as the original.
+so nothing can go wrong with measures or note lengths, and a mistake affects one note, not the whole score. The chord
+symbols are read by the AI reader when one is signed in (10–20 seconds; Apple Vision alone takes a few seconds but misreads
+superscript flats and numbers on blurry captures, A♭ as A6). On a small, blurry capture the key signature is too smudged to
+count, so the app takes the key from the chord symbols, then from the AI's reading. The result has the same size as the
+original.
 
 Limits of this first version: treble clef, one melody line; ties and slurs are left where they were, so a tied note keeps
 its old curve; a notehead the detector misses stays in the old key (it is easy to spot: it is the one note not on the

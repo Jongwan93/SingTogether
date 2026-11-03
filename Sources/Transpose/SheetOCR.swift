@@ -180,6 +180,7 @@ package enum SheetOCR {
         var summary = "No review data"
         if dict["inplace"] as? Bool == true {
             summary = "Moved on the original: \(dict["heads"] ?? 0) notes, \(dict["chords"] ?? 0) chords"
+            if let src = dict["chord_source"] as? String { summary += " read by \(src)" }
             if let src = dict["key_source"] as? String, src != "image" { summary += " · key from \(src)" }
             if let notes = dict["notes"] as? [String], !notes.isEmpty { summary += " · ⚠︎ " + notes.joined(separator: " · ") }
         } else if let s = dict["summary"] as? [String: Any] {

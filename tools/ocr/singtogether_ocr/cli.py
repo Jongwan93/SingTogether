@@ -330,7 +330,7 @@ def main(argv=None) -> None:
         base = (a.out.with_suffix("") if a.out else a.input.with_suffix(""))
         tmp = base.with_name(base.name + f" ({a.transpose:+d}){src_ext}")
         try:
-            rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug)
+            rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
         except RuntimeError as e:
             if "no staff" not in str(e):
                 raise
@@ -340,11 +340,12 @@ def main(argv=None) -> None:
             final = base.with_name(base.name + f" ({a.transpose:+d}, {rep.keys.split(' -> ')[1]}){src_ext}")
             tmp.replace(final)
             print(f"in-place: {rep.keys} (key from {rep.key_source}), {rep.heads} noteheads moved {rep.steps:+d} steps, "
-                  f"accidentals {rep.accidentals_found}→{rep.accidentals_drawn}, chords rewritten {rep.chords}"
+                  f"accidentals {rep.accidentals_found}→{rep.accidentals_drawn}, chords rewritten {rep.chords} (read by {rep.chord_source})"
                   + "".join(f"\n   ! {n}" for n in rep.notes_))
             print(f"→ {final}")
             result.update({"inplace": True, "transposed": str(final), "keys": rep.keys, "key_source": rep.key_source, "heads": rep.heads,
-                           "chords": rep.chords, "accidentals": [rep.accidentals_found, rep.accidentals_drawn], "notes": rep.notes_})
+                           "chords": rep.chords, "chord_source": rep.chord_source,
+                           "accidentals": [rep.accidentals_found, rep.accidentals_drawn], "notes": rep.notes_})
             finish()
             return
 

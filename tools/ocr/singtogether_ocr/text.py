@@ -89,8 +89,6 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                             rescued.setdefault(fixed, []).append(b.conf * 0.7)
             if not votes and rescued:                                # 직접 읽은 유효한 코드가 하나도 없을 때만 쓴다
                 votes = rescued
-            if not votes:
-                unread.append(box)
             weak = not votes or max(len(v) for v in votes.values()) < 2 or all(re.fullmatch(r"[A-G][#b]?", c) for c in votes)
             if weak:
                 # 윗첨자가 붙은 코드(A♭, C², D⁷)는 통째로 읽으면 자주 틀린다("A6", "C'"). 큰 글자와 윗첨자를 나눠 읽는다
@@ -102,6 +100,8 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                 tb = TextBox(chord, max(confs) * len(confs) / len(_OCR_PASSES), *box)
                 found.append(tb)
                 kept.append(tb)
+            else:
+                unread.append(box)
         # 어느 조합으로도 안 읽힌 덩어리(홑글자 G·D가 그렇다): 같은 조각을 이어 붙여 단어처럼 읽는다. 읽은 코드와 같은 줄·같은
         # 키의 덩어리만 (띠 아래쪽에 걸친 음표 토막을 "A"로 읽어 내는 일이 있어서)
         if found and unread:
