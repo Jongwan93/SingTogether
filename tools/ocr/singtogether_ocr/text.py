@@ -49,6 +49,7 @@ def normalize_chord(s: str) -> str:
     s = re.sub(r"^([A-G][#b]?)I([A-G])", r"\1/\2", s)         # D/F# 을 DIF# 로 읽는 경우
     s = re.sub(r"^([A-G][#b]?)[z°º]$", r"\g<1>2", s)          # 윗첨자 2 를 z·° 로 읽는 경우 (찬양 악보의 C2)
     s = re.sub(r"[-_.,]+$", "", s)                            # 끝에 붙는 선 조각
+    s = re.sub(r"^([A-G][#b]?)(\d+)m(?!aj)", r"\1m\2", s)       # 7이 m 위에 쓰인 B⁷m 을 B7m 으로 읽는 경우 → Bm7
     return s
 
 
@@ -118,7 +119,7 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                         kept.append(tb)
                         break
         found.sort(key=lambda b: b.x0)
-        result.append(found)
+        result.append(_merge_split_boxes(found, il))
     if debug_dir:
         img = debug.canvas(page.gray)
         debug.boxes(img, all_boxes, "band")
@@ -187,6 +188,22 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
     return (chord, min(confs)) if is_chord(chord) else None
 
 
+def _merge_split_boxes(found: list[TextBox], il: float) -> list[TextBox]:
+    """한 코드가 덩어리 여럿로 갈라져(A/C♯의 A와 /C♯, 슬래시 코드의 빗금) 상자가 둘씩 나오면 하나로 합친다: 0.3il 안에 붙어
+    있고 글자가 같거나 한쪽이 다른 쪽의 앞부분이면(A와 A/C♯; 여백을 두고 읽어 긴 쪽은 옆 덩어리까지 읽은 것). 긴 글자를 둔다."""
+    out: list[TextBox] = []
+    for b in sorted(found, key=lambda b: b.x0):
+        if out:
+            p = out[-1]
+            same = p.text == b.text or b.text.startswith(p.text) or p.text.startswith(b.text)
+            if same and b.x0 <= p.x1 + 0.3 * il:
+                longer = b if len(b.text) > len(p.text) else p
+                out[-1] = TextBox(longer.text, max(p.conf, b.conf), min(p.x0, b.x0), min(p.y0, b.y0), max(p.x1, b.x1), max(p.y1, b.y1), longer.src)
+                continue
+        out.append(b)
+    return out
+
+
 def read_tiled(page: Page, box: tuple[int, int, int, int], il: float, words, reps: int = 3) -> TextBox | None:
     """Vision은 글자 하나짜리 조각을 무시하므로, 같은 조각을 reps번 이어 붙여 단어처럼 보이게 한다.
     여백은 0.5il이 가장 잘 읽혔다 (1il 이상이면 자주 빈 결과). 상자는 쪽 좌표."""
@@ -231,6 +248,17 @@ def find_text_blobs(binary_band: np.ndarray, interline: float) -> list[tuple[int
     if binary_band.size == 0:
         return []
     ink = (binary_band < 128).astype(np.uint8)
+    # 띠 아래 경계는 오선 위 0.3il인데 빔·기둥·높은 음은 3il까지 올라온다. 빔은 코드 글자와 한 덩어리가 되기도 해서(흐린 그림)
+    # 상자가 빔까지 내려가고(코드를 빔 밑선에 쓰게 된다) 빔이 지워진다. 빔 = 0.6il×0.25il 열림을 견디는 굵은 가로 띠
+    # (글자 획은 0.15il 안팎이라 사라진다); 그걸 지우고, 2.5il 넘게 키 큰 덩어리(기둥)도 뺀다. 띠 바닥에 닿는지로 가리면
+    # 안 된다: 코드가 오선 바로 위에 붙은 악보에서는 글자도 바닥에 닿는다
+    beam_k = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(0.6 * interline)), max(2, int(0.25 * interline))))
+    beams = cv2.dilate(cv2.morphologyEx(ink, cv2.MORPH_OPEN, beam_k), np.ones((3, 3), np.uint8))
+    ink[beams > 0] = 0
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    for i in range(1, n):
+        if stats[i][3] > 2.5 * interline:
+            ink[labels == i] = 0
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(0.6 * interline)), max(3, int(0.25 * interline))))
     merged = cv2.dilate(ink, kernel)
     n, _, stats, _ = cv2.connectedComponentsWithStats(merged, connectivity=8)

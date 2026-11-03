@@ -42,8 +42,13 @@ def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     # 폭의 60%가 안 되는 짧은 오선(흔히 마지막 줄: 마디 두세 개)은 위에서 못 잡는다. 이미 찾은 오선 밖에서 낮은 문턱으로
     # 한 번 더 찾되, 5줄이 전부 실제 줄로 있고 간격이 맞는 빗만 받는다 (가사·제목 글줄은 두께 제한에 걸린다).
     covered = [(s.top - 1.5 * il, s.bottom + 1.5 * il) for s in staves]
-    loose = [y for y in find_staff_lines(page.binary, min_fraction=0.2, relative=False) if not any(a <= y <= b for a, b in covered)]
-    staves += fit_staves(page.binary, loose, il, complete=True)
+    # 줄 두께 한도는 키운 배율을 따른다: 4배로 키운 흐린 캡처는 줄이 7px라 6px 한도에 걸려 마지막 줄 하나가 빠지고, 그러면
+    # complete 빗이 안 맞아 짧은 마지막 오선(주님은 산 같아서 17마디)을 통째로 놓친다
+    thick = max(6, int(round(1.5 * page.scale + 1)))
+    loose = [y for y in find_staff_lines(page.binary, max_thickness=thick, min_fraction=0.2, relative=False)
+             if not any(a <= y <= b for a, b in covered)]
+    # 빗과 줄의 허용 오차도 배율을 따른다 (4배에서는 줄 간격이 24.5px 같은 반픽셀이라 빗이 2px씩 어긋난다)
+    staves += fit_staves(page.binary, loose, il, complete=True, tol=max(1, int(round(0.5 * page.scale))))
     staves.sort(key=lambda s: s.top)
     for s in staves:
         s.left, s.right = staff_extent(page.binary, s.lines)
@@ -84,11 +89,11 @@ def find_staff_lines(binary: np.ndarray, max_thickness: int = 6, min_fraction: f
     return [int(np.mean(g)) for g in groups if len(g) <= max_thickness]
 
 
-def fit_staves(binary: np.ndarray, lines: list[int], interline: float, complete: bool = False) -> list[Staff]:
+def fit_staves(binary: np.ndarray, lines: list[int], interline: float, complete: bool = False, tol: int = 1) -> list[Staff]:
     """줄을 가까운 것끼리 묶고(간격 < 2il), 묶음마다 가로 투영에 가장 잘 맞는 5줄 빗(시작 y, 간격)을 찾는다.
 
     줄이 합쳐지거나 쪼개져 4줄·6줄로 보여도 복구된다.
-    complete: 빗의 5줄이 모두 찾은 줄(±1px)과 맞을 때만 받는다 (낮은 문턱으로 찾은 줄에서 가짜 오선을 거르려고).
+    complete: 빗의 5줄이 모두 찾은 줄(±tol px)과 맞을 때만 받는다 (낮은 문턱으로 찾은 줄에서 가짜 오선을 거르려고).
     """
     if not lines:
         return []
@@ -112,7 +117,7 @@ def fit_staves(binary: np.ndarray, lines: list[int], interline: float, complete:
                 s = sum(proj[max(0, r - 1):r + 2].max() for r in rows)
                 if best is None or s > best[0]:
                     best = (s, rows)
-        if best and (not complete or all(any(abs(r - y) <= 1 for y in c) for r in best[1])):
+        if best and (not complete or all(any(abs(r - y) <= tol for y in c) for r in best[1])):
             staves.append(Staff(best[1], 0, 0))
     return staves
 

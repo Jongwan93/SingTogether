@@ -84,7 +84,8 @@ final class SettingsWindowController: NSWindowController {
     private let sound = NSButton(checkboxWithTitle: "Play a sound when a file is created", target: nil, action: nil)
     private let updates = NSButton(checkboxWithTitle: "Check for updates when the app starts (asks GitHub once a day)", target: nil, action: nil)
     private let imageOut = NSButton(checkboxWithTitle: "Save transposed image scores as images (PNG or JPEG), not PDF", target: nil, action: nil)
-    private let inPlace = NSButton(checkboxWithTitle: "Move the notes and chords on the original picture (seconds; off: recognize, re-engrave and review)", target: nil, action: nil)
+    private let inPlace = NSButton(checkboxWithTitle: "Move the notes and chords on the original picture", target: nil, action: nil)
+    private let inPlaceNote = NSTextField(wrappingLabelWithString: "Takes seconds. Off: the score is recognized, re-engraved and opened in the review window.")
     private var spellings: [NSButton] = []
     private var readers: [NSButton] = []
     private let status = NSTextField(wrappingLabelWithString: "")
@@ -124,11 +125,13 @@ final class SettingsWindowController: NSWindowController {
         checkButton.target = self; checkButton.action = #selector(checkSignIn)
         toolLabel.font = .systemFont(ofSize: 11)
         toolLabel.textColor = .secondaryLabelColor
+        inPlaceNote.font = .systemFont(ofSize: 11)
+        inPlaceNote.textColor = .secondaryLabelColor
         let clear = NSButton(title: "Clear cache", target: self, action: #selector(clearCache))
         let cacheRow = NSStackView(views: [cacheLabel, clear]); cacheRow.spacing = 10
 
         let general = section("General", [login, ask, review, sound, updates])
-        let transposing = section("Transposing", [spellingLabel] + spellings + [inPlace, imageOut])
+        let transposing = section("Transposing", [spellingLabel] + spellings + [inPlace, inPlaceNote, imageOut])
         let reader = section("Reading image scores", readers + [NSStackView(views: [status, checkButton]), toolLabel])
         let cache = section("Recognition cache", [NSTextField(wrappingLabelWithString: "Recognized scores are remembered by file content, so the same image is instant next time."), cacheRow])
         let root = NSStackView(views: [general, transposing, reader, cache])
@@ -146,7 +149,7 @@ final class SettingsWindowController: NSWindowController {
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             root.widthAnchor.constraint(equalToConstant: 520),
         ])
-        for v in [status, toolLabel] { v.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true }
+        for v in [status, toolLabel, inPlaceNote] { v.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true }
     }
 
     private func section(_ title: String, _ views: [NSView]) -> NSView {

@@ -112,6 +112,7 @@ class engine:
         il = page.interline
         H, W = page.gray.shape
         chunks: list[tuple[int, int, int, int]] = []           # (y0, y1, x0, x1)
+        chunk_system: list[int] = []                           # 조각이 든 오선 번호 (Measure.system에 적는다: 제자리 이조가 오선별로 맞춰 본다)
         symbols = notes.find_symbols(page, systems) if mode == "half" else None
         for k, s in enumerate(systems):
             y0 = max(0, int(s.chord_band[0] - 0.5 * il))
@@ -121,8 +122,10 @@ class engine:
                 mid = min(bars[:-1], key=lambda b: abs(b - (s.staff.left + s.staff.right) / 2))
                 chunks.append((y0, y1, 0, int(mid + 0.3 * il)))
                 chunks.append((y0, y1, max(0, int(mid - 0.3 * il)), W))
+                chunk_system += [k, k]
             else:
                 chunks.append((y0, y1, 0, W))
+                chunk_system.append(k)
         t0 = time.time()
         # 첫 조각을 먼저 읽어 조표·박자표를 알아낸 뒤, 나머지는 동시에 묻는다. 마디 번호는 조각 안에서만 뜻이 있다
         # (앞 조각의 마디 수를 모르므로 "이 조각의 첫 마디 = k번째 시스템 시작"이라는 뜻으로 1, 100, 200…을 준다).
@@ -158,6 +161,7 @@ class engine:
                 merged.fifths, merged.mode, merged.beats, merged.beat_type = part.fifths, part.mode, part.beats, part.beat_type
             for m in part.measures:
                 m.number = start
+                m.system = chunk_system[k - 1]
                 start += 1
                 merged.measures.append(m)
             merged.has_chords |= part.has_chords

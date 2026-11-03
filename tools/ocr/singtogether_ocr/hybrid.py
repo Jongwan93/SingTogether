@@ -148,7 +148,7 @@ def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: 
     keep_vision_min: Claude에 짝이 없는 Vision 코드를 남길 최소 확신도. 잡음일 때가 많아 여러 번 읽어도 같았던 것(0.75+)만
     남기는 게 기본; 제자리 이조는 안 남기면 옛 코드가 그대로 남으니 0을 준다."""
     v_items = [(si, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.text, b.conf) for si, boxes in enumerate(vision) for b in boxes]
-    c_items = [n.chord for n in claude_t.notes if n.chord]
+    c_items = [normalize_chord(n.chord) for n in claude_t.notes if n.chord]     # AI도 B⁷m을 B7m으로 적는다 → Bm7
     if not c_items:
         return vision, 0.0, 0.0
     placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= keep_vision_min)
