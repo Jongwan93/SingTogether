@@ -244,23 +244,83 @@ def draw_glyph(img: np.ndarray, kind: str, cx: float, cy: float, il: float) -> N
     region[g[sy0:sy0 + hh, sx0:sx0 + ww] > 0] = 0
 
 
-def match_accidental(ink: np.ndarray, x0: int, x1: int, cy: float, il: float) -> tuple[str, tuple[int, int, int, int], float] | None:
-    """머리 왼쪽 틈(x0..x1)에서 ♯·♭·♮ 템플릿을 찾는다. (종류, 상자, 점수) 또는 None."""
+def classify_accidental(mask: np.ndarray) -> str | None:
+    """잉크 덩어리(오선 줄 뺀 것)가 ♯·♭·♮ 중 무엇인가, 세로획 배치로 가린다 (글꼴에 안 매인다):
+    ♯은 높이의 3/4 넘게 뻗는 세로획이 둘, ♭은 하나이고 왼쪽 끝에, ♮은 그런 획은 없지만 절반 넘게 뻗는 획이 둘(왼쪽 위·오른쪽 아래)."""
+    h, w = mask.shape
+    if h < 4 or w < 3:
+        return None
+    col_h = mask.sum(axis=0)
+
+    def groups(th: float) -> list[tuple[int, int]]:
+        on = col_h >= th * h
+        out, start = [], None
+        for x, v in enumerate(list(on) + [False]):
+            if v and start is None:
+                start = x
+            elif not v and start is not None:
+                out.append((start, x - 1))
+                start = None
+        return out
+
+    tall = groups(0.75)
+    if len(tall) >= 2:
+        return "sharp"
+    if len(tall) == 1:
+        return "flat" if tall[0][0] <= 0.3 * w else None
+    return "natural" if len(groups(0.5)) == 2 else None
+
+
+def match_accidental(ink: np.ndarray, x0: int, x1: int, cy: float, il: float, staff: Staff, t_line: int
+                     ) -> tuple[str, tuple[int, int, int, int], float] | None:
+    """머리 왼쪽 틈(x0..x1)의 임시표: 오선 줄을 뺀 잉크 덩어리 중 임시표 크기(높이 1.6–3.4il, 폭 0.3–1.2il)이고 머리 높이에
+    있는(♯·♮은 머리 가운데, ♭은 고리가 머리라 중심이 0.45il 위) 것을 모양으로 가린다. 머리에 가장 가까운 것 하나.
+    (종류, 상자, 1.0) 또는 None. 합성 템플릿 상관은 실제 글꼴과 0.1–0.3밖에 안 맞아 못 쓴다."""
     H, W = ink.shape
-    y0, y1 = max(0, int(cy - 1.9 * il)), min(H, int(cy + 1.9 * il))
+    y0, y1 = max(0, int(cy - 2.2 * il)), min(H, int(cy + 2.2 * il))
     x0, x1 = max(0, x0), min(W, x1)
-    region = (ink[y0:y1, x0:x1] * 255).astype(np.uint8)
+    if x1 - x0 < 0.3 * il or y1 - y0 < 1.6 * il:
+        return None
+    region = ink[y0:y1, x0:x1].astype(np.uint8)
+    cut = strip_staff_lines(region, [y - y0 for y in staff.lines if y0 <= y < y1], t_line)
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(cut, connectivity=8)
     best = None
-    for kind in ("sharp", "flat", "natural"):
-        g = glyph(kind, il)
-        if region.shape[0] < g.shape[0] or region.shape[1] < g.shape[1]:
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        if not (1.6 * il <= h <= 3.4 * il and 0.3 * il <= w <= 1.2 * il):
             continue
-        res = cv2.matchTemplate(region, g, cv2.TM_CCOEFF_NORMED)
-        _, score, _, loc = cv2.minMaxLoc(res)
-        if score >= ACC_MATCH and (best is None or score > best[2]):
-            bx, by = x0 + loc[0], y0 + loc[1]
-            best = (kind, (bx, by, bx + g.shape[1], by + g.shape[0]), float(score))
-    return best
+        ccy = y0 + cents[i][1]
+        kind = classify_accidental(labels[y:y + h, x:x + w] == i)
+        if kind is None:
+            continue
+        expect = cy - (0.45 * il if kind == "flat" else 0)
+        if abs(ccy - expect) > 0.6 * il:
+            continue
+        if best is None or x > best[1][0] - x0:
+            best = (kind, (x0 + int(x), y0 + int(y), x0 + int(x + w), y0 + int(y + h)), 1.0)
+    if best is None:
+        return None
+    # 흐린 가장자리 획(♭ 세로획의 꼭대기)은 덩어리에서 떨어지기도 한다: 틈 안에서 상자를 조금 넓혀 지우고 거둔다
+    kind, (bx0, by0, bx1, by1), _ = best
+    top = int(0.5 * il if kind == "flat" else 0.3 * il)
+    return kind, (max(x0, bx0 - int(0.12 * il)), max(y0, by0 - top), min(x1, bx1 + int(0.12 * il)), min(y1, by1 + int(0.15 * il))), 1.0
+
+
+def after_time_signature(ink: np.ndarray, staff: Staff, il: float, kend: int) -> int:
+    """조표 다음 잉크 무리(박자표)의 오른쪽 끝 x. 첫 음의 임시표를 찾을 때 박자표 숫자(6 위에 8)를 ♭으로 보지 않게 건너뛴다.
+    박자표가 없으면 첫 음표를 건너뛰게 되는데, 그러면 첫 음은 임시표를 못 찾을 뿐이다."""
+    prof = column_profile(ink, staff, il)
+    empty = line_thickness(ink, staff) + 3
+    x = min(len(prof) - 1, int(kend))
+    while x < len(prof):                                   # 잉크 무리들을 0.4il 미만의 틈은 건너뛰며 잇는다 (숫자 안의 빈 열)
+        while x < len(prof) and prof[x] > empty:
+            x += 1
+        gap = x
+        while x < len(prof) and prof[x] <= empty and x - gap < 0.4 * il:
+            x += 1
+        if x >= len(prof) or prof[x] <= empty:
+            return gap + 2
+    return x
 
 
 def find_key_signature(ink: np.ndarray, staff: Staff) -> tuple[int, list[tuple[int, int, int, int]], int, int]:
@@ -597,10 +657,14 @@ def find_dot(ink: np.ndarray, h: Notehead, il: float) -> tuple[int, int, int, in
     return x0 + x, y0 + y, x0 + x + w, y0 + y + hh
 
 
-def harvest_glyph(ink: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
-    """조표 글자 하나의 잉크 마스크 (0/255). 새 조표나 임시표를 그릴 때 그림 자체의 글꼴을 쓴다."""
+def harvest_glyph(ink: np.ndarray, box: tuple[int, int, int, int], staff: Staff | None = None, t_line: int = 1) -> np.ndarray:
+    """조표·임시표 글자 하나의 잉크 마스크 (0/255). 새 조표나 임시표를 그릴 때 그림 자체의 글꼴을 쓴다.
+    staff를 주면 상자를 지나는 오선 줄은 뺀다 (다른 높이에 찍을 때 줄 토막이 따라가지 않게)."""
     x0, y0, x1, y1 = box
-    return (ink[y0:y1, x0:x1] * 255).astype(np.uint8)
+    region = ink[y0:y1, x0:x1].astype(np.uint8)
+    if staff is not None:
+        region = strip_staff_lines(region, [y - y0 for y in staff.lines if y0 <= y < y1], t_line)
+    return (region * 255).astype(np.uint8)
 
 
 def stamp(img: np.ndarray, mask: np.ndarray, cx: float, cy: float) -> None:
@@ -716,7 +780,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         if real and kf == rep.old_fifths and kboxes and rep.old_fifths != 0 and not samples:
             kind, steps = ("sharp", TREBLE_SHARP_STEPS) if kf > 0 else ("flat", TREBLE_FLAT_STEPS)
             b = kboxes[0]
-            samples[kind] = (harvest_glyph(ink, b), (b[1] + b[3]) / 2 - (sys_.staff.bottom - steps[0] * il / 2))
+            samples[kind] = (harvest_glyph(ink, b, sys_.staff, line_thickness(ink, sys_.staff)),
+                             (b[1] + b[3]) / 2 - (sys_.staff.bottom - steps[0] * il / 2))
             if len(kboxes) >= 2:
                 old_spacing = (kboxes[1][0] + kboxes[1][2] - kboxes[0][0] - kboxes[0][2]) / 2
 
@@ -735,7 +800,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         state_old = dict(old_alters)             # (글자, 옥타브)별 현재 변화 — 마디마다 초기화. 글자만으로 둔다 (옥타브 무시)
         state_new = dict(new_alters)
         bar_i = 0
-        prev_right = st.left + int(2 * il)
+        prev_right = after_time_signature(ink, st, il, kend)   # 조표·박자표 다음부터 (그 글자들을 첫 음의 임시표로 보지 않게)
         for h in heads:
             while bar_i < len(bars) and bars[bar_i] < h.x:          # 마디줄을 지나면 임시표 상태 초기화
                 state_old, state_new = dict(old_alters), dict(new_alters)
@@ -747,10 +812,18 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             if h.evidence and h.evidence.dot:
                 plan.dot = find_dot(ink, h, il)
             gap_x0, gap_x1 = max(prev_right, int(h.x - 2.6 * il)), int(h.x - h.w / 2 - 0.12 * il)
-            if gap_x1 - gap_x0 >= 0.8 * il:
-                if (m := match_accidental(ink, gap_x0, gap_x1, h.y, il)):
+            if gap_x1 - gap_x0 >= 0.5 * il:
+                m = match_accidental(ink, gap_x0, gap_x1, h.y, il, st, t_line)
+                # 앞 음의 아래로 뻗은 기둥(왼쪽에 붙고 꼬리가 오른쪽으로 말린다)은 ♭처럼 보인다: 어느 머리의 기둥 열이 상자 안이면 아니다
+                if m and any(o.evidence and o.evidence.stem and m[1][0] - 2 <= o.evidence.stem_x <= m[1][2] + 2
+                             and abs(o.y - (m[1][1] + m[1][3]) / 2) < 3 * il for o in heads if o is not h):
+                    m = None
+                if m:
                     plan.acc_old = (m[0], m[1])
                     rep.accidentals_found += 1
+                    if m[0] not in samples:                           # 그림의 임시표 글자를 새 임시표의 본으로 (같은 글꼴)
+                        b = m[1]
+                        samples[m[0]] = (harvest_glyph(ink, b, st, t_line), (b[1] + b[3]) / 2 - h.y)
             letter, octave = step_pitch(step_old)
             if plan.acc_old:
                 state_old[letter] = {"sharp": 1, "flat": -1, "natural": 0}[plan.acc_old[0]]
@@ -782,8 +855,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                     y = int(round(st.bottom - s * il / 2))
                     erase(img, (int(h.x - h.w / 2 - 0.5 * il), y - t_line - 1, int(h.x + h.w / 2 + 0.5 * il) + 1, y + t_line + 2), st, t_line)
             if p.acc_old:
-                bx0, by0, bx1, by1 = p.acc_old[1]
-                erase(img, (bx0, by0, bx1, by1), st, t_line)
+                erase(img, p.acc_old[1], st, t_line)
             if p.dot and p.step_new != p.step_old:
                 bx0, by0, bx1, by1 = p.dot
                 erase(img, (bx0 - 1, by0 - 1, bx1 + 1, by1 + 1), st, t_line)
