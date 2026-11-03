@@ -112,7 +112,13 @@ STAGE=dist/stage
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "SingTogether" -srcfolder "$STAGE" -ov -format UDZO -quiet "$DMG"
+# hdiutil fails now and then on GitHub's macOS runners ("Resource busy" while the staging folder is still being scanned):
+# try a few times, and show its output (with -quiet a failure left no clue in the workflow log)
+for attempt in 1 2 3; do
+    if hdiutil create -volname "SingTogether" -srcfolder "$STAGE" -ov -format UDZO "$DMG"; then break; fi
+    [ "$attempt" = 3 ] && { echo "hdiutil create failed three times"; exit 1; }
+    echo "hdiutil create failed (attempt $attempt), retrying in 10 s"; sleep 10
+done
 rm -rf "$STAGE"
 case "$IDENTITY" in
     "Developer ID"*) codesign --force --sign "$IDENTITY" --timestamp "$DMG" ;;
