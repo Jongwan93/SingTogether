@@ -1474,9 +1474,12 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                           and not foreign(bb)]
                     # Vision 상자가 근음 글자를 빼고 잡기도 한다(F♯m을 "♯m"만): 바로 왼쪽 0.2il 안에 붙은, 다른 Vision 상자에
                     # 들지 않은 덩어리는 같은 코드다
+                    # (근음 글자라면 바닥이 코드 바닥과 같다: 1·2번 괄호의 "2."는 바닥이 0.5il 위라 받지 않는다 — 주 이름 찬양)
                     while ks:
                         left = min(blobs[k][0] for k in ks)
+                        bottom = max(blobs[k][3] for k in ks)
                         more = [k for k, bb in enumerate(blobs) if k not in taken and k not in ks and 0 <= left - bb[2] <= 0.2 * il
+                                and abs(bb[3] - bottom) <= 0.25 * il
                                 and not any(v[0] <= (bb[0] + bb[2]) / 2 <= v[2] for v in vboxes if v is not vb)]
                         if not more:
                             break
