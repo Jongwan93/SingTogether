@@ -358,7 +358,7 @@ def _chord_mask(font_path: tuple[str, int], text: str, cap: int, sup: bool) -> t
         return mask, bb_cap[1] - font.getbbox(text)[1] + 1, cap_h
     rm = _render_mask(font, root)
     r_top = bb_cap[1] - font.getbbox(root)[1] + 1
-    sfont = _fit_font(font_path, "A", max(5, int(round(cap * 0.62))))
+    sfont = _fit_font(font_path, "A", max(8, int(round(cap * 0.62))))
     gap = max(1, int(round(0.06 * cap)))
     # 찬양 악보의 관례: 숫자는 대문자 윗줄에 올려 쓰고(C⁷, Esus⁴), 소문자·슬래시(m·sus·/F♯)는 작게 바닥에 둔다 (Gm⁷, C⁴sus, Dm).
     # 조각마다 따로 놓는다: 올리는 조각은 윗줄, 나머지는 대문자 바닥
@@ -380,12 +380,13 @@ def _chord_mask(font_path: tuple[str, int], text: str, cap: int, sup: bool) -> t
 def _fit_font(face: tuple[str, int], text: str, height: int) -> ImageFont.FreeTypeFont:
     """글자 전체(근음 대문자 + ♯ 등)의 높이가 height가 되는 크기."""
     path, index = face
-    size = max(6, height)
+    # 8pt 아래에서는 Helvetica.ttc 같은 글꼴이 FreeType 안에서 0으로 나눈다 (7px짜리 Vision 상자: because he lives)
+    size = max(8, height)
     for _ in range(4):
         f = ImageFont.truetype(path, size, index=index)
         bb = f.getbbox(text)
         hh = max(1, bb[3] - bb[1])
-        size = max(6, int(round(size * height / hh)))
+        size = max(8, int(round(size * height / hh)))
     return ImageFont.truetype(path, size, index=index)
 
 
