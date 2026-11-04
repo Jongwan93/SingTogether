@@ -50,6 +50,8 @@ def normalize_chord(s: str) -> str:
     s = re.sub(r"^([A-G][#b]?)[z°º]$", r"\g<1>2", s)          # 윗첨자 2 를 z·° 로 읽는 경우 (찬양 악보의 C2)
     s = re.sub(r"[-_.,]+$", "", s)                            # 끝에 붙는 선 조각
     s = re.sub(r"^([A-G][#b]?)(\d+)m(?!aj)", r"\1m\2", s)       # 7이 m 위에 쓰인 B⁷m 을 B7m 으로 읽는 경우 → Bm7
+    s = re.sub(r"^([A-G][#b]?)(m?)sus(\d)/(\d)$", r"\1\2\3sus\4", s)   # ⁷₄가 msus 위에 쌓인 Gm⁷₄sus 를 Gmsus7/4 로 읽는 경우 → Gm7sus4
+    s = re.sub(r"^([A-G])#?m#(\d)", r"\1#m\2", s)                      # 근음의 ♯이 위로 올라간 G♯m⁷ 을 Gm#7·G#m#7 로 읽는 경우 → G#m7
     return s
 
 

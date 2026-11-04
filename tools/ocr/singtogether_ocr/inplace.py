@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
+import re
 import numpy as np
 
 from . import ingest, layout, notes, text
@@ -409,6 +410,104 @@ def ledger_snap(ink: np.ndarray, staff: Staff, heads: list[Notehead], il: float,
     return moved
 
 
+def clef_keep_x(cut: np.ndarray, lab: np.ndarray, stt, clef_i: int, bx0: int, y0: int, staff: Staff, il: float) -> int | None:
+    """흐린 캡처에서 조표가 음자리표에 붙어 한 덩어리가 되면, 음자리표를 어디까지 남길지 구멍으로 정한다: 음자리표의 큰 고리 구멍
+    (높이 1.4il 넘는 것)의 오른쪽 끝 너머에 있는 첫 작은 구멍(♯의 가운데, 폭·높이 0.9il 아래)의 0.45il 왼쪽부터가 조표다.
+    작은 구멍이 없으면(♭은 번지면 구멍이 사라진다) 고리 구멍 오른쪽 끝 + 0.45il(획 두께). 고리 구멍이 없으면(깨끗한 그림은 줄을 뺀
+    자리에서 고리가 열린다) None = 덩어리를 통째로 남긴다."""
+    comp = (lab == clef_i).astype(np.uint8)
+    hn, hlab, hst, _ = cv2.connectedComponentsWithStats(1 - comp, connectivity=4)
+    Hc, Wc = comp.shape
+    loops, small = [], []
+    for j in range(1, hn):
+        hx, hy, hw, hh, _ = hst[j]
+        if hx == 0 or hy == 0 or hx + hw == Wc or hy + hh == Hc:
+            continue                                                   # 바깥 배경
+        if hh >= 1.4 * il:
+            loops.append(hx + hw)
+        elif hw <= 0.9 * il and hh <= 0.9 * il and staff.top - 1.8 * il <= y0 + hy <= staff.top + 3 * il:
+            small.append(hx)
+    if not loops:
+        return None
+    loop_right = max(loops)
+    glyph = [hx for hx in small if hx >= loop_right - 0.1 * il]
+    # 첫 작은 구멍이 고리에서 1.2il 넘게 떨어져 있으면 첫 글자가 번져 구멍이 없는 것이다 (주 이름 찬양 6째 줄): 고리 끝 + 획 두께
+    if glyph and min(glyph) - loop_right <= 1.2 * il:
+        return bx0 + int(min(glyph) - 0.45 * il)
+    return bx0 + int(loop_right + 0.45 * il)
+
+
+def find_clef_end(ink: np.ndarray, staff: Staff, t_line: int, il: float) -> int | None:
+    """흐린 캡처에서 조표가 붙은 음자리표의 오른쪽 끝(clef_keep_x). 못 구하면 None."""
+    H, W = ink.shape
+    y0, y1 = max(0, int(staff.top - 1.7 * il)), min(H, int(staff.bottom + 1.7 * il))
+    bx0, bx1 = max(0, staff.left), min(W, staff.left + int(14 * il))
+    cut = strip_staff_lines(ink[y0:y1, bx0:bx1].astype(np.uint8), [y - y0 for y in staff.lines], t_line)
+    n, lab, stt, _ = cv2.connectedComponentsWithStats(cv2.erode(cut, np.ones((3, 3), np.uint8), iterations=2), connectivity=8)
+    for i in range(1, n):
+        bx, by, bw, bh, _ = stt[i]
+        if bh >= 4 * il and bx0 + bx < staff.left + 3 * il:
+            return clef_keep_x(cut, lab, stt, i, bx0, y0, staff, il)
+    return None
+
+
+def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, il: float, x0: int, x1: int) -> None:
+    """음자리표 끝(x0)부터 x1까지의 옛 조표(와 박자표)를 지운다: 남길 것을 빼고 전부. 남기는 것은 음자리표(4il 넘게 키 큰 덩어리;
+    조표가 거기 붙어 있으면 clef_keep_x 왼쪽만), 오선 위 코드 글자(바닥이 윗줄 위 0.3il보다 높은 덩어리: 찬양의 열기의 D),
+    x1 너머에 중심이 있는 쉼표·첫 음. 덩어리는 오선 줄을 뺀 띠를 2px 깎아 가르고(붙은 글자들의 다리가 끊긴다) 도로 불린다;
+    깎여 사라지는 가는 획(4/4의 사선)은 어느 덩어리도 아니라 지워진다. 오선 줄 행은 이웃 열의 값으로 잇는다."""
+    H, W = ink.shape
+    y0, y1 = max(0, int(staff.top - 1.7 * il)), min(H, int(staff.bottom + 1.7 * il))
+    bx0, bx1 = max(0, min(staff.left, int(x0 - 3 * il))), min(W, int(x1 + 3 * il))   # 음자리표가 통째로 들게 (구멍이 띠 가장자리에 닿으면 못 센다)
+    band = ink[y0:y1, bx0:bx1].astype(np.uint8)
+    cut = strip_staff_lines(band, [y - y0 for y in staff.lines], t_line)
+    k = np.ones((3, 3), np.uint8)
+    n, lab, stt, _ = cv2.connectedComponentsWithStats(cv2.erode(cut, k, iterations=2), connectivity=8)
+    # 지울 자리 안의 마디줄(도돌이표 포함: 키 3.5il 넘고 폭 0.35il 아래)에서 멈춘다 — 주 이름 찬양 6째 줄은 조표 뒤가 바로 도돌이표다
+    for i in range(1, n):
+        bx, by, bw, bh, _ = stt[i]
+        if bh >= 3.5 * il and bw <= 0.35 * il and x0 <= bx0 + bx + bw / 2 < x1:
+            x1 = min(x1, bx0 + bx - int(0.4 * il))
+    keep_px = np.zeros_like(cut)
+    ex0 = x0
+    # 오선 줄을 지우기 전의 덩어리: 줄에 닿은 것은 줄과 함께 한 덩어리(키 큼)가 된다 — 윗줄 위로 솟은 ♯의 윗부분을 코드 글자와 가른다
+    _, lab_full, stt_full, _ = cv2.connectedComponentsWithStats(band, connectivity=8)
+    for i in range(1, n):
+        bx, by, bw, bh, _ = stt[i]
+        cx = bx0 + bx + bw / 2
+        if bx0 + bx < x0 and bx0 + bx + bw > x0 + 0.3 * il:           # 왼쪽(음자리표)에서 지울 자리로 뻗어 든 덩어리: 음자리표에 붙은 조표
+            # 띠가 위아래 1.7il에서 잘려 음자리표는 키로 못 알아본다; 구멍으로 끝을 재고(없으면 x0) 그 왼쪽만 남긴다
+            kx = clef_keep_x(cut, lab, stt, i, bx0, y0, staff, il)
+            kx = x0 if kx is None else max(kx, x0 - int(0.5 * il))
+            keep_px[(lab == i) & (np.arange(cut.shape[1])[None, :] + bx0 < kx)] = 1
+            ex0 = min(ex0, kx)
+        elif not (x0 <= cx < x1):                                     # 지울 자리 밖에 중심이 있는 것
+            keep_px[lab == i] = 1
+        elif y0 + by + bh <= staff.top - 0.3 * il:                     # 코드 글자: 줄에 안 닿은 것만 (♯의 윗부분은 줄에 닿는다)
+            full = lab_full[lab == i]
+            full = full[full > 0]
+            if full.size and stt_full[int(np.bincount(full).argmax())][3] < 2.5 * il:
+                keep_px[lab == i] = 1
+    protected = cv2.dilate(keep_px, k, iterations=4) > 0
+    cols = np.zeros(cut.shape[1], bool)
+    cols[max(0, ex0 - bx0):max(0, x1 - bx0)] = True
+    # 잉크로 안 잡힌 회색 테두리(번진 글자 가장자리)도 함께: 보호 대상 둘레 4px 밖은 전부
+    mask = ~protected & cols[None, :]
+    keep = np.zeros(y1 - y0, bool)
+    for y in staff.lines:
+        a, b = max(y0, y - t_line // 2 - 1), min(y1, y + (t_line + 1) // 2 + 1)
+        if b > a:
+            keep[a - y0:b - y0] = True
+    region = img[y0:y1, bx0:bx1]
+    region[mask & ~keep[:, None]] = 255
+    # 줄 행: 지우는 열을 상자 좌우 바깥(열 6개씩)의 중앙값으로 — erase()와 같은 방식
+    for r in np.flatnonzero(keep):
+        cs = np.flatnonzero(mask[r])
+        if cs.size:
+            around = np.concatenate([img[y0 + r, max(0, ex0 - 6):ex0], img[y0 + r, x1:min(W, x1 + 6)]])
+            region[r, cs] = int(np.median(around)) if around.size else 255
+
+
 def draw_time_signature(img: np.ndarray, staff: Staff, beats: int, beat_type: int, x: int, il: float, scale: float = 1.0) -> int:
     """박자표 숫자 둘을 x부터 쓴다 (위 숫자 바닥 = 가운데 줄, 아래 숫자 바닥 = 맨 아래 줄, 높이 2il×scale). 오른쪽 끝 x."""
     from .chordoverlay import FONTS, _fit_font, _render_mask
@@ -441,9 +540,9 @@ def after_time_signature(ink: np.ndarray, staff: Staff, il: float, kend: int) ->
     return x
 
 
-def find_key_signature(ink: np.ndarray, staff: Staff) -> tuple[int, list[tuple[int, int, int, int]], int, int]:
-    """오선 시작의 조표: (fifths, 글자 상자들, 조표 시작 x, 조표 다음 잉크 x). 조표의 k번째 ♯/♭은 자리가 정해져 있어
-    그 y에 맞는 덩어리를 세어 종류와 수를 안다. 조표가 없으면 (0, [], 음자리표 오른쪽, 그다음 잉크)."""
+def find_key_signature(ink: np.ndarray, staff: Staff) -> tuple[int, list[tuple[int, int, int, int]], int, int, int]:
+    """오선 시작의 조표: (fifths, 글자 상자들, 조표 시작 x, 조표 다음 잉크 x, 음자리표 오른쪽 끝 x). 조표의 k번째 ♯/♭은 자리가
+    정해져 있어 그 y에 맞는 덩어리를 세어 종류와 수를 안다. 조표가 없으면 (0, [], 음자리표 오른쪽, 그다음 잉크, 음자리표 오른쪽)."""
     il = staff.interline
     H, W = ink.shape
     x_lo, x_hi = staff.left + int(1.2 * il), min(W, staff.left + int(11 * il))
@@ -457,10 +556,12 @@ def find_key_signature(ink: np.ndarray, staff: Staff) -> tuple[int, list[tuple[i
         x, y, w, h, area = stats[i]
         comps.append((x + x_lo, y + y_lo, w, h, cents[i][0] + x_lo, cents[i][1] + y_lo))
     # 음자리표: 가장 왼쪽의 키 큰 덩어리
+    # 흐린 캡처에서는 조표·박자표·첫 음까지 음자리표와 한 덩어리로 붙는다(주 이름 찬양: 9il 폭). 높음표의 폭은 높이의 0.37배쯤이라
+    # 덩어리 폭 대신 높이로 끝을 어림한다 (덩어리가 그보다 좁으면 그 끝)
     clef_right = staff.left + int(2.5 * il)
     for x, y, w, h, cx, cy in comps:
         if h >= 4 * il and x < staff.left + 3 * il:
-            clef_right = max(clef_right, x + w)
+            clef_right = max(clef_right, min(x + w, x + int(0.38 * min(h, 7.5 * il))))
     cands = sorted([c for c in comps if c[0] >= clef_right - int(0.2 * il) and 1.7 * il <= c[3] <= 3.4 * il and 0.3 * il <= c[2] <= 1.15 * il],
                    key=lambda c: c[0])
 
@@ -499,7 +600,7 @@ def find_key_signature(ink: np.ndarray, staff: Staff) -> tuple[int, list[tuple[i
     nxt = min(x, W - 1)
     if nxt > staff.left + 14 * il:                     # 못 찾았다: 적당한 자리로 (머리 검출 범위 제한에만 쓴다)
         nxt = end_x + int(1.5 * il)
-    return fifths, boxes, start_x, nxt
+    return fifths, boxes, start_x, nxt, clef_right
 
 
 def column_profile(ink: np.ndarray, staff: Staff, il: float) -> np.ndarray:
@@ -711,7 +812,7 @@ def find_hollow_heads(binary: np.ndarray, sys_: System, il: float, heads: list[N
         hx, hy = cx + staff.left, cy + y0
         if any(abs(hx - o.x) < 0.7 * il and abs(hy - o.y) < 0.7 * il for o in heads):
             continue
-        if any(flag_hook(hx, hy, o, il) for o in heads):
+        if any(flag_hook(hx, hy, o, il) for o in heads) or rest_tail(ink, hx - staff.left, hy - y0, il):
             continue
         head = Notehead(hx, hy, head_w, max(head_h, int(0.9 * il)))
         head.evidence = notes.duration_evidence(binary, head, il)
@@ -730,6 +831,7 @@ def flag_hook(x: float, y: float, o: Notehead, il: float) -> bool:
     return (ev.stem_dir < 0 and y < o.y - 1.5 * il) or (ev.stem_dir > 0 and y > o.y + 1.5 * il)
 
 
+KEY_LOG: list[tuple] = []      # 조표 통째 지우기가 오선마다 (오선 번호, 음자리표 끝, 틈, 지운 끝, 첫 머리, 박자표 다시 씀, 상자)를 남긴다 (디버깅용)
 HOLE_LOG: list[tuple] = []     # find_hole_heads가 후보마다 (x, y, 떨어진 검사 또는 "ok", 값)을 남긴다 (디버깅용)
 
 
@@ -837,7 +939,7 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         if any(abs(hx - o.x) < 0.7 * il and abs(hy - o.y) < 0.7 * il for o in heads):
             HOLE_LOG.append((hx, hy, "dup", 0))
             continue
-        if any(flag_hook(hx, hy, o, il) for o in heads) or on_barline(binary < 128, staff, hx, il):
+        if any(flag_hook(hx, hy, o, il) for o in heads) or rest_tail(binary < 128, hx, hy, il) or on_barline(binary < 128, staff, hx, il):
             HOLE_LOG.append((hx, hy, "hook/bar", 0))
             continue
         HOLE_LOG.append((hx, hy, "ok", 0))
@@ -860,6 +962,38 @@ def short_stem(ink: np.ndarray, cx: float, cy: float, w: int, il: float) -> bool
         for ya, yb in ((icy - int(2.5 * il), icy - int(0.5 * il)), (icy + int(0.5 * il), icy + int(2.5 * il))):
             seg = ink[max(0, ya):max(0, yb), x]
             if seg.size and seg.sum() >= 0.9 * il:
+                return True
+    return False
+
+
+def rest_tail(ink: np.ndarray, cx: float, cy: float, il: float) -> bool:
+    """(cx, cy)의 속 빈 후보 아래(또는 위) 0.5–2.2il에 비스듬한 획이 있는가: 8분쉼표(𝄾)는 번지면 점과 고리 사이가 닫혀 속 빈 머리처럼
+    보이고 꼬리가 기둥처럼 보인다(지금은 엘리야). 기둥은 수직이라 행마다 잉크의 x가 같고, 꼬리는 행마다 0.4px 넘게 옮겨 간다."""
+    H, W = ink.shape
+    # 머리에 붙은 기둥(한쪽 끝이 머리 높이 ±0.7il 안, 다른 끝이 1.5il 넘게 떨어진 곧은 세로 잉크)이 있으면 음표다: 2분음표 밑의
+    # 붙임줄도 비스듬해서 꼬리처럼 보인다. 마디줄은 머리를 지나쳐 양쪽으로 뻗으니 기둥이 아니다
+    for x in range(max(0, int(cx - 0.8 * il)), min(W, int(cx + 0.8 * il) + 1)):
+        ya, yb = max(0, int(cy - 3.5 * il)), min(H, int(cy + 3.5 * il))
+        col = ink[ya:yb, x]
+        start = None
+        for i, v in enumerate(list(col) + [False]):
+            if v and start is None:
+                start = i
+            elif not v and start is not None:
+                a, b = ya + start, ya + i - 1
+                if b - a >= 1.5 * il and (abs(a - cy) <= 0.7 * il or abs(b - cy) <= 0.7 * il):
+                    return False
+                start = None
+    x0, x1 = max(0, int(cx - 1.3 * il)), min(W, int(cx + 1.3 * il) + 1)
+    for ya, yb in ((int(cy + 0.5 * il), int(cy + 2.2 * il)), (int(cy - 2.2 * il), int(cy - 0.5 * il))):
+        ys, xs = [], []
+        for y in range(max(0, ya), min(H, yb)):
+            cols = np.flatnonzero(ink[y, x0:x1])
+            if cols.size and cols.size <= 0.6 * il:                  # 가로로 긴 잉크(빔·줄)는 뺀다
+                ys.append(y); xs.append(float(cols.mean()) + x0)
+        if len(ys) >= 0.6 * il:                                     # 번진 꼬리는 반쯤만 남기도 한다 (지금은 엘리야 4째 줄)
+            slope = abs(np.polyfit(ys, xs, 1)[0])
+            if slope > 0.4:
                 return True
     return False
 
@@ -891,6 +1025,8 @@ def find_whole_notes(binary: np.ndarray, sys_: System, il: float, heads: list[No
             continue
         hx, hy = h.x + staff.left, h.y + y0
         if hx < min_x or hy > staff.bottom + 1.1 * il:
+            continue
+        if rest_tail(binary < 128, hx, hy, il):                       # 8분쉼표의 고리 (지금은 엘리야)
             continue
         inner, ring = notes.hollow_stats(ink, h)
         if inner >= 0.45 or ring < 0.5 or notes.has_stem(ink, h, il) or not ring_closed(ink, h):
@@ -972,6 +1108,16 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     except Exception as e:
         chord_boxes = []
         rep.notes_.append(f"chords not read: {str(e).splitlines()[0][:120]}")
+    # 너무 넓은 상자: 글자 하나가 (높이 × 글자 수+1)보다 넓을 수 없다 ("Last time"을 E로). 조각: 다른 상자와 폭의 절반 넘게 겹치는데
+    # 그보다 30% 넘게 낮은 것 (Aadd9의 밑동을 D로). 낮기만 한 상자는 남긴다 — Vision이 진짜 코드의 위아래를 자르기도 한다
+    def fragment(b, row):
+        return any(o is not b and min(o.x1, b.x1) - max(o.x0, b.x0) > 0.5 * min(o.x1 - o.x0, b.x1 - b.x0)
+                   and b.y1 - b.y0 < 0.7 * (o.y1 - o.y0) for o in row)
+    hs = sorted(b.y1 - b.y0 for row in chord_boxes for b in row)
+    med_h = hs[len(hs) // 2] if hs else il
+    # (글자 수 + 2: Vision이 Dm/F를 "D"와 "F"로 가르면 뒤 상자는 "/F"를 품어 글자보다 두 배 넓다 — 주님은 산 같아서)
+    chord_boxes = [[b for b in row if b.x1 - b.x0 <= (len(b.text) + 2) * max(1, b.y1 - b.y0, med_h) and not fragment(b, row)]
+                   for row in chord_boxes]
     from . import llm
     provider = llm.pick(llm_name) if llm_name != "none" else "none"
     label = llm.LABELS.get(provider, provider)
@@ -991,6 +1137,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             else:
                 rep.notes_.append(f"{label}'s chords did not match the picture ({int(exact * 100)}% agree): kept Apple Vision's")
                 ai_t = None
+    # Vision 상자 중 글자 조각(높이가 쪽 중앙값의 65% 미만: 윗첨자·가사 토막·"Last time" 같은 작은 글씨)과 글자 수에 비해 너무 넓은
+    # 상자(지시문을 한 글자로 읽은 것)는 코드가 아니다 — 남기면 AI 코드가 거기 짝지어져 엉뚱한 자리에 쓰인다 (찬양의 열기·주 이름 찬양)
     chord_names = [b.text for row in chord_boxes for b in row]
     from . import key as key_mod
     inferred = key_mod.infer_key(chord_names) if len(chord_names) >= 3 else None
@@ -1000,11 +1148,11 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     #    (네 곡 모두 맞았다; AI는 셋), 코드가 없으면 AI에게 첫 오선 앞부분을 한 번 묻는다(몇 초). 지우는 데는 음자리표와 박자표
     #    사이를 통째로 쓴다 (글자 상자는 일부만이라 옛 ♭이 남는다).
     blurry = page.scale > 1.5
-    read: list[tuple[int, list, int, int, tuple | None]] = []
+    read: list[tuple[int, list, int, int, tuple | None, int]] = []
     for s in systems:
-        kf, kboxes, kstart, kend = find_key_signature(ink, s.staff)
+        kf, kboxes, kstart, kend, clef_right = find_key_signature(ink, s.staff)
         est = key_from_profile(ink, s.staff, il) if blurry or not kboxes else None
-        read.append((kf, kboxes, kstart, kend, est))
+        read.append((kf, kboxes, kstart, kend, est, clef_right))
     glyph_votes = [r[0] for r in read if r[1]]
     glyph_f = max(set(glyph_votes), key=glyph_votes.count) if glyph_votes else None
     chord_f = inferred[0] if inferred and inferred[2] >= 0.7 else None
@@ -1026,15 +1174,19 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         rep.notes_.append(f"key signature {MAJOR_BY_FIFTHS[rep.old_fifths + 6]} from {rep.key_source}")
     # 지우고 그릴 자리: 글자를 믿을 때는 글자 상자, 아니면 음자리표와 박자표 사이 통째(투영 상자), 그것도 없으면 글자 상자
     keysigs: list[tuple[int, list, int, int, bool]] = []
-    for kf, kboxes, kstart, kend, est in read:
+    for s, (kf, kboxes, kstart, kend, est, clef_right) in zip(systems, read):
         # 그 오선의 글자 상자는 글자 수가 정한 조와 맞을 때만 믿는다 (주님은 산 같아서: 다섯 오선 중 둘은 3♯ 중 1개만 글자로
         # 잡혀, 다수결로 조는 맞았지만 그 둘에서 ♯ 하나만 지워 둘이 남았다). 안 맞으면 투영 상자로 통째 지운다; 투영도 없으면 글자 상자
         if kboxes and (kf == rep.old_fifths or est is None):
             keysigs.append((kf, kboxes, kstart, kend, True))
-        elif est:
+        elif est or rep.old_fifths:
             # 투영 상자 그대로 (음자리표 끝부터 박자표 직전까지). 글자 수로 넓히면 안 된다: 조표가 좁게 쌓인 악보(3♯이 2il)에서
-            # 박자표의 4를 지워 버렸다
-            keysigs.append((est[0], [est[1]], est[2], est[3], False))
+            # 박자표의 4를 지워 버렸다. 상자의 왼쪽은 음자리표 덩어리의 오른쪽 끝 뒤: 투영의 음자리표 끝은 고리가 짧은 곳에서 일찍
+            # 끝나(보혈을 지나) 음자리표 오른쪽 1.6il이 지워졌다. 투영이 없어도(♯이 박자표에 붙어 무리가 안 갈림) 조를 알면
+            # 음자리표 끝부터 통째 지우기로 간다 — 지울 끝은 거기서 틈·첫 머리로 다시 정한다
+            x0 = clef_right + 1
+            box = (x0, int(s.staff.top - 1.6 * il), max(x0 + int(0.5 * il), est[1][2] if est else x0 + int(2 * il)), int(s.staff.bottom + 1.6 * il))
+            keysigs.append((est[0] if est else rep.old_fifths, [box], x0 + int(0.3 * il), est[3] if est else kend, False))
         else:
             keysigs.append((kf, kboxes, kstart, kend, False))
     rep.new_fifths = target_fifths(rep.old_fifths, semitones)
@@ -1053,21 +1205,27 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 old_spacing = (kboxes[1][0] + kboxes[1][2] - kboxes[0][0] - kboxes[0][2]) / 2
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
-    for si, (sys_, syms, (kf, kboxes, kstart, kend, real)) in enumerate(zip(systems, symbols, keysigs)):
+    for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
         st = sys_.staff
         t_line = line_thickness(ink, st)
-        heads = list(syms.noteheads)
+        # 음자리표·조표 자리에서 잡힌 가짜 머리(보혈을 지나: 음자리표 고리, 주를 위한 이곳에: 줄 위 ♯의 굵은 획)는 뺀다 — 옮겨 그려지고,
+        # 첫 머리 자리가 조표 안이 되면 조표를 못 지운다. 글자를 믿는 오선은 조표 다음 잉크(kend)부터, 아니면 글자 수만큼 뒤부터
+        zone = max(clef_right, kend - 0.3 * il if real else clef_right + (0.3 + 1.1 * abs(rep.old_fifths)) * il)
+        heads = [h for h in syms.noteheads if h.x >= zone]
         min_x = max(min(kend + 0.2 * il, st.left + 9 * il), st.left + 3 * il)
         # 마디줄 위의 속 빈 "머리"(붙임줄이 마디줄·오선 줄과 만든 고리)는 뺀다. 그런 가짜가 있으면 마디줄 검출이 그 선을
         # 기둥으로 보고 버리므로, 뺀 뒤 마디줄을 다시 찾는다
-        heads = [h for h in heads if not (h.evidence and h.evidence.hollow and on_barline(ink, st, h.x, il))]
+        # 8분음표 꼬리의 고리를 속 빈 머리로 읽은 것(보혈을 지나: 기둥 끝의 큰 고리)도 뺀다 — 보강 검출기들은 거르지만 기본 검출은 안 걸렀다
+        heads = [h for h in heads if not (h.evidence and h.evidence.hollow
+                                          and (on_barline(ink, st, h.x, il) or rest_tail(ink, h.x, h.y, il)
+                                               or any(flag_hook(h.x, h.y, o, il) for o in heads if o is not h)))]
         heads += find_hollow_heads(page.binary, sys_, il, heads, min_x)
         # 구멍 머리는 조표·박자표 다음(첫 오선), 첫 꽉 찬 머리 앞 2.5il부터: ♭의 고리와 4의 세모도 머리 크기의 구멍이다
         hole_x = max(min_x, min((h.x for h in heads if not (h.evidence and h.evidence.hollow)), default=min_x) - 2.5 * il,
                      after_time_signature(ink, st, il, kend) if si == 0 else 0)
         heads += find_hole_heads(page.binary, sys_, il, heads, hole_x, t_line)
         heads += find_whole_notes(page.binary, sys_, il, heads, min_x)
-        heads.sort(key=lambda h: h.x)
+        heads = sorted((h for h in heads if h.x >= zone), key=lambda h: h.x)
         bars = sorted(notes.find_barlines(page.binary, st, il, heads))
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
         if snapped:
@@ -1154,6 +1312,11 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         redraw = (not real) and kboxes and heads and (si > 0 or ai_t is not None)
         if redraw:
             clef_end = int(kboxes[0][0])
+            # 조표가 음자리표에 붙은 흐린 캡처는 상자의 왼쪽(높이로 어림한 음자리표 끝)이 실제 끝보다 1–2il 왼쪽이라, 글자 수로 어림한
+            # 지울 끝이 박자표 앞에서 끝나 옛 4/4가 남고 새 4/4가 그 뒤에 또 그려졌다 (하나님은 너를). 구멍으로 잰 끝이 있으면 그것부터
+            kx = find_clef_end(ink, st, t_line, il)
+            if kx is not None and kx > clef_end:
+                clef_end = kx
             n_new, with_ts = abs(rep.new_fifths), si == 0 and ai_t is not None
             first = int(heads[0].x - 0.35 * il)                   # 첫 머리는 어차피 지우고 다시 그리니 그 왼쪽 반까지
             # 옛 조표의 끝 = 조표 폭쯤 뒤의 첫 빈 열 틈(0.25il); 그다음 잉크 무리가 박자표(첫 오선). 새 조표가 옛 자리에 들어가면
@@ -1171,13 +1334,17 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 return None
 
             # 쌓아 쓴 조표(♯♯ 위에 ♯ 아래)는 글자당 0.85il쯤 차지한다; 그 안에서 틈을 찾으면 마지막 글자가 남는다
-            key_end = gap_after(clef_end + int((0.3 + 0.85 * abs(rep.old_fifths)) * il))
+            key_end = gap_after(clef_end + int((0.3 + 1.1 * abs(rep.old_fifths)) * il))
             need_key = (0.25 + 0.7 * n_new + 0.2) * il
-            x_end, with_ts = first, si == 0 and ai_t is not None
+            # 틈이 없으면(박자표에 쉼표·첫 음이 붙은 찬양의 열기) 글자 수로 어림한 끝까지만: 첫 머리까지 지우면 쉼표가 사라진다.
+            # 덩어리 단위로 지우므로 어림 끝에 걸친 4는 통째로 지워지고 그 너머 중심의 쉼표는 남는다
+            est_end = clef_end + int((0.3 + 1.1 * abs(rep.old_fifths) + (1.5 if si == 0 else 0)) * il)   # 번진 ♯은 글자당 1.1il
+            x_end, with_ts = min(first, est_end), si == 0 and ai_t is not None
             if key_end is not None and key_end - clef_end >= need_key:
                 x_end, with_ts = key_end, False
             x_end = max(clef_end + int(0.5 * il), x_end)
-            erase(img, (clef_end, int(st.top - 2.2 * il), x_end, int(st.bottom + 2.2 * il)), st, t_line)
+            KEY_LOG.append((si, clef_end, key_end, x_end, first, with_ts, kboxes[0]))
+            erase_key_area(img, ink, st, t_line, il, clef_end, x_end)
             need = (0.25 + 0.7 * n_new + (1.4 if with_ts else 0)) * il
             scale = max(0.6, min(1.0, (x_end - clef_end) / need)) if need else 1.0
             x = clef_end + 0.25 * il * scale
@@ -1250,6 +1417,10 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     return rep
 
 
+# 찬양 악보에 실제로 나오는 코드 이름 (Vision만 읽은 코드를 거를 때)
+PLAUSIBLE_CHORD = re.compile(r"^[A-G][#b]?(m|m7|m9|maj7|M7|7|9|6|2|4|sus|sus2|sus4|7sus4|add9|add2|dim|dim7|m7b5|aug|\+|m6|69)?(/[A-G][#b]?)?$")
+
+
 def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None):
     """hybrid.merge_chords가 준 상자는 Vision 중심 둘레의 작은 상자(x−0.3il…x+0.9il)라 옛 글자를 다 못 지운다(A♭의 윗첨자, Fm의 F).
     코드 띠의 잉크 덩어리(find_text_blobs: 윗첨자까지 뭉친 상자) 중 그 자리에 있는 것으로 바꾼다. Vision 상자가 있던 것(both)은
@@ -1263,12 +1434,24 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
         vboxes = [(v.x0, v.y0, v.x1, v.y1) for v in vrow]
         taken: set[int] = set()
         drop: list = []
-        for src in ("both", "claude"):
+        # Vision만 읽은 코드와 AI만 읽은 코드가 사이에 짝지어진 코드 없이 이웃하면 같은 코드다 (찬양의 열기: Vision의 "Cm"과 AI의
+        # Em7 — 근음이 달라 짝이 안 됐다). AI 이름을 쓰고 Vision 자리를 쓴다; 흐린 캡처에서 AI는 91–100%, Vision은 48–62%
+        # 같은 앵커 틈 안에서는 왼쪽부터 차례로 짝짓는다 (가장 가까운 것을 고르면 Cm이 Em7 대신 Asus4를 받았다 — 찬양의 열기)
+        both_x = sorted(b.x0 for b in row if b.src == "both")
+        for v in sorted((b for b in row if b.src == "vision"), key=lambda b: b.x0):
+            cands = sorted((c for c in row if c.src == "claude" and not any(min(v.x0, c.x0) < bx < max(v.x0, c.x0) for bx in both_x)),
+                           key=lambda c: c.x0)
+            if cands:
+                c = cands[0]
+                v.text, v.src = c.text, "both"
+                row.remove(c)
+        # Vision만 읽은 코드도 제 Vision 상자(와 거기 걸친 덩어리)로 넓힌다: 작은 상자로 두면 앞 글자가 남고(Fm의 F), 이웃의 한계도 틀린다
+        for src in ("both", "vision", "claude"):
             for b in row:
                 if b.src != src or not blobs:
                     continue
                 cx = b.x0 + 0.3 * il
-                vb = next((v for v in vboxes if v[0] <= cx <= v[2]), None) if src == "both" else None
+                vb = next((v for v in vboxes if v[0] <= cx <= v[2]), None) if src != "claude" else None
                 if vb is not None:
                     # Vision이 한 코드를 둘로 읽어(Dm/F를 "D"와 "F") AI 이름이 앞 상자에만 붙으면, 바로 오른쪽(0.3il 안)의
                     # Vision 전용 상자가 AI 이름의 뒷부분이면 그 상자까지 한 코드로 삼고 그 전용 코드는 버린다
@@ -1278,10 +1461,17 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                             continue
                         c2 = v2.x0 + 0.3 * il                     # 합친 상자는 중심 둘레의 작은 상자: 원래 Vision 상자를 찾는다
                         vb2 = next((v for v in vboxes if v[0] <= c2 <= v[2]), None)
-                        if vb2 is not None and vb[2] - 2 <= vb2[0] <= vb[2] + 0.3 * il:
+                        if vb2 is not None and vb[2] - 0.5 * il <= vb2[0] <= vb[2] + 0.3 * il:   # 흐리면 상자가 0.5il쯤 겹친다 (하나님은: E+D♯)
                             vb = (vb[0], min(vb[1], vb2[1]), vb2[2], max(vb[3], vb2[3]))
                             drop.append(v2)
-                    ks = [k for k, bb in enumerate(blobs) if k not in taken and bb[2] > vb[0] + 2 and bb[0] < vb[2] - 2]
+                    # 상자에 걸치는 덩어리 중 다른 Vision 상자가 더 잘 품는 것(중심이 그 안)은 그 코드의 것이다
+                    # (C♯sus4/G♯의 상자가 이웃 C♯까지 3px 걸쳐 C♯ 글자를 삼키고, C♯은 조각 하나에 붙었다)
+                    # (중심이 이 상자 안에도 들면 같은 코드로 본다: Vision이 B⁷m을 위아래 두 상자로 읽은 경우)
+                    def foreign(bb):
+                        mid = (bb[0] + bb[2]) / 2
+                        return not (vb[0] <= mid <= vb[2]) and any(v is not vb and v[0] <= mid <= v[2] for v in vboxes)
+                    ks = [k for k, bb in enumerate(blobs) if k not in taken and bb[2] > vb[0] + 2 and bb[0] < vb[2] - 2
+                          and not foreign(bb)]
                     # Vision 상자가 근음 글자를 빼고 잡기도 한다(F♯m을 "♯m"만): 바로 왼쪽 0.2il 안에 붙은, 다른 Vision 상자에
                     # 들지 않은 덩어리는 같은 코드다
                     while ks:
@@ -1296,13 +1486,47 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                         b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
                         b.x1, b.y1 = max(blobs[k][2] for k in ks), max(blobs[k][3] for k in ks)
                         continue
-                near = [k for k, bb in enumerate(blobs) if k not in taken and bb[0] - 0.5 * il <= cx <= bb[2] + 0.5 * il]
+                # AI만 읽은 코드의 x는 이웃 코드 사이를 고르게 나눈 어림이라 크게 빗나간다 (찬양의 열기: Vision이 놓친 D가 3il 왼쪽).
+                # 양옆의 자리 잡힌 코드 사이(앵커 틈) 안에서, 안 쓴 덩어리 중 가장 가까운 것 (틈 폭의 절반 또는 1.5il 안)
+                if src == "claude":
+                    left = max((o.x1 for o in row if o is not b and o.src != "claude" and o.x0 < cx), default=sys_.staff.left)
+                    right = min((o.x0 for o in row if o is not b and o.src != "claude" and o.x0 > cx), default=sys_.staff.right)
+                    tol = max(1.5 * il, 0.5 * (right - left))
+                    near = [k for k, bb in enumerate(blobs) if k not in taken and left - 2 < (bb[0] + bb[2]) / 2 < right + 2
+                            and bb[0] - tol <= cx <= bb[2] + tol and bb[3] - bb[1] >= 0.8 * il        # 윗첨자 조각(⁴)은 안 됨
+                            and bb[2] - bb[0] <= (len(b.text) + 1) * il]                              # 지시문("Last time")은 안 됨
+                else:
+                    near = [k for k, bb in enumerate(blobs) if k not in taken and bb[0] - 0.5 * il <= cx <= bb[2] + 0.5 * il]
                 if near:
                     k = min(near, key=lambda k: abs((blobs[k][0] + blobs[k][2]) / 2 - cx))
-                    taken.add(k)
-                    b.x0, b.y0, b.x1, b.y1 = blobs[k]
+                    ks = [k]
+                    if src == "claude":                           # 한 코드가 덩어리 둘로 갈라진 것(D/F♯의 올린 ♯)은 함께
+                        for k2, bb in enumerate(blobs):
+                            if k2 not in taken and k2 != k and min(bb[2], blobs[k][2]) - max(bb[0], blobs[k][0]) > -0.35 * il \
+                               and min(bb[3], blobs[k][3]) - max(bb[1], blobs[k][1]) > -0.6 * il and bb[2] - bb[0] < 2 * il:   # 위아래로 갈라진 A도
+                                ks.append(k2)
+                    taken.update(ks)
+                    b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
+                    b.x1, b.y1 = max(blobs[k][2] for k in ks), max(blobs[k][3] for k in ks)
                 elif src == "claude":
                     drop.append(b)                     # 자리를 모르는 AI 전용 코드: 임시 상자가 이웃 글자에 걸치면 그걸 덮어쓴다
+        # Vision만 읽은 "코드"가 다른 코드의 상자 안에 있으면 그 코드의 윗첨자 조각이다 (쌓인 ⁷₄를 "A"로, 올린 ⁴를 "D"로):
+        # 지우면 안 되고, 옮겨 쓰면 그 코드 위에 글자가 덧씌워진다
+        # Vision만 읽은 코드는 AI가 못 본 것이라 믿음이 약하다. 버리는 것: 다른 코드의 상자 안(쌓인 ⁷₄를 "A"로), 다른 코드와 폭의
+        # 절반 넘게 겹침(같은 Fm을 "Em"으로 한 번 더), 찬양 악보에 없는 이름(1·2번 괄호의 "E1"·"E13"), 글자 수에 비해 너무 넓은 상자
+        # ("Coda"를 "C"로)
+        for b in row:
+            if b.src == "vision" and b not in drop:
+                cx, cy = (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2
+                if any(o is not b and o not in drop and o.x0 <= cx <= o.x1 and o.y0 - 2 <= cy <= o.y1 + 2 for o in row):
+                    drop.append(b)
+                elif any(o is not b and o not in drop and min(o.x1, b.x1) - max(o.x0, b.x0) > 0.5 * min(o.x1 - o.x0, b.x1 - b.x0)
+                         for o in row):
+                    drop.append(b)
+                elif not PLAUSIBLE_CHORD.match(b.text):
+                    drop.append(b)
+                elif (b.x1 - b.x0) > (len(b.text) + 1) * max(1, b.y1 - b.y0):
+                    drop.append(b)
         for b in drop:
             row.remove(b)
     return rows

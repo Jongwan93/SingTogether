@@ -303,15 +303,28 @@ def _tight(ink: np.ndarray, c: Chord, pad: int = 2) -> tuple[int, int, int, int]
     # Vision 상자는 글자 위를 절반 가까이 자르기도 한다 (D의 윗획이 14px 밖) — 위로는 넉넉히. 아래(바닥선)는 맞는 편이고,
     # 넓히면 바로 밑의 빔에 닿아 글자 상자가 빔까지 자란다 — 조금만
     py_top, py_bot = max(pad, int(0.7 * (c.y1 - c.y0))), max(pad, int(0.25 * (c.y1 - c.y0)))
-    X0, Y0 = max(0, int(c.x0) - pad), max(0, int(c.y0) - py_top)
-    X1, Y1 = min(w, int(c.x1) + pad + 1), min(h, int(c.y1) + py_bot + 1)
+    # 옆으로도 글자 높이만큼 본다: Vision 상자가 근음 글자를 반쯤 자르기도 한다 (C♯의 C 왼쪽 2/3이 밖). 상자 안에 폭의 15% 넘게
+    # 들어온 성분만 받는다 (이웃 코드 글자가 1–2px 걸친 것은 빼고)
+    px = max(pad, int(0.8 * (c.y1 - c.y0)))
+    X0, Y0 = max(0, int(c.x0) - px), max(0, int(c.y0) - py_top)
+    X1, Y1 = min(w, int(c.x1) + px + 1), min(h, int(c.y1) + py_bot + 1)
     region = ink[Y0:Y1, X0:X1]
     n, labels, stats, _ = cv2.connectedComponentsWithStats(region, 8)
-    core = labels[int(c.y0) - Y0:int(c.y1) - Y0 + 1, max(0, int(c.x0) - X0):int(c.x1) - X0 + 1]
-    keep = set(np.unique(core)) - {0}
-    if not keep:
+    cx0, cx1 = max(0, int(c.x0) - pad - X0), int(c.x1) + pad - X0 + 1
+    core = labels[int(c.y0) - Y0:int(c.y1) - Y0 + 1, cx0:cx1]
+    keep, wide = set(), set()
+    for i in set(np.unique(core)) - {0}:
+        x, _, cw, _, _ = stats[i]
+        if min(x + cw, cx1) - max(x, cx0) < 0.15 * cw:
+            continue
+        # 상자보다 훨씬 넓은 성분은 글자가 아니라 밑의 빔·기둥 묶음(글자가 거기 붙기도 한다): 원래 상자 열 안쪽만 쓴다
+        # (통째로 넣으면 상자가 옆 글자(1.3. 괄호)까지 자라고, 빼면 빔에 붙은 /D가 사라진다)
+        (wide if cw > 1.5 * (cx1 - cx0) + 4 else keep).add(i)
+    if not keep and not wide:
         return None
     mask = np.isin(labels, list(keep))
+    if wide:
+        mask[:, cx0:cx1] |= np.isin(labels[:, cx0:cx1], list(wide))
     ys, xs = np.nonzero(mask)
     return X0 + int(xs.min()), Y0 + int(ys.min()), X0 + int(xs.max()) + 1, Y0 + int(ys.max()) + 1
 
@@ -327,7 +340,8 @@ def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int]) -> tuple[tuple[i
     s = max(comps, key=lambda s: (s[3], -s[0]))
     others = [c for c in comps if c is not s and c[0] > s[0] + 0.5 * s[2]]
     # 윗첨자 = 근음보다 작고 **바닥이 떠 있는** 것 (근음 바닥보다 0.2cap 위). 소문자 m·sus는 작아도 바닥이 같다 (Em은 윗첨자가 아니다)
-    small = bool(others) and max(c[3] for c in others) <= 0.8 * s[3] and max(c[1] + c[3] for c in others) <= s[1] + s[3] - 0.2 * s[3]
+    # 하나라도 그러면 윗첨자 악보다: Gm⁷·C⁴sus 처럼 m·sus는 바닥에 있고 숫자만 올린 코드가 흔하다 (전부로 재면 그런 코드가 반대표가 된다)
+    small = any(c[3] <= 0.8 * s[3] and c[1] + c[3] <= s[1] + s[3] - 0.2 * s[3] for c in others)
     return (x0 + int(s[0]), y0 + int(s[1]), x0 + int(s[0] + s[2]), y0 + int(s[1] + s[3])), small
 
 
@@ -345,12 +359,21 @@ def _chord_mask(font_path: tuple[str, int], text: str, cap: int, sup: bool) -> t
     rm = _render_mask(font, root)
     r_top = bb_cap[1] - font.getbbox(root)[1] + 1
     sfont = _fit_font(font_path, "A", max(5, int(round(cap * 0.62))))
-    sm = _render_mask(sfont, rest)
     gap = max(1, int(round(0.06 * cap)))
-    H, W = max(rm.shape[0], r_top + sm.shape[0]), rm.shape[1] + gap + sm.shape[1]
+    # 찬양 악보의 관례: 숫자는 대문자 윗줄에 올려 쓰고(C⁷, Esus⁴), 소문자·슬래시(m·sus·/F♯)는 작게 바닥에 둔다 (Gm⁷, C⁴sus, Dm).
+    # 조각마다 따로 놓는다: 올리는 조각은 윗줄, 나머지는 대문자 바닥
+    pieces = [(t, bool(re.match(r"[0-9]", t))) for t in re.findall(r"[0-9]+|[^0-9]+", rest)]
+    masks = [(_render_mask(sfont, t), up) for t, up in pieces]
+    W = rm.shape[1] + gap + sum(m.shape[1] for m, _ in masks)
+    base = r_top + cap_h                                           # 대문자 바닥 행
+    H = max([rm.shape[0], base + 1] + [r_top + m.shape[0] for m, up in masks if up] + [base + 1 for m, up in masks if not up])
     out = np.zeros((H, W), np.uint8)
     out[:rm.shape[0], :rm.shape[1]] = rm
-    out[r_top:r_top + sm.shape[0], rm.shape[1] + gap:] = sm
+    x = rm.shape[1] + gap
+    for m, up in masks:
+        y = r_top if up else max(0, base + 1 - m.shape[0])
+        out[y:y + m.shape[0], x:x + m.shape[1]] = np.maximum(out[y:y + m.shape[0], x:x + m.shape[1]], m)
+        x += m.shape[1]
     return out, r_top, cap_h
 
 
@@ -409,12 +432,14 @@ def _colors(rgb: np.ndarray, ink: np.ndarray, box: tuple[int, int, int, int]) ->
     """(배경색, 글자색). 배경 = 상자 둘레, 글자 = 상자 안 잉크 픽셀의 중앙값."""
     h, w = ink.shape
     x0, y0, x1, y1 = box
-    X0, Y0, X1, Y1 = max(0, x0 - 3), max(0, y0 - 3), min(w, x1 + 3), min(h, y1 + 3)
+    # 둘레는 상자에서 4–10px 떨어진 띠: 잉크 덩어리에 딱 맞춘 상자(AI만 읽은 코드)의 바로 둘레는 번진 회색 테라 상자가 회색으로
+    # 칠해진다. 중앙값 대신 밝은 쪽 75% 값
+    X0, Y0, X1, Y1 = max(0, x0 - 10), max(0, y0 - 10), min(w, x1 + 10), min(h, y1 + 10)
     ring = np.ones((Y1 - Y0, X1 - X0), bool)
-    ring[y0 - Y0:y1 - Y0, x0 - X0:x1 - X0] = False
+    ring[max(0, y0 - 4 - Y0):y1 + 4 - Y0, max(0, x0 - 4 - X0):x1 + 4 - X0] = False
     region = rgb[Y0:Y1, X0:X1]
     bg_px = region[ring & (ink[Y0:Y1, X0:X1] == 0)]
-    bg = tuple(int(v) for v in np.median(bg_px, axis=0)) if len(bg_px) else (255, 255, 255)
+    bg = tuple(int(v) for v in np.percentile(bg_px, 75, axis=0)) if len(bg_px) else (255, 255, 255)
     fg_px = rgb[y0:y1, x0:x1][ink[y0:y1, x0:x1] > 0]
     if len(fg_px):
         lum = fg_px.mean(axis=1)
@@ -440,6 +465,14 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     for c in chords:
         t = _tight(ink, c)
         boxes.append(t)
+    # 같은 줄의 이웃 상자에 걸친 상자는 이웃 앞에서 자른다: 넓힌 상자가 이웃 글자의 첫 획을 삼키면(C♯sus4/G♯이 C♯의 C를) 새 글자가
+    # 이웃 위까지 써지고, 이웃은 오른쪽 한계로도 안 잡힌다
+    for k, a in enumerate(boxes):
+        if not a:
+            continue
+        for b in boxes:
+            if b and b is not a and a[0] < b[0] < a[2] and b[2] > a[2] and min(a[3], b[3]) - max(a[1], b[1]) > 0.5 * (a[3] - a[1]):
+                boxes[k] = a = (a[0], a[1], max(a[0] + 1, b[0] - 1), a[3])
     # 같은 코드 줄의 코드는 같은 크기다. 상자가 글자 일부만 잡았으면(작은 조각) 줄의 중앙 높이를 쓴다
     def band(t):
         return round(((t[1] + t[3]) / 2) / max(4, (t[3] - t[1])))
@@ -456,8 +489,12 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     cap_hs = [r[3] - r[1] for r in roots if r]
     page_cap = float(np.median(cap_hs)) if cap_hs else page_h
     # 근음 뒤 글자(sus4, 7, /C♯)가 윗첨자처럼 작은 악보인가: 글자가 둘 이상인 코드들의 다수결
-    sup_votes = [p[1] for p, c in zip(parts, chords) if p and len(c.text) > 1]
+    # 표는 근음 뒤에 숫자·♯♭이 있는 코드만 낸다 (C⁷·B♭²·Esus⁴): 슬래시·m만 있는 코드(E/D·Dm)는 윗첨자 악보에서도 바닥에 쓰여 반대표가 된다
+    # (슬래시 베이스의 ♯도 바닥에 쓰는 악보가 있어 숫자만 센다)
+    digit = re.compile(r"^[A-G][#b]?.*[0-9]")
+    sup_votes = [p[1] for p, c in zip(parts, chords) if p and digit.search(c.text)]
     sup_style = bool(sup_votes) and sum(sup_votes) * 2 > len(sup_votes)
+    LOG.append(("sup", sup_style, [(c.text, p[1]) for p, c in zip(parts, chords) if p and digit.search(c.text)]))
     def height_for(c, t):
         if uniform:
             return page_h
@@ -481,12 +518,16 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             m = cv2.dilate(m, np.ones((3, 3), np.uint8))
         out[m > 0] = bg
         # 쓸 수 있는 폭: 같은 줄 오른쪽 코드 직전까지 (없으면 원래 폭의 3배, 이미지 끝)
+        # 상자가 조금 겹치는 이웃(C♯sus4/G♯ 상자가 C♯에 8px 걸침)도 오른쪽 이웃이다 — 빼면 새 글자가 이웃 위로 넘친다
         right = [b[0] for b, cc in zip(boxes, chords) if b and cc is not c
-                 and abs((b[1] + b[3]) / 2 - (y0 + y1) / 2) < (y1 - y0) and b[0] >= x1 - 1]
+                 and abs((b[1] + b[3]) / 2 - (y0 + y1) / 2) < (y1 - y0) and b[0] >= x1 - 0.3 * (y1 - y0) and b[2] > x1]
         right += [b[0] for b in obstacles if b[0] >= x1 - 1 and y0 - 2 <= (b[1] + b[3]) / 2 <= y1 + 2
                   and (b[3] - b[1]) < 2.5 * (y1 - y0)]                 # 같은 줄의 낱말만 (가사 줄의 키 큰 상자는 빼고)
-        limit = (min(right) - 2) if right else min(w - 2, x0 + 3 * (x1 - x0) + 4 * (y1 - y0))
-        avail = int(max(x1 - x0, limit - x0))
+        # 오른쪽 코드 앞에 여백을 둔다 (오선 악보: 대문자 높이의 0.3; 붙여 쓰면 Bbm7/Ab와 Ab가 한 낱말로 읽힌다)
+        gap = max(2, int(round(0.3 * page_cap))) if uniform else 2
+        limit = (min(right) - gap) if right else min(w - 2, x0 + 3 * (x1 - x0) + 4 * (y1 - y0))
+        # 원래 폭을 바닥으로 두되, 오른쪽 이웃 상자와 겹치면(Vision 상자가 이웃 글자를 삼킨 경우) 이웃 앞까지만
+        avail = int(max(x1 - x0, limit - x0)) if not right else int(max(limit - x0, 0.5 * (x1 - x0)))
         if roots[k]:
             # 근음 대문자 높이(쪽 중앙값)에 글꼴을 맞추고, 새 코드의 대문자 바닥을 원래 대문자 바닥에 놓는다
             rx0, ry0, rx1, ry1 = roots[k]

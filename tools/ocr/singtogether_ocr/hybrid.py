@@ -6,6 +6,7 @@ Claude에만 있는 항목은 앞뒤 앵커 사이에 고르게 끼워 넣고, �
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 
@@ -57,44 +58,54 @@ def align(a: list, b: list, cost, gap_a: float, gap_b: float) -> list[tuple[int 
 
 
 def place(vision: list[tuple[int, float, float, str, float]], claude: list[str], cost, systems: list[System],
-          gap_a: float = 0.6, gap_b: float = 0.6, keep_vision_only=lambda text, conf: True) -> tuple[list[Placed], float]:
+          gap_a: float = 0.6, gap_b: float = 0.6, keep_vision_only=lambda text, conf: True,
+          claude_sys: list[int | None] | None = None) -> tuple[list[Placed], float]:
     """vision: (오선, x, y, 글자, 확신도) 읽기 순서. claude: 글자 열. → Placed 목록과 앵커 비율.
-    keep_vision_only: Claude에 짝이 없는 Vision 항목을 남길지 (글자, 확신도)로 정한다."""
-    pairs = align(vision, claude, lambda v, c: cost(v[3], c), gap_a, gap_b)
+    keep_vision_only: Claude에 짝이 없는 Vision 항목을 남길지 (글자, 확신도)로 정한다.
+    claude_sys: Claude 항목이 든 오선 번호(알면). 다른 오선의 Vision 항목과는 짝을 비싸게 하고, 짝 없는 항목은 제 오선 안에 놓는다
+    (오선 끝의 코드가 다음 오선 앞에 놓여 엉뚱한 글자를 덮던 일: 찬양의 열기·주 이름 찬양)."""
+    csys = claude_sys or [None] * len(claude)
+    pairs = align(list(enumerate(vision)), list(enumerate(claude)),
+                  lambda v, c: cost(v[1][3], c[1]) + (0.8 if csys[c[0]] is not None and csys[c[0]] != v[1][0] else 0.0), gap_a, gap_b)
     matched = sum(1 for i, j in pairs if i is not None and j is not None)
     ratio = matched / max(1, len(claude))
     # 글자가 똑같이 읽힌 짝만 센 비율. 한글 음절끼리는 비슷하면 짝이 되므로(OCR 혼동 허용) 엉뚱한 곡도 matched는 꽤 나온다
     exact = sum(1 for i, j in pairs if i is not None and j is not None and cost(vision[i][3], claude[j]) == 0) / max(1, len(claude))
     out: list[Placed] = []
-    pending: list[str] = []                        # 앵커 사이에 낀 Claude 전용 항목
+    pending: list[tuple[str, int | None]] = []     # 앵커 사이에 낀 Claude 전용 항목 (글자, 오선)
     last_anchor: Placed | None = None
 
+    def spread(sys_i: int, x0: float, x1: float, y: float, items: list[str], conf: float):
+        for k, t in enumerate(items, 1):
+            out.append(Placed(sys_i, x0 + (x1 - x0) * k / (len(items) + 1), y, t, conf, "claude"))
+
     def flush(next_anchor: Placed | None):
-        """pending을 last_anchor와 next_anchor 사이에 고르게 놓는다. 한쪽이 없으면 있는 쪽 옆에 붙인다."""
+        """pending을 last_anchor와 next_anchor 사이에 고르게 놓는다. 한쪽이 없으면 있는 쪽 옆에 붙인다.
+        오선을 아는 항목은 그 오선 안에서만: 앵커가 다른 오선이면 제 오선의 빈 쪽(앞/뒤/전체)에 놓는다."""
         if not pending:
             return
-        n = len(pending)
-        if last_anchor and next_anchor and last_anchor.system == next_anchor.system:
-            for k, t in enumerate(pending, 1):
-                x = last_anchor.x + (next_anchor.x - last_anchor.x) * k / (n + 1)
-                out.append(Placed(last_anchor.system, x, last_anchor.y, t, 0.5, "claude"))
-        else:
-            ref = next_anchor or last_anchor
-            if ref is None:
-                pending.clear()
-                return
-            sys_ = systems[ref.system]
-            if next_anchor is not None:            # 다음 오선 앞부분: 왼쪽 끝 ~ 앵커 사이
-                left = sys_.staff.left + 3 * sys_.staff.interline
-                for k, t in enumerate(pending, 1):
-                    out.append(Placed(ref.system, left + (ref.x - left) * k / (n + 1), ref.y, t, 0.4, "claude"))
-            else:                                  # 마지막 오선 뒷부분: 앵커 ~ 오른쪽 끝 사이
-                right = sys_.staff.right
-                for k, t in enumerate(pending, 1):
-                    out.append(Placed(ref.system, ref.x + (right - ref.x) * k / (n + 1), ref.y, t, 0.4, "claude"))
+        groups: dict[int | None, list[str]] = {}
+        for t, sy in pending:
+            groups.setdefault(sy, []).append(t)
         pending.clear()
+        for sy, items in groups.items():
+            la = last_anchor if last_anchor and (sy is None or last_anchor.system == sy) else None
+            na = next_anchor if next_anchor and (sy is None or next_anchor.system == sy) else None
+            if la and na and la.system == na.system:
+                spread(la.system, la.x, na.x, la.y, items, 0.5)
+            elif na is not None:                   # 오선 앞부분: 왼쪽 끝 ~ 앵커 사이
+                st = systems[na.system].staff
+                spread(na.system, st.left + 3 * st.interline, na.x, na.y, items, 0.4)
+            elif la is not None:                   # 오선 뒷부분: 앵커 ~ 오른쪽 끝 사이
+                st = systems[la.system].staff
+                spread(la.system, la.x, st.right, la.y, items, 0.4)
+            elif sy is not None:                   # 그 오선에 앵커가 하나도 없다: 오선 전체에 고르게
+                s_ = systems[sy]
+                st = s_.staff
+                spread(sy, st.left + 3 * st.interline, st.right, (s_.chord_band[0] + s_.chord_band[1]) / 2, items, 0.3)
 
-    for i, j in pairs:
+    for (i, _), (j, _) in ((a if a else (None, None), b if b else (None, None)) for a, b in
+                           ((None if i is None else (i, vision[i]), None if j is None else (j, claude[j])) for i, j in pairs)):
         if i is not None and j is not None:
             si, x, y, _, conf = vision[i]
             anchor = Placed(si, x, y, claude[j], max(conf, 0.7), "both")
@@ -102,8 +113,10 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
             out.append(anchor)
             last_anchor = anchor
         elif j is not None:
-            if claude[j]:                          # Claude 전용 빈 항목(음절 없는 음표)은 자리를 모르니 끼워 넣지 않는다
-                pending.append(claude[j])
+            # Claude 전용 빈 항목(음절 없는 음표)은 자리를 모르니 끼워 넣지 않는다. 바로 앞 Claude 항목과 같은 코드도 넣지 않는다:
+            # AI가 한 마디의 코드를 다음 마디에 또 적은 것이라(주 이름 찬양 G♯m7 ×2), 넣으면 Vision만 읽은 진짜 코드(B)를 덮는다
+            if claude[j] and not (j > 0 and claude[j] == claude[j - 1]) and not (j + 1 < len(claude) and claude[j] == claude[j + 1]):
+                pending.append((claude[j], csys[j]))
         else:
             si, x, y, text, conf = vision[i]
             if keep_vision_only(text, conf):
@@ -121,7 +134,9 @@ def _chord_cost(v: str, c: str) -> float:
         return 0.0
     rv, rc = re.match(r"[A-G][#b]?", nv), re.match(r"[A-G][#b]?", nc)
     if rv and rc and rv.group(0) == rc.group(0):
-        return 0.4
+        # 근음이 같으면 뒤가 비슷할수록 싸게: AI가 "Esus4 E"의 E를 빼먹었을 때 Esus4가 Vision의 "E"가 아니라 "Esus" 상자에 붙게
+        common = len(os.path.commonprefix([nv, nc]))
+        return 0.1 + 0.3 * (1 - common / max(len(nv), len(nc)))
     if rv and rc and rv.group(0)[0] == rc.group(0)[0]:   # Vision은 윗첨자 ♭을 6으로 읽는다 (A♭→A6): 글자만 같아도 짝이 된다
         return 0.7
     return 1.3
@@ -148,10 +163,12 @@ def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: 
     keep_vision_min: Claude에 짝이 없는 Vision 코드를 남길 최소 확신도. 잡음일 때가 많아 여러 번 읽어도 같았던 것(0.75+)만
     남기는 게 기본; 제자리 이조는 안 남기면 옛 코드가 그대로 남으니 0을 준다."""
     v_items = [(si, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.text, b.conf) for si, boxes in enumerate(vision) for b in boxes]
-    c_items = [normalize_chord(n.chord) for n in claude_t.notes if n.chord]     # AI도 B⁷m을 B7m으로 적는다 → Bm7
+    c_items = [normalize_chord(n.chord) for m in claude_t.measures for n in m.notes if n.chord]     # AI도 B⁷m을 B7m으로 적는다 → Bm7
+    c_sys = [m.system for m in claude_t.measures for n in m.notes if n.chord]
     if not c_items:
         return vision, 0.0, 0.0
-    placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= keep_vision_min)
+    placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= keep_vision_min,
+                                 claude_sys=c_sys if any(x is not None for x in c_sys) else None)
     out: list[list[TextBox]] = [[] for _ in systems]
     for p in placed:
         out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il), p.source))

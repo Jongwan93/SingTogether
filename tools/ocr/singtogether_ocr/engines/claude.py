@@ -117,6 +117,10 @@ class engine:
         for k, s in enumerate(systems):
             y0 = max(0, int(s.chord_band[0] - 0.5 * il))
             y1 = min(H, int(s.lyric_band[1] + 0.3 * il))
+            # 가사 띠는 다음 오선 직전까지라 다음 오선의 코드 줄이 조각 바닥에 들어온다; AI가 그걸 이 오선의 코드로 읽기도 한다
+            # (주를 위한 이곳에: 네 오선의 코드가 한 줄씩 밀림). 다음 오선의 코드 띠 위에서 자른다
+            if k + 1 < len(systems):
+                y1 = min(y1, max(y0 + int(2 * il), int(systems[k + 1].chord_band[0] - 0.2 * il)))
             if mode == "half" and symbols and len(symbols[k].barlines) >= 2:
                 bars = sorted(symbols[k].barlines)
                 mid = min(bars[:-1], key=lambda b: abs(b - (s.staff.left + s.staff.right) / 2))

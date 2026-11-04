@@ -38,13 +38,16 @@ class System:
 
 def find_systems(page: Page, debug_dir: Path | None = None) -> list[System]:
     il = page.interline
-    staves = fit_staves(page.binary, find_staff_lines(page.binary), il)
+    # 줄 두께 한도는 줄 간격에 비례: 흐린 스캔을 3.4배로 키우면 줄이 8–10px이라 6px 한도에 걸려 오선 아홉 중 넷이 통째로 빠진다
+    # (주님 다시 오실때까지). 가사 글줄은 상대 문턱(가장 긴 행의 절반)과 complete 빗이 거른다
+    thick = max(6, int(round(0.4 * il)))
+    staves = fit_staves(page.binary, find_staff_lines(page.binary, max_thickness=thick), il)
     # 폭의 60%가 안 되는 짧은 오선(흔히 마지막 줄: 마디 두세 개)은 위에서 못 잡는다. 이미 찾은 오선 밖에서 낮은 문턱으로
     # 한 번 더 찾되, 5줄이 전부 실제 줄로 있고 간격이 맞는 빗만 받는다 (가사·제목 글줄은 두께 제한에 걸린다).
     covered = [(s.top - 1.5 * il, s.bottom + 1.5 * il) for s in staves]
     # 줄 두께 한도는 키운 배율을 따른다: 4배로 키운 흐린 캡처는 줄이 7px라 6px 한도에 걸려 마지막 줄 하나가 빠지고, 그러면
     # complete 빗이 안 맞아 짧은 마지막 오선(주님은 산 같아서 17마디)을 통째로 놓친다
-    thick = max(6, int(round(1.5 * page.scale + 1)))
+    thick = max(thick, int(round(1.5 * page.scale + 1)))
     loose = [y for y in find_staff_lines(page.binary, max_thickness=thick, min_fraction=0.2, relative=False)
              if not any(a <= y <= b for a, b in covered)]
     # 빗과 줄의 허용 오차도 배율을 따른다 (4배에서는 줄 간격이 24.5px 같은 반픽셀이라 빗이 2px씩 어긋난다)
