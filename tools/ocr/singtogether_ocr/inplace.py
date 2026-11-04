@@ -451,6 +451,35 @@ def find_clef_end(ink: np.ndarray, staff: Staff, t_line: int, il: float) -> int 
     return None
 
 
+def cross_shaped(ink: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    """Coda 기호 𝄌처럼 고리를 세로획이 위아래로 길게 꿰뚫는가: 상자 안 가장 큰 덩어리의 구멍 가운데 열에서, 구멍 위와 아래의 잉크가
+    각각 덩어리 높이의 20% 넘게(둘 합쳐 45% 넘게) 이어진다. 글자 D·B·A·a·e·9는 구멍 위아래가 획 두께뿐이다."""
+    x0, y0, x1, y1 = box
+    reg = ink[y0:y1, x0:x1].astype(np.uint8)
+    if reg.size == 0 or not reg.any():
+        return False
+    n, lab, stt, _ = cv2.connectedComponentsWithStats(reg, connectivity=8)
+    if n < 2:
+        return False
+    i = 1 + int(np.argmax(stt[1:, 4]))
+    comp = (lab == i).astype(np.uint8)
+    bx, by, bw, bh, _ = stt[i]
+    hn, hlab, hst, _ = cv2.connectedComponentsWithStats(1 - comp, connectivity=4)
+    for j in range(1, hn):
+        hx, hy, hw, hh, _ = hst[j]
+        if hx == 0 or hy == 0 or hx + hw == comp.shape[1] or hy + hh == comp.shape[0]:
+            continue                                                   # 바깥 배경
+        if hw < 3 or hh < 3:                                           # 번진 고리의 구멍은 몇 px밖에 안 남는다
+            continue
+        cx = hx + hw // 2
+        col = comp[:, cx]
+        above = int(col[by:hy].sum())
+        below = int(col[hy + hh:by + bh].sum())
+        if above >= 0.2 * bh and below >= 0.2 * bh and above + below >= 0.5 * bh:
+            return True
+    return False
+
+
 def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, il: float, x0: int, x1: int) -> None:
     """음자리표 끝(x0)부터 x1까지의 옛 조표(와 박자표)를 지운다: 남길 것을 빼고 전부. 남기는 것은 음자리표(4il 넘게 키 큰 덩어리;
     조표가 거기 붙어 있으면 clef_keep_x 왼쪽만), 오선 위 코드 글자(바닥이 윗줄 위 0.3il보다 높은 덩어리: 찬양의 열기의 D),
@@ -831,6 +860,7 @@ def flag_hook(x: float, y: float, o: Notehead, il: float) -> bool:
     return (ev.stem_dir < 0 and y < o.y - 1.5 * il) or (ev.stem_dir > 0 and y > o.y + 1.5 * il)
 
 
+FILTER_LOG: list = []          # Vision 상자 거르기 뒤에 남은 (오선, 글자, x0, y1) (디버깅용)
 KEY_LOG: list[tuple] = []      # 조표 통째 지우기가 오선마다 (오선 번호, 음자리표 끝, 틈, 지운 끝, 첫 머리, 박자표 다시 씀, 상자)를 남긴다 (디버깅용)
 HOLE_LOG: list[tuple] = []     # find_hole_heads가 후보마다 (x, y, 떨어진 검사 또는 "ok", 값)을 남긴다 (디버깅용)
 
@@ -1115,9 +1145,28 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                    and b.y1 - b.y0 < 0.7 * (o.y1 - o.y0) for o in row)
     hs = sorted(b.y1 - b.y0 for row in chord_boxes for b in row)
     med_h = hs[len(hs) // 2] if hs else il
+    # 바닥이 줄의 바닥선(상자 셋 이상의 중앙값)에서 0.4il 넘게 뜬 상자도 코드가 아니다: Coda 기호 𝄌는 "Coda" 글자 옆 위쪽에 있어
+    # Vision이 "E"로 읽는데(주 이름 찬양), 코드로 두면 AI 코드가 거기 붙어 기호를 지운다. 기호는 절대 지우면 안 된다 (사용자 지시)
+    # Vision 상자는 글자 일부만 잡기도 하므로(B♭²의 윗부분만, A의 가로획만) 상자 바닥이 아니라 상자 열의 잉크가 바닥선 쪽으로
+    # 어디까지 이어지는지로 잰다 (덩어리는 빔에 붙은 글자가 빔과 함께 빠져 못 쓴다)
+    ink_all = page.binary < 128
+
+    # 기둥 위에 높이 쓰인 진짜 코드도 뜨므로(지금은 엘리야의 D), 뜬 것 중 십자 모양(가운데 열과 가운데 행의 잉크가 상자를 거의 관통)만
+    # 기호로 본다 — 글자 A·B·D·E는 가운데 열이나 행이 구멍·빈 곳을 지난다
+    def floating(b, row, si):
+        bots = sorted(o.y1 for o in row)
+        if len(bots) < 3:
+            return False
+        base = bots[len(bots) // 2]
+        band = ink_all[int(b.y0):min(ink_all.shape[0], int(base + 0.15 * il)), int(b.x0):int(b.x1)]
+        rows = np.flatnonzero(band.any(axis=1))
+        lowest = int(b.y0) + int(rows[-1]) if rows.size else int(b.y0)
+        return base - lowest > 0.4 * il and cross_shaped(ink_all, (int(b.x0), int(b.y0), int(b.x1), int(b.y1)))
     # (글자 수 + 2: Vision이 Dm/F를 "D"와 "F"로 가르면 뒤 상자는 "/F"를 품어 글자보다 두 배 넓다 — 주님은 산 같아서)
-    chord_boxes = [[b for b in row if b.x1 - b.x0 <= (len(b.text) + 2) * max(1, b.y1 - b.y0, med_h) and not fragment(b, row)]
-                   for row in chord_boxes]
+    chord_boxes = [[b for b in row if b.x1 - b.x0 <= (len(b.text) + 2) * max(1, b.y1 - b.y0, med_h) and not fragment(b, row)
+                    and not floating(b, row, si)]
+                   for si, row in enumerate(chord_boxes)]
+    FILTER_LOG.append([(si, b.text, int(b.x0), int(b.y1)) for si, row in enumerate(chord_boxes) for b in row])
     from . import llm
     provider = llm.pick(llm_name) if llm_name != "none" else "none"
     label = llm.LABELS.get(provider, provider)
