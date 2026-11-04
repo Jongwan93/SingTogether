@@ -1028,6 +1028,45 @@ def rest_tail(ink: np.ndarray, cx: float, cy: float, il: float) -> bool:
     return False
 
 
+AI_HOLLOW_RUN = 0                 # 양옆 짝까지 맞아야 하는 수: 2분음표는 흔히 악절 끝(오선 끝·붙임줄 뒤)이라 0
+AI_HOLLOW_LOG: list[tuple] = []   # ai_hollow_fix가 바꾼 머리마다 (x, y, 'hollow') (디버깅용)
+
+
+def ai_hollow_fix(heads: list[Notehead], bars: list[float], measures: list, il: float, staff: Staff | None = None,
+                  run: int = 1) -> int:
+    """흐린 캡처에서 구멍이 번져 막힌 2분음표(가운데까지 검어 모양으로는 못 알아본다)를 AI 전사의 길이로 되살린다.
+    오선의 머리 열과 AI 음표 열(쉼표 뺌)을 음높이로 정렬하고, 음높이가 똑같이 맞은 짝 중 양옆 run개 짝도 똑같이 맞은 것만 믿어
+    AI가 2분음표 이상이라 한 머리를 속 빈 것으로 바꾼다. 꽉 찬 쪽으로는 안 바꾼다 (검출기의 거짓 속 빈 머리는 거의 0이다).
+    마디 단위 수 맞추기는 안 된다: 놓친 2분음표가 있는 마디는 대개 AI 음표 수도 어긋난다."""
+    from . import hybrid
+    ai_notes = [x for m in measures for x in m.notes if x.step]
+    if not ai_notes or not heads or staff is None:
+        return 0
+    hp = []
+    for h in heads:
+        step = int(round((staff.bottom - h.y) / (il / 2)))
+        hp.append(step_pitch(step))
+    cost = lambda a, b: 0.0 if a == (b.step, b.octave) else (0.6 if a[0] == b.step else 1.0)
+    pairs = hybrid.align(hp, ai_notes, cost, 0.6, 0.6)
+    exact = [i is not None and j is not None and hp[i] == (ai_notes[j].step, ai_notes[j].octave) for i, j in pairs]
+    if sum(exact) < 0.7 * len(heads):                 # AI가 이 오선을 엉뚱하게 읽었으면(음높이 70% 미만 일치) 안 믿는다
+        return 0
+    n = 0
+    for k, (i, j) in enumerate(pairs):
+        if not exact[k]:
+            continue
+        if not all(0 <= k + d < len(pairs) and exact[k + d] for d in range(-run, run + 1) if d):
+            continue
+        h, a = heads[i], ai_notes[j]
+        if a.duration >= 2 and not (h.evidence and h.evidence.hollow):
+            if h.evidence is None:
+                h.evidence = notes.DurationEvidence(False, False, 0, False)
+            h.evidence.hollow = True
+            AI_HOLLOW_LOG.append((h.x, h.y, "hollow", str(a.duration), round(sum(exact) / len(heads), 2), len(heads), len(ai_notes)))
+            n += 1
+    return n
+
+
 def on_barline(ink: np.ndarray, staff: Staff, x: float, il: float) -> bool:
     """x 둘레 ±0.35il에 오선 첫 줄부터 다섯째 줄까지 거의 끊기지 않은 세로선이 있나 (마디줄). 붙임줄이 마디줄·오선 줄과 만든
     고리가 속 빈 머리로 잡히는 것을 거른다; 진짜 머리의 기둥은 머리 중심에서 0.6il 떨어져 있다."""
@@ -1279,6 +1318,10 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
         if snapped:
             rep.notes_.append(f"staff {si + 1}: {snapped} noteheads moved to the ledger line they sit on")
+        if ai_t is not None and blurry:
+            n_fix = ai_hollow_fix(heads, bars, [m for m in ai_t.measures if m.system == si], il, st, AI_HOLLOW_RUN)
+            if n_fix:
+                rep.notes_.append(f"staff {si + 1}: {n_fix} half notes taken from the {label} reading")
         # 2. 머리마다: 자리, 왼쪽 틈의 임시표, 옛 음 → 새 음 → 새 임시표
         plans: list[HeadPlan] = []
         state_old = dict(old_alters)             # (글자, 옥타브)별 현재 변화 — 마디마다 초기화. 글자만으로 둔다 (옥타브 무시)
