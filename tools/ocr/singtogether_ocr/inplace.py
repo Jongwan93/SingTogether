@@ -1485,6 +1485,21 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                         taken.update(ks)
                         b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
                         b.x1, b.y1 = max(blobs[k][2] for k in ks), max(blobs[k][3] for k in ks)
+                        # Vision은 맨 글자(F)로 읽었는데 AI가 접미를 붙였고(Fmaj7) 잉크 덩어리가 대문자 하나 폭(높이의 0.95배 아래)이면
+                        # AI가 지어낸 것이다 (주님 다시 오실때까지). 접미가 있으면 덩어리가 글자보다 넓다
+                        if re.fullmatch(r"[A-G]", vtext) and b.text.startswith(vtext) and len(b.text) > 1:
+                            from .chordoverlay import _root_letter
+                            ink8 = (page.binary < 128).astype(np.uint8)
+                            bx = (int(b.x0), int(b.y0), int(b.x1), int(b.y1))
+                            rl = _root_letter(ink8, bx)
+                            cols = np.flatnonzero(ink8[bx[1]:bx[3], bx[0]:bx[2]].any(axis=0))    # 덩어리 상자는 0.3il씩 불어 있다: 잉크 폭으로
+                            # 잉크 폭이 근음 대문자 폭보다 대문자 높이의 0.2배도 안 넓으면 접미가 없다 (윗첨자 ²는 덩어리를 키도 키우므로
+                            # 덩어리의 가로세로비로는 못 가른다: 나 주님의 기쁨 F²)
+                            # 바로 오른쪽(0.5il 안)에 다른 덩어리(따로 떨어진 "sus4")가 있으면 접미가 있는 것이다 (주를 위한 이곳에 A sus4)
+                            tail = any(-0.1 * il <= bb[0] - b.x1 <= 0.5 * il and bb[1] < b.y1 and bb[3] > b.y0 for bb in blobs if bb is not None)
+                            if rl and cols.size and not tail \
+                               and (cols[-1] - cols[0] + 1) - (rl[0][2] - rl[0][0]) <= 0.2 * (rl[0][3] - rl[0][1]):
+                                b.text = vtext
                         continue
                 # AI만 읽은 코드의 x는 이웃 코드 사이를 고르게 나눈 어림이라 크게 빗나간다 (찬양의 열기: Vision이 놓친 D가 3il 왼쪽).
                 # 양옆의 자리 잡힌 코드 사이(앵커 틈) 안에서, 안 쓴 덩어리 중 가장 가까운 것 (틈 폭의 절반 또는 1.5il 안)
