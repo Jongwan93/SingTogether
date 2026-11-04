@@ -39,6 +39,8 @@ def chord_token(tok: str) -> str | None:
     """코드 기호면 정규화한 문자열, 아니면 None. 괄호·쉼표는 벗긴다."""
     t = tok.strip("(),;:").replace("♯", "#").replace("♭", "b")
     t = re.sub(r"(?i)(sus|add|dim|aug|maj)", lambda m: m.group(1).lower(), t)   # DsUs4 → Dsus4
+    if re.fullmatch(r"/[A-G][#b]?", t):                                       # 베이스만 바뀌는 "/E" (Shout to the Lord)
+        return t
     m = _CHORD.match(t)
     if not m or (m.group(3) and not QUALITY_RE.match(m.group(3))):
         from .sanitize import candidates

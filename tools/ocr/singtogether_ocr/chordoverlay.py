@@ -124,7 +124,9 @@ def _near_chord(word: str, tokens: set[str]) -> bool:
     w_ = word.strip(_STRIP)
     if not tokens or not re.match(r"[A-G]", w_) or len(w_) > 7 or not re.search(r"[#/0-9]|sus|maj|m", w_):
         return False
-    return max(SequenceMatcher(None, w_, t).ratio() for t in tokens) >= 0.75
+    # Vision은 ♯을 i·l·I·|·!·H로 읽는다 (F#m → "Fim", E/G# → "E/GH"): 그렇게 바꾼 꼴로도 비교한다
+    alt = re.sub(r"(?<=[A-G])[ilI|!tH](?=m|/|$|\d)", "#", w_)
+    return max(SequenceMatcher(None, v, t).ratio() for v in {w_, alt} for t in tokens) >= 0.75
 
 
 def find_chords(gray: np.ndarray, chart_text: str | None) -> tuple[list[Chord], list[tuple], float]:
@@ -157,18 +159,17 @@ def find_chords(gray: np.ndarray, chart_text: str | None) -> tuple[list[Chord], 
     text_tokens = {t for line in text_lines for t in line if "-" not in t}
 
     # 낱말 분류: 코드 낱말 / 붙임표 진행 / 그 밖(가사·표제·(2x))
-    pairs_text = {}                                   # "Gsus4G" → ("Gsus4", "G"): 띄어쓰기를 잃고 붙어 읽힌 두 코드
+    pairs_text = {}                                   # "Gsus4G" → ("Gsus4", "G"), "GCG" → ("G", "C", "G"): 띄어쓰기를 잃고 붙어 읽힌 코드들
     for line in text_lines:
-        for a_, b_ in zip(line, line[1:]):
-            pairs_text[a_ + b_] = (a_, b_)
+        for i in range(len(line)):
+            for j in range(i + 2, min(len(line), i + 5) + 1):
+                pairs_text.setdefault("".join(line[i:j]), tuple(line[i:j]))
     chord_units, run_units, other_boxes = [], [], []
     for wtxt, bb in words:
-        sq = wtxt.strip(_STRIP)
+        sq = re.sub(r"\s+", "", wtxt.strip(_STRIP))
         if sq in pairs_text:
-            a_, b_ = pairs_text[sq]
-            cut = bb[0] + (bb[2] - bb[0]) * len(a_) / len(sq)
-            chord_units.append(Chord(bb[0], bb[1], cut - 1, bb[3], a_, "vision", col(bb[0])))
-            chord_units.append(Chord(cut + 1, bb[1], bb[2], bb[3], b_, "vision", col(cut)))
+            # 한 단위로 둔다 ("G C G" → "Bb Eb Bb"를 한 번에 씀): 글자 비례로 가르면 한 글자 자리에 두 글자 코드를 아주 작게 쓰게 된다
+            chord_units.append(Chord(*bb, " ".join(pairs_text[sq]), "vision", col(bb[0])))
             continue
         cw = chord_word(wtxt)
         if cw and "-" in cw:
@@ -256,9 +257,12 @@ def find_chords(gray: np.ndarray, chart_text: str | None) -> tuple[list[Chord], 
             if j is None:                    # 텍스트의 어떤 코드 줄과도 안 맞는 줄 = 제목·가사 속 낱말("Here I Am") → 안 바꾼다
                 continue
             toks = text_lines[j]
-            if len(units) == len(toks):
-                for u, t in zip(units, toks):
-                    u.text, u.src = t, ("both" if u.text else "text")
+            widths = [max(1, len(u.text.split())) for u in units]       # "G C G" 단위는 토큰 셋
+            if sum(widths) == len(toks):
+                k = 0
+                for u, n_ in zip(units, widths):
+                    u.text, u.src = " ".join(toks[k:k + n_]), ("both" if u.text else "text")
+                    k += n_
                 chords += units
             else:
                 cost = lambda u, t: _chord_cost(u.text, t) if u.text else 0.6
@@ -277,6 +281,26 @@ def find_chords(gray: np.ndarray, chart_text: str | None) -> tuple[list[Chord], 
 
 
 # MARK: 이조
+
+_SEP = re.compile(r"([- ])")
+
+
+def _pieces(text: str) -> list[str]:
+    """코드 단위의 조각: 붙임표 진행("Eb-F")과 붙어 읽힌 코드들("G C G")을 코드 하나씩으로."""
+    return [p for p in _SEP.split(text) if p and p not in ("-", " ")]
+
+
+def _rejoin(text: str, moved: list[str]) -> str:
+    """조각을 옮긴 뒤 원래 구분자(-, 공백)대로 다시 잇는다."""
+    out, k = [], 0
+    for part in _SEP.split(text):
+        if part in ("-", " "):
+            out.append(part)
+        elif part:
+            out.append(moved[k])
+            k += 1
+    return "".join(out)
+
 
 def _transpose_tokens(tokens: list[str], semitones: int) -> tuple[list[str], str]:
     """Swift 이조기로 한꺼번에 (조 판별과 ♯/♭ 표기를 앱과 똑같이). (새 코드들, "G -> A")"""
@@ -565,8 +589,8 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
                 font = _fit_font(font_path, c.text, max(6, int(round(hgt * scale))))
                 mask = _render_mask(font, c.new)
                 y0 = y1 - max(6, int(round(hgt * scale)))
-                if mask.shape[1] > avail:                  # 그래도 넘치면 가로로만 좁힌다 (60%까지). 그 뒤에는 넘친다
-                    cond = max(0.6, avail / mask.shape[1])
+                if mask.shape[1] > avail:                  # 그래도 넘치면 가로로만 좁힌다 (50%까지). 그 뒤에는 넘친다
+                    cond = max(0.5, avail / mask.shape[1])
                     mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
             # 첫 글자 윗선을 원래 윗선에 맞춘다
             top_old = font.getbbox(c.text)[1] - font.getbbox(c.text[0])[1]   # 원래 글자에서 근음 윗선이 전체 윗선보다 얼마나 아래인가
@@ -607,12 +631,12 @@ def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review
     if not chords:
         r.notes.append("no chords found in the image")
         return r
-    pieces = [p for c in chords for p in c.text.split("-")]
+    pieces = [p for c in chords for p in _pieces(c.text)]
     moved, r.keys = _transpose_tokens(pieces, semitones)
     k = 0
     for c in chords:
-        n_ = len(c.text.split("-"))
-        c.new = "-".join(moved[k:k + n_])
+        n_ = len(_pieces(c.text))
+        c.new = _rejoin(c.text, moved[k:k + n_])
         k += n_
     binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     ink = (binary < 128).astype(np.uint8)
@@ -620,7 +644,7 @@ def overlay(src: Path, chart_text: str | None, semitones: int, out: Path, review
     result = draw(rgb, ink, chords, r.font, getattr(find_chords, "obstacles", ()))
     for line in getattr(find_chords, "lost_lines", []):
         r.notes.append(f"chord line not found in the image: {line}")
-    r.replaced = sum(len(c.text.split("-")) for c in chords if c.new)
+    r.replaced = sum(len(_pieces(c.text)) for c in chords if c.new)
     r.missed = len(missed)
     r.missed += len(getattr(find_chords, "lost_lines", []))
     if missed:

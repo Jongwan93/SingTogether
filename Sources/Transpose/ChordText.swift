@@ -82,6 +82,8 @@ package enum ChordText {
     private static let neutralRE = try! NSRegularExpression(
         pattern: "^(\\||\\|\\||-+|\\(?x\\d+\\)?|N\\.?C\\.?|%|:\\|\\||\\|\\|:|/)$",
         options: [.caseInsensitive])
+    /// "/E": 앞 코드의 베이스만 바뀌는 표기 (Shout to the Lord의 "F#m   /E  D") — 코드 줄로 세고 음만 옮긴다
+    private static let bassOnlyRE = try! NSRegularExpression(pattern: "^/([A-G])([#b♯♭]?)$")
     private static let bracketRE = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]")
     private static let tokenRE = try! NSRegularExpression(pattern: "\\S+")
 
@@ -140,12 +142,21 @@ package enum ChordText {
         tokenRE.matches(in: line, range: NSRange(location: 0, length: (line as NSString).length))
     }
 
+    static func bassOnly(_ core: String) -> Pitch? {
+        guard let m = fullMatch(bassOnlyRE, core) else { return nil }
+        let ns = core as NSString
+        let acc = m.range(at: 2).location == NSNotFound ? "" : ns.substring(with: m.range(at: 2))
+        return pitch(ns.substring(with: m.range(at: 1)), acc)
+    }
+
     static func isChordLine(_ line: String) -> Bool {
         var chords = 0, other = 0
         for m in tokens(line) {
             let t = (line as NSString).substring(with: m.range)
             if fullMatch(neutralRE, t) != nil { continue }
-            if let run = parseRun(split(t).core) { chords += run.count } else { other += 1 }
+            if let run = parseRun(split(t).core) { chords += run.count }
+            else if bassOnly(split(t).core) != nil { chords += 1 }
+            else { other += 1 }
         }
         return chords > 0 && chords >= other * 3
     }
@@ -209,7 +220,8 @@ package enum ChordText {
         for m in tokens(line) {
             let tok = ns.substring(with: m.range)
             let p = split(tok)
-            let t = parseRun(p.core).map { p.lead + renderRun($0, sp) + p.trail } ?? tok
+            let t = parseRun(p.core).map { p.lead + renderRun($0, sp) + p.trail }
+                ?? bassOnly(p.core).map { p.lead + "/" + sp.name($0) + p.trail } ?? tok
             let outLen = (out as NSString).length
             // 원래 열 위치를 유지하되, 코드가 길어지면 최소 한 칸 띄움
             let pos = outLen == 0 ? m.range.location : max(m.range.location, outLen + 1)
