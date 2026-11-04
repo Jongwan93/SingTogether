@@ -59,7 +59,7 @@ def align(a: list, b: list, cost, gap_a: float, gap_b: float) -> list[tuple[int 
 
 def place(vision: list[tuple[int, float, float, str, float]], claude: list[str], cost, systems: list[System],
           gap_a: float = 0.6, gap_b: float = 0.6, keep_vision_only=lambda text, conf: True,
-          claude_sys: list[int | None] | None = None) -> tuple[list[Placed], float]:
+          claude_sys: list[int | None] | None = None, reconcile=None) -> tuple[list[Placed], float]:
     """vision: (오선, x, y, 글자, 확신도) 읽기 순서. claude: 글자 열. → Placed 목록과 앵커 비율.
     keep_vision_only: Claude에 짝이 없는 Vision 항목을 남길지 (글자, 확신도)로 정한다.
     claude_sys: Claude 항목이 든 오선 번호(알면). 다른 오선의 Vision 항목과는 짝을 비싸게 하고, 짝 없는 항목은 제 오선 안에 놓는다
@@ -108,7 +108,7 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
                            ((None if i is None else (i, vision[i]), None if j is None else (j, claude[j])) for i, j in pairs)):
         if i is not None and j is not None:
             si, x, y, _, conf = vision[i]
-            anchor = Placed(si, x, y, claude[j], max(conf, 0.7), "both")
+            anchor = Placed(si, x, y, reconcile(vision[i][3], claude[j]) if reconcile else claude[j], max(conf, 0.7), "both")
             flush(anchor)
             out.append(anchor)
             last_anchor = anchor
@@ -127,6 +127,35 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
 
 
 # MARK: 코드
+_CHORD_DIGITS = set("24579")          # 코드에 흔한 숫자. 6은 Vision이 ♭을 6으로 읽은 것(A♭→A6), 1·3은 괄호 번호·마디줄(E1·E13)
+_PLAUSIBLE = re.compile(r"^[A-G][#b]?(m|m7|m9|maj7|M7|7|9|6|2|4|sus|sus2|sus4|7sus4|add9|add2|dim|dim7|m7b5|aug|\+|m6|69)?(/[A-G][#b]?)?$")
+
+
+def _reconcile_chord(vision: str, claude: str) -> str:
+    """짝지어진 Vision·AI 코드의 글자: 보통 AI(흐린 캡처에서 91–100%, Vision 48–62%). 다만 Vision이 읽은 숫자(겹쳐 읽은 G77은 G7)가
+    AI 코드에 없으면 AI가 윗첨자를 빼먹거나 지어낸 것이다(주님 다시 오실때까지: G⁷을 G·Gsus4로): AI에 숫자가 없으면 Vision의 숫자를
+    붙이고, 다른 숫자가 있으면 Vision 쪽이 그럴듯한 코드일 때 Vision을 쓴다."""
+    v = re.sub(r"(\d)\1+", r"\1", normalize_chord(vision))
+    rv, rc = re.match(r"[A-G][#b]?", v), re.match(r"[A-G][#b]?", claude)
+    if not rv or not rc or rv.group(0) != rc.group(0):
+        return claude
+    # Vision이 읽은 슬래시 베이스(G/B)를 AI가 빼먹었으면 붙인다
+    vb = re.search(r"/([A-G][#b]?)$", v)
+    if vb and "/" not in claude and _PLAUSIBLE.match(claude + "/" + vb.group(1)):
+        claude = claude + "/" + vb.group(1)
+    vd = [d for d in re.findall(r"\d", v) if d in _CHORD_DIGITS]
+    ad = re.findall(r"\d", claude)
+    if not vd or all(d in ad for d in vd):
+        return claude
+    if not ad:
+        base, _, bass = claude.partition("/")
+        cand = base + vd[0] + ("/" + bass if bass else "")
+        return cand if _PLAUSIBLE.match(cand) else claude
+    # 2와 7은 Vision이 서로 바꿔 읽는다 (C²를 C7로, E⁷m을 E2로): 그 차이뿐이면 AI를 믿는다
+    if all(d in ad or (d in "27" and any(a in "27" for a in ad)) for d in vd):
+        return claude
+    return v if _PLAUSIBLE.match(v) else claude
+
 
 def _chord_cost(v: str, c: str) -> float:
     nv, nc = normalize_chord(v), normalize_chord(c)
@@ -168,7 +197,7 @@ def merge_chords(vision: list[list[TextBox]], claude_t: Transcription, systems: 
     if not c_items:
         return vision, 0.0, 0.0
     placed, ratio, exact = place(v_items, c_items, _chord_cost, systems, keep_vision_only=lambda text, conf: conf >= keep_vision_min,
-                                 claude_sys=c_sys if any(x is not None for x in c_sys) else None)
+                                 claude_sys=c_sys if any(x is not None for x in c_sys) else None, reconcile=_reconcile_chord)
     out: list[list[TextBox]] = [[] for _ in systems]
     for p in placed:
         out[p.system].append(TextBox(p.text, p.conf, int(p.x - 0.3 * il), int(p.y - 0.5 * il), int(p.x + 0.9 * il), int(p.y + 0.5 * il), p.source))
