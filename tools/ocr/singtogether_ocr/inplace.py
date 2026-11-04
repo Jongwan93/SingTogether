@@ -1481,6 +1481,11 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                         if not more:
                             break
                         ks += more
+                    # AI 이름이 Vision 글자보다 길면(A → Asus4) 바로 오른쪽에 붙은 덩어리("sus4")도 같은 코드다: 안 지우면 새 글자가 그 위에 겹친다
+                    if ks and len(b.text) > len(vtext):
+                        right_edge = max(blobs[k][2] for k in ks)
+                        ks += [k for k, bb in enumerate(blobs) if k not in taken and k not in ks and -0.15 * il <= bb[0] - right_edge <= 0.3 * il
+                               and bb[1] < vb[3] and bb[3] > vb[1] and not any(v[0] <= (bb[0] + bb[2]) / 2 <= v[2] for v in vboxes if v is not vb)]
                     if ks:
                         taken.update(ks)
                         b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
