@@ -1,7 +1,7 @@
 """사용자 컴퓨터에 로그인된 AI CLI로 악보 그림을 받아 적게 한다. 앱은 시작할 때 셋 중 하나를 고르게 한다.
 
     claude   Claude Code CLI (`claude`)              모델: SINGTOGETHER_CLAUDE_MODEL (기본 sonnet)
-    chatgpt  OpenAI Codex CLI (`codex`, ChatGPT 계정)  모델: SINGTOGETHER_CODEX_MODEL (기본은 codex 설정)
+    chatgpt  OpenAI Codex CLI (`codex`, ChatGPT 계정)  모델: SINGTOGETHER_CODEX_MODEL (기본은 codex 설정), 추론 SINGTOGETHER_CODEX_EFFORT (기본 low)
     gemini   Antigravity (`agy`), 없으면 Gemini CLI (`gemini`, API 키 필요)
 
 앱을 Finder에서 열면 PATH가 짧아서 흔한 설치 폴더를 직접 뒤진다. "auto"는 위 순서로 처음 찾은 것.
@@ -121,6 +121,8 @@ def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
                     "-C", str(image.parent), "-i", str(image), "-o", str(out_file)]
             if model:
                 args += ["-m", model]
+            # 추론 강도는 낮게: 한 줄 전사가 low로 3분, 사용자 설정의 high로는 10분 한도 안에 안 끝났다. SINGTOGETHER_CODEX_EFFORT로 바꾼다
+            args += ["-c", f'model_reasoning_effort="{os.environ.get("SINGTOGETHER_CODEX_EFFORT", "low")}"']
             try:
                 _, out = run(args + [prompt], timeout=timeout)
             except RuntimeError as e:                    # 종료 코드가 0이 아니다: 쓰임 한도·로그인 오류는 아래에서 읽기 좋게 바꾼다
