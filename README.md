@@ -61,13 +61,14 @@ Nothing to try it on? [`samples/`](samples/) has three public-domain hymns as cl
 Notes are always read on your Mac. Chords and lyrics are read much more accurately when an AI command-line tool is installed and signed in:
 
 - **Claude:** [Claude Code](https://claude.com/claude-code) (`claude`), signed in with a Claude account.
+- **ChatGPT:** OpenAI [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), signed in with a ChatGPT account (`codex login`).
 - **Gemini:** Google [Antigravity](https://antigravity.google) (`agy`), or the Gemini CLI (`gemini`) on a paid plan.
 
 When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
 If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu or in Settings.
 If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 
-**Privacy:** with an AI reader, the score image is sent to that service (Anthropic or Google) under your own account.
+**Privacy:** with an AI reader, the score image is sent to that service (Anthropic, OpenAI or Google) under your own account.
 With **Apple Vision only**, nothing leaves your Mac except the once-a-day version check described under [Updates](#updates-and-problems), which you can turn off.
 
 ## Settings
@@ -79,7 +80,7 @@ With **Apple Vision only**, nothing leaves your Mac except the once-a-day versio
 - **Open the review window after reading an image score**, and **play a sound** when a file is created.
 - **Check for updates when the app starts.**
 - **Transposing:** when the new key can be written both ways (F♯ or G♭), follow the original (a ♯ score gets F♯, a ♭ score gets G♭), always sharps, or always flats. Whether image scores are moved in place on the original picture (the default) or recognized and re-engraved. And whether re-engraved scores come back as images (PNG or JPEG, the default) or as PDF.
-- **Reading image scores:** Claude, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
+- **Reading image scores:** Claude, ChatGPT, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
 - **Recognition cache:** how much space the remembered results take, and a button to clear it.
 
 ## Updates and problems
@@ -182,7 +183,7 @@ $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # 
 In a source build they are `.build/release/singtogether-transpose` and `tools/ocr/.venv/bin/singtogether-ocr`.
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
-`--llm claude|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|gemini` to report whether it is installed and signed in,
+`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
 `--source IMAGE` with a chord-chart `.txt` to rewrite the chords on that image, `--chart-font NAME` to force the font,
 `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 

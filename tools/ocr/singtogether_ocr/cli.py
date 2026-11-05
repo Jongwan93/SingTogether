@@ -297,7 +297,7 @@ def main(argv=None) -> None:
     ap.add_argument("--render", action="store_true", help="render SVG/PDF (the transposed copy too)")
     ap.add_argument("--inplace", action="store_true", help="with --transpose: move the noteheads, key signature, accidentals and chord symbols on the original image instead of recognizing and re-engraving the score (seconds; lyrics and everything else stay)")
     ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
-                    help="AI CLI that reads chords and lyrics: claude (Claude Code) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
+                    help="AI CLI that reads chords and lyrics: claude (Claude Code) / chatgpt (Codex CLI) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
     ap.add_argument("--no-cache", action="store_true", help="neither read nor write the result cache (~/Library/Caches/SingTogether/ocr)")
     ap.add_argument("--json", action="store_true", help="print result paths and summary as one JSON line at the end (used by the app)")
     ap.add_argument("--check-llm", metavar="NAME", choices=llm.PROVIDERS, help="report whether that AI CLI is installed and signed in, then exit")

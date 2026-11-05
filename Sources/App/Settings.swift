@@ -207,7 +207,7 @@ final class SettingsWindowController: NSWindowController {
         checkButton.isHidden = false
         switch SheetOCR.llmReady {
         case true?: status.stringValue = "Signed in. Chords and lyrics are read with \(SheetOCR.llmChoices.first { $0.id == id }?.label ?? id)."
-        case false?: status.stringValue = "Not signed in — Apple Vision is used until you sign in. Open Terminal and run: \(id == "claude" ? "claude" : "agy")"
+        case false?: status.stringValue = "Not signed in — Apple Vision is used until you sign in. Open Terminal and run: \(id == "claude" ? "claude" : id == "chatgpt" ? "codex login" : "agy")"
         default: status.stringValue = "Sign-in not checked yet."
         }
     }

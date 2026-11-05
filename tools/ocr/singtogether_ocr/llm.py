@@ -1,7 +1,8 @@
-"""사용자 컴퓨터에 로그인된 AI CLI로 악보 그림을 받아 적게 한다. 앱은 시작할 때 둘 중 하나를 고르게 한다.
+"""사용자 컴퓨터에 로그인된 AI CLI로 악보 그림을 받아 적게 한다. 앱은 시작할 때 셋 중 하나를 고르게 한다.
 
-    claude  Claude Code CLI (`claude`)              모델: SINGTOGETHER_CLAUDE_MODEL (기본 sonnet)
-    gemini  Antigravity (`agy`), 없으면 Gemini CLI (`gemini`, API 키 필요)
+    claude   Claude Code CLI (`claude`)              모델: SINGTOGETHER_CLAUDE_MODEL (기본 sonnet)
+    chatgpt  OpenAI Codex CLI (`codex`, ChatGPT 계정)  모델: SINGTOGETHER_CODEX_MODEL (기본은 codex 설정)
+    gemini   Antigravity (`agy`), 없으면 Gemini CLI (`gemini`, API 키 필요)
 
 앱을 Finder에서 열면 PATH가 짧아서 흔한 설치 폴더를 직접 뒤진다. "auto"는 위 순서로 처음 찾은 것.
 """
@@ -15,10 +16,10 @@ from pathlib import Path
 
 from .engines._run import run
 
-PROVIDERS = ("claude", "gemini")
+PROVIDERS = ("claude", "chatgpt", "gemini")
 CHOICES = ("auto", *PROVIDERS, "none")
-LABELS = {"claude": "Claude", "gemini": "Gemini", "none": "Apple Vision"}
-_BINARIES = {"claude": ("claude",), "gemini": ("agy", "gemini")}
+LABELS = {"claude": "Claude", "chatgpt": "ChatGPT", "gemini": "Gemini", "none": "Apple Vision"}
+_BINARIES = {"claude": ("claude",), "chatgpt": ("codex",), "gemini": ("agy", "gemini")}
 _DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/.npm-global/bin", "~/.bun/bin",
          "~/.volta/bin", "~/.claude/local")
 
@@ -71,6 +72,11 @@ def check(provider: str, timeout: int = 45) -> dict:
             out = p.stdout.strip()
             ok = bool(json.loads(out[out.index("{"):]).get("loggedIn")) if "{" in out else False
             hint = "Open Terminal and run: claude"
+        elif name == "codex":
+            p = subprocess.run([path, "login", "status"], capture_output=True, text=True, timeout=timeout)
+            out = p.stdout + p.stderr
+            ok = p.returncode == 0 and bool(re.search(r"logged in", out, re.I)) and not re.search(r"not logged in", out, re.I)
+            hint = "Open Terminal and run: codex login"
         elif name == "agy":
             p = subprocess.run([path, "--print-timeout", f"{timeout - 5}s", "-p=Reply with exactly the word OK and nothing else."],
                                capture_output=True, text=True, timeout=timeout)
@@ -105,6 +111,27 @@ def ask(provider: str, prompt: str, image: Path, timeout: int = 600) -> str:
         if result.get("is_error"):
             raise RuntimeError(f"claude failed: {result.get('result')}")
         return result["result"]
+    if name == "codex":
+        # 그림은 -i로 붙인다. 읽기 전용 샌드박스, 세션 파일은 남기지 않는다. 마지막 답만 -o 파일로 받는다 (stdout에는 진행 기록이 섞인다)
+        import tempfile
+        model = os.environ.get("SINGTOGETHER_CODEX_MODEL")
+        with tempfile.TemporaryDirectory() as d:
+            out_file = Path(d) / "answer.txt"
+            args = [path, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
+                    "-C", str(image.parent), "-i", str(image), "-o", str(out_file)]
+            if model:
+                args += ["-m", model]
+            try:
+                _, out = run(args + [prompt], timeout=timeout)
+            except RuntimeError as e:                    # 종료 코드가 0이 아니다: 쓰임 한도·로그인 오류는 아래에서 읽기 좋게 바꾼다
+                out = str(e)
+            if out_file.exists() and out_file.read_text().strip():
+                return out_file.read_text()
+        if m := re.search(r"[^\n]*usage limit[^\n]*", out, re.I):      # "You've hit your usage limit … try again at …"
+            raise RuntimeError("ChatGPT (Codex): " + re.sub(r"^\s*ERROR:\s*", "", m.group(0)).strip())
+        if re.search(r"not logged in|login required|unauthorized", out, re.I):
+            raise RuntimeError("Codex CLI is not signed in (run: codex login)")
+        raise RuntimeError("codex gave no answer: " + out.strip().splitlines()[-1][:160] if out.strip() else "codex gave no answer")
     if name == "agy":
         # 헤드리스 모드에서는 프롬프트를 플래그에 붙여야 하고, 셸 명령을 쓰려 하면 권한을 못 받아 빈 결과가 나온다 (프롬프트로 막음)
         _, out = run([path, "--add-dir", str(image.parent), "--print-timeout", f"{max(60, timeout - 60)}s",

@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         offerMoveToApplications()
         updateReaderItem()
         SettingsWindowController.shared.onReaderChange = { [weak self] in self?.updateReaderItem() }
-        // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / Gemini)를 고르게 한다 (설정에서 끌 수 있다)
+        // 메뉴 막대에 아이콘이 뜬 뒤 글자를 읽을 AI(Claude / ChatGPT / Gemini)를 고르게 한다 (설정에서 끌 수 있다)
         DispatchQueue.main.async { [weak self] in
             if AppSettings.askAtLaunch { self?.chooseReader() } else { self?.verifyReader() }
         }
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// 시작할 때와 메뉴에서: 이미지 악보의 코드·가사를 Claude와 Gemini 중 무엇으로 읽을지 버튼으로 고른다.
+/// 시작할 때와 메뉴에서: 이미지 악보의 코드·가사를 Claude·ChatGPT·Gemini 중 무엇으로 읽을지 버튼으로 고른다.
 extension AppDelegate {
     @objc func chooseReader() {
         let choices = SheetOCR.llmChoices

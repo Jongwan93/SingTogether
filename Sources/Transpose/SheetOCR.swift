@@ -36,7 +36,7 @@ package enum SheetOCR {
     package static let extensions: Set<String> = ["png", "jpg", "jpeg", "webp", "pdf", "tif", "tiff", "bmp"]
 
     /// singtogether-ocr 실행 파일. 환경 변수 → 설정 → 저장소 안(.venv) → PATH 순.
-    /// 글자를 읽을 AI CLI: "claude" / "gemini". 앱이 시작할 때 고른다. 고른 것이 없으면 설치된 것을 쓴다.
+    /// 글자를 읽을 AI CLI: "claude" / "chatgpt" / "gemini". 앱이 시작할 때 고른다. 고른 것이 없으면 설치된 것을 쓴다.
     package static var llm: String {
         get { UserDefaults.standard.string(forKey: "llm") ?? "auto" }
         set { UserDefaults.standard.set(newValue, forKey: "llm") }
@@ -44,6 +44,7 @@ package enum SheetOCR {
 
     package static let llmChoices: [(id: String, label: String, binaries: [String])] = [
         ("claude", "Claude", ["claude"]),
+        ("chatgpt", "ChatGPT", ["codex"]),
         ("gemini", "Gemini", ["agy", "gemini"]),
     ]
 
@@ -60,7 +61,7 @@ package enum SheetOCR {
     /// 마지막 로그인 확인 결과. false면 인식할 때 AI를 건너뛴다 (실패를 기다리느라 시간을 버리지 않게).
     package static var llmReady: Bool?
 
-    /// 고른 AI CLI가 설치·로그인돼 있는지 (`singtogether-ocr --check-llm`). Claude는 0.1초, Gemini는 약 7초 걸린다.
+    /// 고른 AI CLI가 설치·로그인돼 있는지 (`singtogether-ocr --check-llm`). Claude·ChatGPT는 0.1초, Gemini는 약 7초 걸린다.
     package static func check(llm name: String) -> (ok: Bool, message: String) {
         guard llmChoices.contains(where: { $0.id == name }) else { return (false, "No AI selected") }
         guard let tool = locate() else { return (false, Failure.notInstalled.localizedDescription) }
@@ -98,7 +99,7 @@ package enum SheetOCR {
     }
 
     static func readerName(_ method: String) -> String {
-        method.replacingOccurrences(of: "claude", with: "Claude").replacingOccurrences(of: "gemini", with: "Gemini").replacingOccurrences(of: "vision", with: "Apple Vision")
+        method.replacingOccurrences(of: "claude", with: "Claude").replacingOccurrences(of: "chatgpt", with: "ChatGPT").replacingOccurrences(of: "gemini", with: "Gemini").replacingOccurrences(of: "vision", with: "Apple Vision")
             .replacingOccurrences(of: "none", with: "Apple Vision")
     }
 
