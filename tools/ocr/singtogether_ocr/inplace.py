@@ -49,6 +49,7 @@ class Report:
     accidentals_found: int = 0
     accidentals_drawn: int = 0
     chords: int = 0
+    arcs: int = 0                                 # 옮긴 이음줄·붙임줄 수
     key_source: str = "image"
     chord_source: str = "Apple Vision"
     notes_: list[str] = field(default_factory=list)
@@ -1067,6 +1068,205 @@ def ai_hollow_fix(heads: list[Notehead], bars: list[float], measures: list, il: 
     return n
 
 
+ARC_LOG: list[tuple] = []     # find_arcs가 후보마다 (x0, y0, x1, y1, 판정) 을 남긴다 (디버깅용)
+
+
+def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: list[float], il: float, t_line: int
+              ) -> list[tuple[int, int, np.ndarray]]:
+    """이음줄·붙임줄: 오선 줄·머리·기둥·빔을 뺀 잉크 중 가늘고 옆으로 긴 활 모양 덩어리로, 양 끝이 머리(또는 마디줄) 가까이에 있는 것.
+    (y0, x0, 마스크) 목록. 제자리 이조에서는 한 오선의 음이 모두 같은 칸 수로 움직이므로 곡선도 그만큼 평행이동하면 된다."""
+    H, W = binary.shape
+    y0, y1 = max(0, int(staff.top - 3 * il)), min(H, int(staff.bottom + 3 * il))
+    x0, x1 = max(0, staff.left - 2), min(W, staff.right + 2)
+    ink = (binary[y0:y1, x0:x1] < 128).astype(np.uint8)
+    cut = strip_staff_lines(ink, [y - y0 for y in staff.lines], t_line)
+    cut0 = cut.copy()
+    # 굵은 것(머리·빔·음자리표·쉼표: 0.45il 타원 열림을 견디는 것)과 기둥·마디줄(세로 1.4il 열림)을 뺀다. 가는 곡선만 남는다.
+    # 머리는 상자로 지우지 않는다: 이웃 머리 사이의 짧은 붙임줄이 상자에 잘려 조각만 남았다
+    # (흐린 캡처의 붙임줄은 가운데가 0.45il까지 굵어 0.45il 타원이 삼켰다 → 0.62il; 빔은 따로 1.0il×0.3il 열림으로)
+    ek = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, int(0.62 * il)) | 1, max(3, int(0.62 * il)) | 1))
+    cut[cv2.dilate(cv2.morphologyEx(cut, cv2.MORPH_OPEN, ek), np.ones((3, 3), np.uint8)) > 0] = 0
+    bk = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(1.0 * il)), max(2, int(0.3 * il))))
+    cut[cv2.dilate(cv2.morphologyEx(cut, cv2.MORPH_OPEN, bk), np.ones((3, 3), np.uint8)) > 0] = 0
+    vk = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(3, int(1.4 * il))))
+    cut[cv2.dilate(cv2.morphologyEx(cut, cv2.MORPH_OPEN, vk), np.ones((3, 3), np.uint8)) > 0] = 0
+    # 속 빈 머리의 고리는 가늘어 남는다: 찾은 머리 상자는 따로 지운다 (고리에 붙은 붙임줄은 키 큰 덩어리가 되어 버려지니)
+    for h in heads:
+        if h.evidence and h.evidence.hollow:
+            hx0, hy0 = int(h.x - h.w / 2) - x0 - 2, int(h.y - h.h / 2) - y0 - 2
+            cut[max(0, hy0):hy0 + h.h + 5, max(0, hx0):hx0 + h.w + 5] = 0
+    n, lab, stt, _ = cv2.connectedComponentsWithStats(cut, connectivity=8)
+    anchors = [(h.x, h.y) for h in heads] + [(b, (staff.top + staff.bottom) / 2) for b in bars]
+    # 열림이 곡선의 끝(머리·기둥에 닿는 곳)을 깎아 내므로, 받아들인 곡선은 열기 전 그림의 가는 잉크(세로 런 0.4il 이하)를 따라 되살린다
+    vrun = np.zeros_like(cut0, np.int32)
+    for x in range(cut0.shape[1]):
+        col = cut0[:, x]
+        run = 0
+        for y in range(cut0.shape[0]):
+            run = run + 1 if col[y] else 0
+            if run:
+                vrun[y - run + 1:y + 1, x] = run
+    thin = ((cut0 > 0) & (vrun <= 0.4 * il)).astype(np.uint8)
+    _, tlab = cv2.connectedComponents(thin, connectivity=8)
+    out = []
+    for i in range(1, n):
+        bx, by, bw, bh, area = stt[i]
+        gx0, gy0 = bx + x0, by + y0
+        tag = None
+        if bw < 0.5 * il:                                  # 이웃한 8분음표 사이의 붙임줄은 머리 상자를 빼면 0.5il쯤만 남는다
+            tag = "narrow"
+        elif bh > 2.5 * il or bh > 0.8 * bw:
+            tag = "tall"
+        elif gy0 > staff.bottom + 1.3 * il and not any(abs(h.x - (gx0 + bw / 2)) <= bw / 2 + il and h.y > staff.bottom + 0.3 * il for h in heads):
+            tag = "lyrics"                                   # 오선 아래 멀리, 근처에 낮은 머리도 없다: 가사
+        if tag:
+            ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, tag)); continue
+        comp = (lab[by:by + bh, bx:bx + bw] == i)
+        cols = np.flatnonzero(comp.any(axis=0))
+        # 오선 줄에 붙은 덩어리: 줄을 따라 뻗던 곡선의 양 끝은 줄과 함께 지워졌으니(흐린 캡처의 붙임줄은 줄 위를 탄다) 가운데
+        # 토막만 남는다 — 납작하고 끝이 머리에서 멀다. 그런 것은 기준을 늦춘다
+        on_line = any(abs(gy0 - (ly + t_line // 2 + 1)) <= 2 or abs(gy0 + bh - (ly - t_line // 2 - 1)) <= 2 for ly in staff.lines)
+        # 열마다 세로 두께의 중앙값 = 획 두께; 가로줄 하나(0.3il 넘게 굵은 열 없이)
+        thick = np.median(comp.sum(axis=0)[cols])
+        # 겹친 이음줄 둘(한 음 위로 짧은 것과 긴 것)은 0.5il까지 굵다 (모든 능력 4째 줄); 빔은 앞에서 이미 뺐으니 0.6il까지 받는다
+        if thick > 0.6 * il:
+            tag = "thick"
+        else:
+            ys = np.array([np.flatnonzero(comp[:, c]).mean() for c in cols], float)
+            xs = cols.astype(float)
+            a, b_, c_ = np.polyfit(xs, ys, 2)
+            fit = a * xs * xs + b_ * xs + c_
+            resid = float(np.abs(ys - fit).mean())
+            sag = abs(a) * (bw / 2) ** 2                       # 가운데와 끝의 높이 차
+            if resid > max(1.5, 0.08 * il):
+                tag = "wiggly"
+            elif sag < (0.02 if on_line else 0.05) * il:        # 작은 캡처의 붙임줄은 아주 납작하다 (주님은 산 같아서: 0.06il)
+                tag = "straight"
+            else:
+                # 양 끝이 머리(가로 1.0il·세로 1.5il 안; 줄에 붙은 토막은 가로 2.0il)나 마디줄(가로 1.3il·세로 2.2il) 가까이
+                ends = [(gx0 + cols[0], gy0 + ys[0]), (gx0 + cols[-1], gy0 + ys[-1])]
+                hx_tol = (2.0 if on_line else 1.0) * il
+                near_heads = [[h for h in heads if abs(ex - h.x) <= hx_tol and abs(ey - h.y) <= 1.5 * il] for ex, ey in ends]
+                near_bars = [any(abs(ex - b) <= 1.3 * il for b in bars) and staff.top - 2.2 * il <= ey <= staff.bottom + 2.2 * il
+                             for ex, ey in ends]
+                if not all(nh or nb for nh, nb in zip(near_heads, near_bars)):
+                    tag = "loose"
+                else:
+                    # 머리 아래의 곡선은 아래로(가운데가 끝보다 낮게), 위의 곡선은 위로 불러야 한다
+                    ref = [h.y for nh in near_heads for h in nh]
+                    if ref:
+                        below = np.mean([ey for _, ey in ends]) > float(np.mean(ref))
+                        mid_lower = a < 0                        # y는 아래로 커진다: a<0 이면 가운데가 더 낮다
+                        if below != mid_lower:
+                            tag = "bulge"
+        if tag:
+            ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, tag)); continue
+        ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, "ok"))
+        ids = set(np.unique(tlab[by:by + bh, bx:bx + bw][comp])) - {0}
+        full = np.isin(tlab, list(ids)) if ids else np.zeros_like(thin, bool)
+        full[by:by + bh, bx:bx + bw] |= comp
+        ys_, xs_ = np.nonzero(full)
+        fy0, fy1, fx0, fx1 = ys_.min(), ys_.max() + 1, xs_.min(), xs_.max() + 1
+        if fx1 - fx0 > 2.5 * bw or fy1 - fy0 > 2 * il:            # 가는 잉크를 따라 엉뚱한 데까지 번졌다: 원래 덩어리만
+            out.append((gy0, gx0, comp.astype(np.uint8)))
+        else:
+            out.append((y0 + fy0, x0 + fx0, full[fy0:fy1, fx0:fx1].astype(np.uint8)))
+    return out
+
+
+def find_line_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], il: float, t_line: int,
+                   avoid: list[tuple[int, int, int, int]] = ()) -> list[tuple[int, int, np.ndarray]]:
+    """오선 줄을 타고 가는 붙임줄(줄 위 음의 붙임줄은 그 줄에 붙어 활처럼 부푼다): 줄의 위·아래 가장자리에서 줄과 이어진 잉크의
+    두께를 열마다 재어, 머리·기둥 자리가 아닌 곳에서 0.7il 넘게 이어지며 가운데가 0.12–0.9il로 부푼 구간을 찾는다.
+    (줄 지우기(strip_staff_lines)가 그런 곡선을 줄과 함께 지워 find_arcs에는 토막만 남는다.) (y0, x0, 마스크) 목록."""
+    H, W = binary.shape
+    ink = binary < 128
+    out = []
+    x_lo, x_hi = max(0, staff.left), min(W, staff.right + 1)
+    for ly in staff.lines:
+        for side in (-1, 1):
+            edge = ly - t_line // 2 - 2 if side < 0 else ly + (t_line + 1) // 2 + 2
+            if not 0 <= edge < H:
+                continue
+            prof = np.zeros(W, int)
+            for x in range(x_lo, x_hi):
+                y, n = edge, 0
+                while 0 <= y < H and ink[y, x] and n < 2 * il:
+                    n += 1
+                    y += side
+                prof[x] = n
+            # 머리 자리(±0.3il)와 기둥·마디줄(1.2il 넘게 이어진 열)은 뺀다
+            for h in heads:
+                prof[max(0, int(h.x - h.w / 2 - 0.3 * il)):int(h.x + h.w / 2 + 0.3 * il) + 1] = 0
+            prof[prof > 1.2 * il] = 0
+            x = x_lo
+            while x < x_hi:
+                if prof[x] < 2:
+                    x += 1
+                    continue
+                s_ = x
+                while x < x_hi and prof[x] >= 2:
+                    x += 1
+                run = prof[s_:x]
+                w = x - s_
+                peak = int(run.max())
+                mid = s_ + int(run.argmax())
+                tag = None
+                if w < 0.7 * il:
+                    tag = "l-short"
+                elif not 0.12 * il <= peak <= 0.9 * il:
+                    tag = "l-peak"
+                elif not (s_ + 0.2 * w <= mid <= x - 0.2 * w):
+                    tag = "l-skew"                                # 가운데가 아니라 끝에서 두껍다: 기둥·글자 뿌리
+                elif run[: max(1, w // 6)].mean() > 0.6 * peak or run[-max(1, w // 6):].mean() > 0.6 * peak:
+                    tag = "l-flat"                                # 끝이 얇아지지 않는다: 빔·굵은 줄
+                elif not any(abs(h.x - s_) <= 1.5 * il or abs(h.x - x) <= 1.5 * il for h in heads):
+                    tag = "l-loose"
+                elif any(min(x, bx1) - max(s_, bx0) > 0.5 * w and min(ly, by1) + 0.6 * il >= max(ly, by0) for bx0, by0, bx1, by1 in avoid):
+                    tag = "l-avoid"                               # find_arcs가 거른 덩어리의 일부: 혼자 옮기면 곡선이 끊긴다
+                ARC_LOG.append((s_, edge if side < 0 else ly, x, ly if side < 0 else edge, tag or "l-ok"))
+                if tag:
+                    continue
+                y0 = edge - peak + 1 if side < 0 else edge
+                m = np.zeros((peak, w), np.uint8)
+                for k in range(w):
+                    n = prof[s_ + k]
+                    if side < 0:
+                        m[peak - n:peak, k] = 1
+                    else:
+                        m[:n, k] = 1
+                out.append((y0, s_, m))
+    return out
+
+
+def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int, staff: Staff, t_line: int) -> None:
+    """곡선 픽셀을 지우고(오선 줄은 잇고) dy만큼 옮겨 다시 찍는다."""
+    H, W = img.shape[:2]
+    for y0, x0, m in arcs:
+        md = cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0
+        h, w = m.shape
+        region = img[y0:y0 + h, x0:x0 + w]
+        keep = np.zeros(h, bool)
+        for ly in staff.lines:
+            a, b = max(y0, ly - t_line // 2 - 1), min(y0 + h, ly + (t_line + 1) // 2 + 1)
+            if b > a:
+                keep[a - y0:b - y0] = True
+        region[md & ~keep[:, None]] = 255
+        for r in np.flatnonzero(keep):
+            cs = np.flatnonzero(md[r])
+            if cs.size:
+                around = np.concatenate([img[y0 + r, max(0, x0 - 6):x0], img[y0 + r, x0 + w:min(W, x0 + w + 6)]])
+                region[r, cs] = int(np.median(around)) if around.size else 255
+    for y0, x0, m in arcs:
+        h, w = m.shape
+        ny = y0 + dy
+        sy0, sy1 = max(0, -ny), min(h, H - ny)
+        if sy1 <= sy0:
+            continue
+        dst = img[ny + sy0:ny + sy1, x0:x0 + w]
+        dst[m[sy0:sy1] > 0] = 0
+
+
 def on_barline(ink: np.ndarray, staff: Staff, x: float, il: float) -> bool:
     """x 둘레 ±0.35il에 오선 첫 줄부터 다섯째 줄까지 거의 끊기지 않은 세로선이 있나 (마디줄). 붙임줄이 마디줄·오선 줄과 만든
     고리가 속 빈 머리로 잡히는 것을 거른다; 진짜 머리의 기둥은 머리 중심에서 0.6il 떨어져 있다."""
@@ -1293,6 +1493,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 old_spacing = (kboxes[1][0] + kboxes[1][2] - kboxes[0][0] - kboxes[0][2]) / 2
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
+    arc_jobs: list[tuple[list, int, Staff, int]] = []
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
         st = sys_.staff
         t_line = line_thickness(ink, st)
@@ -1370,6 +1571,14 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         plans_all.append((sys_, plans))
         rep.heads += len(plans)
 
+        # 2b. 이음줄·붙임줄: 머리를 지우기 전의 잉크에서 찾아 두고, 다 그린 뒤 같은 칸 수만큼 옮긴다
+        if rep.steps:
+            n_log = len(ARC_LOG)
+            arcs = find_arcs(page.binary, st, heads, bars, il, t_line)
+            rejected = [e[:4] for e in ARC_LOG[n_log:] if e[4] in ("thick", "wiggly", "tall", "bulge", "loose")]
+            arcs += find_line_arcs(page.binary, st, heads, il, t_line, rejected)
+        else:
+            arcs = []
         # 3. 지우기: 머리, 덧줄, 옛 임시표, 기둥의 옮길 구간, 옛 조표
         for p in plans:
             h = p.head
@@ -1477,11 +1686,18 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 else:
                     draw_glyph(img, p.acc_new, h.x - w / 2 - 0.75 * il, y_new, il)
 
+        if arcs:
+            arc_jobs.append((arcs, int(round(-rep.steps * il / 2)), st, t_line))
+            rep.arcs += len(arcs)
+
     # 5. 코드 글자: Vision이 읽은 코드 상자를 Swift 이조기로 옮겨 같은 글꼴로 다시 쓴다
     try:
         rep.chords = _rewrite_chords(page, semitones, img, chord_boxes)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
         rep.notes_.append(f"chords not rewritten: {str(e).splitlines()[0][:120]}")
+    # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄)
+    for arcs, dy, st_, t_ in arc_jobs:
+        move_arcs(img, arcs, dy, st_, t_)
 
     final = compose_output(page, img, src)
     out.parent.mkdir(parents=True, exist_ok=True)
