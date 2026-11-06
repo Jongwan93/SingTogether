@@ -15,6 +15,8 @@ package enum Preferences {
     package static var imageOutput = true
     /// 오선 악보 그림: 원본 위에서 음표 머리·조표·임시표·코드만 옮긴다 (몇 초). false면 인식해서 새로 그리고 확인 창을 연다
     package static var inPlace = true
+    /// 제자리 이조 뒤에 결과를 원본과 대조해 고칠 수 있는 곳은 고치고 나머지는 표시한다 (AI가 있으면 AI 대조도, 40–60초 더)
+    package static var checkResult = true
 
     package static let enharmonicVariable = "SINGTOGETHER_ENHARMONIC"
 

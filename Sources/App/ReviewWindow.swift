@@ -197,7 +197,10 @@ final class ReviewWindowController: NSWindowController {
             : result.isChordSheet
             ? "Original — orange: chords to check · click any chord or word to fix it (green: fixed)"
             : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed) · ⌘+ ⌘− zoom"
-        rightLabel.stringValue = result.isInPlace ? "Transposed — notes, key signature and chords moved on the original picture"
+        let toLook = result.checks.filter { !$0.fixed }.count, fixedN = result.checks.filter { $0.fixed }.count
+        rightLabel.stringValue = result.isInPlace
+            ? (result.checks.isEmpty ? "Transposed — notes, key signature and chords moved on the original picture"
+               : "Transposed — yellow: \(toLook) place\(toLook == 1 ? "" : "s") to look at · green: \(fixedN) fixed by the check · hover a box for details")
             : result.isChordSheet ? "Transposed — chords rewritten on the original" : "Transposed — doubtful notes are red"
         pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
@@ -207,6 +210,7 @@ final class ReviewWindowController: NSWindowController {
             // 코드 차트: 원본 위에서 코드만 바꾼 그림
             let doc = PDFDocument()
             doc.insert(page, at: 0)
+            markChecks(on: page, image: img)
             pdfView.document = doc
         } else if let t = result.transposed, let text = try? String(contentsOf: t, encoding: .utf8) {
             // 코드 차트: PDF가 없으니 텍스트를 그대로 보여 준다
@@ -216,6 +220,29 @@ final class ReviewWindowController: NSWindowController {
             tv.isEditable = false
             tv.autoresizingMask = [.width, .height]
             pdfView.addSubview(tv)
+        }
+    }
+
+    /// 제자리 이조의 검수 결과를 결과 쪽 위에 그린다: 확인할 곳은 노란 상자, 자동으로 고친 곳은 옅은 초록 상자.
+    /// 상자 좌표는 원본 그림 픽셀(위가 0)이라 쪽 크기에 맞춰 바꾸고 위아래를 뒤집는다. 마우스를 올리면 설명이 보인다
+    private func markChecks(on page: PDFPage, image: NSImage) {
+        guard result.isInPlace, !result.checks.isEmpty else { return }
+        let px = image.representations.first.map { CGFloat($0.pixelsWide) } ?? image.size.width
+        let bounds = page.bounds(for: .mediaBox)
+        let k = bounds.width / max(1, px)
+        for c in result.checks where c.box.count == 4 {
+            let pad: CGFloat = 3
+            let r = NSRect(x: CGFloat(c.box[0]) * k - pad, y: bounds.height - CGFloat(c.box[3]) * k - pad,
+                           width: CGFloat(c.box[2] - c.box[0]) * k + 2 * pad, height: CGFloat(c.box[3] - c.box[1]) * k + 2 * pad)
+            let a = PDFAnnotation(bounds: r, forType: .square, withProperties: nil)
+            let border = PDFBorder()
+            border.lineWidth = c.fixed ? 1 : 2
+            a.border = border
+            a.color = c.fixed ? NSColor.systemGreen.withAlphaComponent(0.6) : NSColor.systemYellow
+            a.interiorColor = c.fixed ? nil : NSColor.systemYellow.withAlphaComponent(0.15)
+            let place = "Line \(c.staff)" + (c.measure > 0 ? ", bar \(c.measure)" : "")
+            a.contents = (c.fixed ? "Fixed · " : "") + "\(place): \(c.found)" + (c.expected.isEmpty ? "" : " → should be \(c.expected)") + " (\(c.source == "check" ? "self-check" : c.source))"
+            page.addAnnotation(a)
         }
     }
 

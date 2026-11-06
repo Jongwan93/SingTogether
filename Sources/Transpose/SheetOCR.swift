@@ -16,6 +16,19 @@ package enum SheetOCR {
         package var isInPlace: Bool = false // 원본 위에서 음표·코드만 옮긴 그림 (인식 자료 없음)
         package var engine: String
         package var chartFont: String?      // 코드 차트: 코드를 다시 쓸 때 쓴 글꼴
+        package var checks: [Check] = []    // 제자리 이조의 검수 결과 (고친 것과 확인할 곳)
+    }
+
+    /// 검수가 찾은 곳 하나. box는 원본 그림의 픽셀 좌표 (x0, y0, x1, y1), 위가 0
+    package struct Check {
+        package var kind: String
+        package var staff: Int
+        package var measure: Int
+        package var box: [Double]
+        package var found: String
+        package var expected: String
+        package var source: String
+        package var fixed: Bool
     }
 
     /// 코드 차트의 코드를 다시 쓸 때 고를 수 있는 글꼴 (tools/ocr chordoverlay.FONTS와 같은 이름)
@@ -150,7 +163,10 @@ package enum SheetOCR {
         if llmReady == false, !check(llm: llm).ok { reader = "none" }
         var args = [input.path, "--engine", "auto", "--llm", reader, "--transpose", String(semitones), "--render", "--json",
                     "--work", work.appendingPathComponent("work").path]
-        if Preferences.inPlace, out != nil, extensions.contains(input.pathExtension.lowercased()) { args.append("--inplace") }
+        if Preferences.inPlace, out != nil, extensions.contains(input.pathExtension.lowercased()) {
+            args.append("--inplace")
+            if !Preferences.checkResult { args.append("--no-audit") }
+        }
         if let out { args += ["--out", out.path] }
         if let source { args += ["--source", source.path] }
         if let font { args += ["--chart-font", font] }
@@ -184,6 +200,10 @@ package enum SheetOCR {
             if let src = dict["chord_source"] as? String { summary += " read by \(src)" }
             if let src = dict["key_source"] as? String, src != "image" { summary += " · key from \(src)" }
             if let notes = dict["notes"] as? [String], !notes.isEmpty { summary += " · ⚠︎ " + notes.joined(separator: " · ") }
+            if let audit = dict["audit"] as? [[String: Any]] {
+                let fixed = audit.filter { $0["status"] as? String == "fixed" }.count
+                summary += audit.isEmpty ? " · checked: no problems found" : " · checked: \(fixed) fixed, \(audit.count - fixed) to look at (yellow)"
+            }
         } else if let s = dict["summary"] as? [String: Any] {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }
             summary = "To check: notes \(pair("notes_flagged", "notes")), chords \(pair("chords_flagged", "chords")), lyrics \(pair("lyrics_flagged", "lyrics"))"
@@ -208,7 +228,13 @@ package enum SheetOCR {
                       keys: dict["keys"] as? String, summary: summary,
                       isChordSheet: dict["chordsheet"] as? Bool == true, isInPlace: dict["inplace"] as? Bool == true,
                       engine: dict["engine"] as? String ?? "",
-                      chartFont: (dict["chart"] as? [String: Any])?["font"] as? String)
+                      chartFont: (dict["chart"] as? [String: Any])?["font"] as? String,
+                      checks: ((dict["audit"] as? [[String: Any]]) ?? []).map { c in
+                          Check(kind: c["kind"] as? String ?? "", staff: c["staff"] as? Int ?? 0, measure: c["measure"] as? Int ?? 0,
+                                box: (c["box"] as? [NSNumber] ?? []).map { $0.doubleValue }, found: c["found"] as? String ?? "",
+                                expected: c["expected"] as? String ?? "", source: c["source"] as? String ?? "",
+                                fixed: c["status"] as? String == "fixed")
+                      })
     }
 
     // MARK: 기록 — 마지막 인식 실행의 출력. 문제 신고(♪ 메뉴 → Report a Problem…)에 붙인다

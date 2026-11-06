@@ -53,6 +53,8 @@ class Report:
     key_source: str = "image"
     chord_source: str = "Apple Vision"
     notes_: list[str] = field(default_factory=list)
+    # 검수(audit)용 내부 상태: 작업 크기의 결과 그림, 쪽, 오선, 오선별 계획·마디줄·조표 끝, 그린 코드 (JSON에는 안 나간다)
+    state: dict = field(default_factory=dict, repr=False)
 
     @property
     def keys(self) -> str:
@@ -948,7 +950,8 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         # 오선 줄이 가로지르는 구멍(줄 위의 기울어진 2분음표)은 줄을 지운 자리만큼 초승달처럼 가늘다: 채움 0.3까지 (주를 위한 이곳에 4마디)
         crossed = any(hy0 - 1 <= ly - y0 <= hy0 + h + 1 for ly in staff.lines for hy0 in [y])
         fill_min = 0.3 if crossed else 0.4
-        if not (0.4 * il <= w <= 1.05 * il and 0.28 * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= area / (w * h) <= 0.92):
+        w_min, h_min = (0.3, 0.2) if crossed else (0.4, 0.28)           # 고리가 두껍게 번지면 틈만 남는다 (주를 위한 이곳에 12마디)
+        if not (w_min * il <= w <= 1.05 * il and h_min * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= area / (w * h) <= 0.92):
             HOLE_LOG.append((hx, hy, "size", (round(w / il, 2), round(h / il, 2), round(area / (w * h), 2))))
             continue
         if hx < min_x or not staff.top - 1.2 * il <= hy <= staff.bottom + 1.2 * il:
@@ -989,7 +992,10 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         if any(abs(hx - o.x) < 0.7 * il and abs(hy - o.y) < 0.7 * il for o in heads):
             HOLE_LOG.append((hx, hy, "dup", 0))
             continue
-        if any(flag_hook(hx, hy, o, il) for o in heads) or rest_tail(binary < 128, hx, hy, il) or on_barline(binary < 128, staff, hx, il):
+        # 마디줄은 구멍을 **가로지른다**(붙임줄×마디줄 고리): 구멍 폭 안에서만 본다. 작은 구멍 옆의 제 기둥(오선을 다 가로지르는
+        # 낮은 음의 기둥)을 마디줄로 보면 안 된다 (주를 위한 이곳에 12마디)
+        bar_through = bool((binary[staff.top:staff.bottom + 1, int(x + staff.left):int(x + w + staff.left)] < 128).mean(axis=0).__ge__(0.9).any()) if w > 0 else False
+        if any(flag_hook(hx, hy, o, il) for o in heads) or rest_tail(binary < 128, hx, hy, il) or bar_through:
             HOLE_LOG.append((hx, hy, "hook/bar", 0))
             continue
         HOLE_LOG.append((hx, hy, "ok", 0))
@@ -1374,9 +1380,12 @@ def stamp(img: np.ndarray, mask: np.ndarray, cx: float, cy: float) -> None:
 # MARK: 전체 흐름
 
 def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir: Path | None = None,
-                       work: Path | None = None) -> Report:
+                       work: Path | None = None, fixes: dict | None = None) -> Report:
     """src 그림을 semitones만큼 제자리에서 이조해 out에 쓴다 (out 확장자대로 PNG/JPEG). 작업은 ingest가 키운 쪽 크기로 한다.
-    work: AI 답을 캐시하는 폴더 (같은 그림을 다시 옮길 때 다시 묻지 않는다)."""
+    work: AI 답을 캐시하는 폴더 (같은 그림을 다시 옮길 때 다시 묻지 않는다).
+    fixes: 검수(audit)가 정한 수정 — {"add_heads": [(오선, x, y, 속빔)], "drop_heads": [(오선, x, y)],
+           "chords": [(오선, x, y, 새 코드)]} (작업 크기 좌표). 첫 판단을 그 자리에서만 바꾼다."""
+    fixes = fixes or {}
     page = ingest.prepare(src, debug_dir=debug_dir)[0]
     systems = layout.find_systems(page, debug_dir)
     if not systems:
@@ -1540,6 +1549,17 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         if len(stemmed) >= 3:
             mw, mh = float(np.median([h.w for h in stemmed])), float(np.median([h.h for h in stemmed]))
             heads = [h for h in heads if (h.evidence and (h.evidence.stem or h.evidence.hollow)) or not (h.w < 0.9 * mw and h.h < 0.8 * mh)]
+        # 검수가 정한 수정: 못 찾은 머리 더하기, 음표가 아닌 것 빼기
+        for fsi, fx, fy in fixes.get("drop_heads", []):
+            if fsi == si:
+                heads = [h for h in heads if not (abs(h.x - fx) < 0.5 * il and abs(h.y - fy) < 0.5 * il)]
+        for fsi, fx, fy, fhollow in fixes.get("add_heads", []):
+            if fsi == si and not any(abs(h.x - fx) < 0.6 * il and abs(h.y - fy) < 0.6 * il for h in heads):
+                nh = Notehead(fx, fy, int(1.15 * il), int(0.95 * il))
+                nh.evidence = notes.duration_evidence(page.binary, nh, il)
+                nh.evidence.hollow = bool(fhollow)
+                heads.append(nh)
+        heads.sort(key=lambda h: h.x)
         bars = sorted(notes.find_barlines(page.binary, st, il, heads))
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
         if snapped:
@@ -1597,6 +1617,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             plans.append(plan)
             prev_right = int(h.x + h.w / 2)
         plans_all.append((sys_, plans))
+        rep.state.setdefault("bars", []).append(bars)
+        rep.state.setdefault("zone", []).append(max(zone, after_time_signature(ink, st, il, kend) if si == 0 else zone))
         rep.heads += len(plans)
 
         # 2b. 이음줄·붙임줄: 머리를 지우기 전의 잉크에서 찾아 두고, 다 그린 뒤 같은 칸 수만큼 옮긴다
@@ -1674,6 +1696,14 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             x_end = max(clef_end + int(0.5 * il), x_end)
             KEY_LOG.append((si, clef_end, key_end, x_end, first, with_ts, kboxes[0]))
             erase_key_area(img, ink, st, t_line, il, clef_end, x_end)
+            # 지운 뒤 지운 끝과 첫 머리 사이에 박자표 크기의 잉크(오선 안, 높이 1.5il 넘게)가 남았으면 원래 박자표가 살아 있다:
+            # 새로 쓰면 둘이 겹친다 (주를 위한 이곳에: C 앞에 4/4가 끼었다)
+            if with_ts:
+                band = (img[int(st.top):int(st.bottom) + 1, x_end:max(x_end + 1, first)] < 128).astype(np.uint8)
+                band = strip_staff_lines(band, [y - int(st.top) for y in st.lines], t_line)
+                n_, _, stt_, _ = cv2.connectedComponentsWithStats(band, connectivity=8)
+                if any(stt_[i][3] >= 1.5 * il for i in range(1, n_)):
+                    with_ts = False
             need = (0.25 + 0.7 * n_new + (1.4 if with_ts else 0)) * il
             scale = max(0.6, min(1.0, (x_end - clef_end) / need)) if need else 1.0
             x = clef_end + 0.25 * il * scale
@@ -1719,14 +1749,27 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             rep.arcs += len(arcs)
 
     # 5. 코드 글자: Vision이 읽은 코드 상자를 Swift 이조기로 옮겨 같은 글꼴로 다시 쓴다
+    forced: dict = {}
+    # 검수가 찾은, 상자가 없어 안 바뀐 옛 코드: 그 자리를 코드 상자로 더한다 (옛 글자는 Vision이 원본에서 읽은 것)
+    for fsi, x0, y0, x1, y1, ftext in fixes.get("add_chords", []):
+        if fsi < len(chord_boxes) and not any(min(b.x1, x1) - max(b.x0, x0) > 0 for b in chord_boxes[fsi]):
+            chord_boxes[fsi].append(text.TextBox(ftext, 1.0, x0, y0, x1, y1, "vision"))
+            chord_boxes[fsi].sort(key=lambda b: b.x0)
+    for fsi, fx, fy, ftext in fixes.get("chords", []):
+        if fsi < len(chord_boxes):
+            hit = next((b for b in chord_boxes[fsi] if b.x0 - 2 <= fx <= b.x1 + 2 and b.y0 - 0.5 * il <= fy <= b.y1 + 0.5 * il), None)
+            if hit is not None:
+                forced[id(hit)] = ftext
+    rep.state.update(page=page, systems=systems, il=il, plans_all=plans_all, chord_boxes=chord_boxes, keysigs=keysigs, read=read)
     try:
-        rep.chords = _rewrite_chords(page, semitones, img, chord_boxes)
+        rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
         rep.notes_.append(f"chords not rewritten: {str(e).splitlines()[0][:120]}")
     # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄)
     for arcs, dy, st_, t_ in arc_jobs:
         move_arcs(img, arcs, dy, st_, t_)
 
+    rep.state.update(result=img.copy(), drawn_chords=getattr(_rewrite_chords, "drawn", []), semitones=semitones, src=src, ai=ai_t)
     final = compose_output(page, img, src)
     out.parent.mkdir(parents=True, exist_ok=True)
     ext = out.suffix.lower() if out.suffix.lower() in (".png", ".jpg", ".jpeg") else ".png"
@@ -1862,7 +1905,8 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     if src == "claude":                           # 한 코드가 덩어리 둘로 갈라진 것(D/F♯의 올린 ♯)은 함께
                         for k2, bb in enumerate(blobs):
                             if k2 not in taken and k2 != k and min(bb[2], blobs[k][2]) - max(bb[0], blobs[k][0]) > -0.35 * il \
-                               and min(bb[3], blobs[k][3]) - max(bb[1], blobs[k][1]) > -0.6 * il and bb[2] - bb[0] < 2 * il:   # 위아래로 갈라진 A도
+                               and min(bb[3], blobs[k][3]) - max(bb[1], blobs[k][1]) > -0.6 * il \
+                               and bb[2] - bb[0] < max(2.0, 0.9 * len(b.text)) * il:   # 위아래로 갈라진 A도, 떨어진 "sus4"(Asus4)도
                                 ks.append(k2)
                     taken.update(ks)
                     b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
@@ -1915,22 +1959,27 @@ def compose_output(page, img: np.ndarray, src: Path) -> np.ndarray:
     return final
 
 
-def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes) -> int:
+def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes, forced: dict | None = None) -> int:
     from . import chordoverlay
     from .chordoverlay import Chord
+    forced = forced or {}
+    src_boxes = [b for row in boxes for b in row]
     chords = [Chord(b.x0, b.y0, b.x1, b.y1, b.text, "vision", col=k) for k, row in enumerate(boxes) for b in row]
     if not chords:
         return 0
     pieces = [p for c in chords for p in c.text.split("-")]
     moved, _ = chordoverlay._transpose_tokens(pieces, semitones)
     k = 0
-    for c in chords:
+    for c, b in zip(chords, src_boxes):
         n_ = len(c.text.split("-"))
         c.new = "-".join(moved[k:k + n_])
         k += n_
+        if id(b) in forced:                              # 검수가 정한 새 이름
+            c.new = forced[id(b)]
     ink = (page.binary < 128).astype(np.uint8)
     rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     font = chordoverlay.pick_font(ink, chords)
     rgb = chordoverlay.draw(rgb, ink, chords, font, uniform=True, erase_box=page.scale > 1.5)
     img[:] = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    _rewrite_chords.drawn = [(c.col, c.x0, c.y0, c.x1, c.y1, c.text, c.new) for c in chords]
     return sum(1 for c in chords if c.new and c.new != c.text)

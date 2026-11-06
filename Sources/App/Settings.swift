@@ -22,6 +22,10 @@ enum AppSettings {
         get { d.object(forKey: "inPlace") as? Bool ?? true }
         set { d.set(newValue, forKey: "inPlace"); Preferences.inPlace = newValue }
     }
+    static var checkResult: Bool {
+        get { d.object(forKey: "checkResult") as? Bool ?? true }
+        set { d.set(newValue, forKey: "checkResult"); Preferences.checkResult = newValue }
+    }
     /// 새 조가 F♯/G♭처럼 둘 다 가능할 때
     static var enharmonic: Enharmonic {
         get { Enharmonic(rawValue: d.string(forKey: "enharmonic") ?? "") ?? .original }
@@ -32,6 +36,7 @@ enum AppSettings {
         Preferences.enharmonic = enharmonic
         Preferences.imageOutput = imageOutput
         Preferences.inPlace = inPlace
+        Preferences.checkResult = checkResult
     }
 
     /// 로그인할 때 열기. macOS 13부터는 시스템 API, 그 아래는 System Events로 로그인 항목을 넣는다.
@@ -86,6 +91,8 @@ final class SettingsWindowController: NSWindowController {
     private let imageOut = NSButton(checkboxWithTitle: "Save transposed image scores as images (PNG or JPEG), not PDF", target: nil, action: nil)
     private let inPlace = NSButton(checkboxWithTitle: "Move the notes and chords on the original picture", target: nil, action: nil)
     private let inPlaceNote = NSTextField(wrappingLabelWithString: "Takes seconds. Off: the score is recognized, re-engraved and opened in the review window.")
+    private let checkResult = NSButton(checkboxWithTitle: "Check the result against the original and fix mistakes", target: nil, action: nil)
+    private let checkNote = NSTextField(wrappingLabelWithString: "Notes left in place are moved, and anything else that looks wrong is marked in yellow in the review window. With an AI reader this takes about a minute more.")
     private var spellings: [NSButton] = []
     private var readers: [NSButton] = []
     private let status = NSTextField(wrappingLabelWithString: "")
@@ -104,7 +111,7 @@ final class SettingsWindowController: NSWindowController {
 
     private func build() {
         for (b, sel) in [(login, #selector(loginChanged)), (ask, #selector(askChanged)), (review, #selector(reviewChanged)), (sound, #selector(soundChanged)),
-                         (updates, #selector(updatesChanged)), (imageOut, #selector(imageOutChanged)), (inPlace, #selector(inPlaceChanged))] {
+                         (updates, #selector(updatesChanged)), (imageOut, #selector(imageOutChanged)), (inPlace, #selector(inPlaceChanged)), (checkResult, #selector(checkResultChanged))] {
             b.target = self; b.action = sel
         }
         let spellingLabel = NSTextField(labelWithString: "When the new key can be written both ways (F♯ or G♭):")
@@ -125,13 +132,15 @@ final class SettingsWindowController: NSWindowController {
         checkButton.target = self; checkButton.action = #selector(checkSignIn)
         toolLabel.font = .systemFont(ofSize: 11)
         toolLabel.textColor = .secondaryLabelColor
-        inPlaceNote.font = .systemFont(ofSize: 11)
-        inPlaceNote.textColor = .secondaryLabelColor
+        for n in [inPlaceNote, checkNote] {
+            n.font = .systemFont(ofSize: 11)
+            n.textColor = .secondaryLabelColor
+        }
         let clear = NSButton(title: "Clear cache", target: self, action: #selector(clearCache))
         let cacheRow = NSStackView(views: [cacheLabel, clear]); cacheRow.spacing = 10
 
         let general = section("General", [login, ask, review, sound, updates])
-        let transposing = section("Transposing", [spellingLabel] + spellings + [inPlace, inPlaceNote, imageOut])
+        let transposing = section("Transposing", [spellingLabel] + spellings + [inPlace, inPlaceNote, checkResult, checkNote, imageOut])
         let reader = section("Reading image scores", readers + [NSStackView(views: [status, checkButton]), toolLabel])
         let cache = section("Recognition cache", [NSTextField(wrappingLabelWithString: "Recognized scores are remembered by file content, so the same image is instant next time."), cacheRow])
         let root = NSStackView(views: [general, transposing, reader, cache])
@@ -149,7 +158,7 @@ final class SettingsWindowController: NSWindowController {
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             root.widthAnchor.constraint(equalToConstant: 520),
         ])
-        for v in [status, toolLabel, inPlaceNote] { v.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true }
+        for v in [status, toolLabel, inPlaceNote, checkNote] { v.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true }
     }
 
     private func section(_ title: String, _ views: [NSView]) -> NSView {
@@ -183,6 +192,8 @@ final class SettingsWindowController: NSWindowController {
         updates.state = AppSettings.checkUpdates ? .on : .off
         imageOut.state = AppSettings.imageOutput ? .on : .off
         inPlace.state = AppSettings.inPlace ? .on : .off
+        checkResult.state = AppSettings.checkResult ? .on : .off
+        checkResult.isEnabled = AppSettings.inPlace
         for b in spellings { b.state = b.identifier?.rawValue == AppSettings.enharmonic.rawValue ? .on : .off }
         for b in readers {
             let id = b.identifier?.rawValue ?? ""
@@ -218,7 +229,8 @@ final class SettingsWindowController: NSWindowController {
     @objc private func soundChanged() { AppSettings.playSound = sound.state == .on }
     @objc private func updatesChanged() { AppSettings.checkUpdates = updates.state == .on }
     @objc private func imageOutChanged() { AppSettings.imageOutput = imageOut.state == .on }
-    @objc private func inPlaceChanged() { AppSettings.inPlace = inPlace.state == .on }
+    @objc private func inPlaceChanged() { AppSettings.inPlace = inPlace.state == .on; checkResult.isEnabled = AppSettings.inPlace }
+    @objc private func checkResultChanged() { AppSettings.checkResult = checkResult.state == .on }
 
     @objc private func spellingChanged(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue, let e = Enharmonic(rawValue: id) else { return }

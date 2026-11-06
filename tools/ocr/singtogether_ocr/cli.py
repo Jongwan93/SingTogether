@@ -295,6 +295,7 @@ def main(argv=None) -> None:
                     help=f"target staff-line spacing after scaling (default {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="semitones; also writes a transposed copy (needs ./build.sh)")
     ap.add_argument("--render", action="store_true", help="render SVG/PDF (the transposed copy too)")
+    ap.add_argument("--no-audit", action="store_true", help="with --inplace: skip the check that compares the result with the original, fixes what it can and reports the rest")
     ap.add_argument("--inplace", action="store_true", help="with --transpose: move the noteheads, key signature, accidentals and chord symbols on the original image instead of recognizing and re-engraving the score (seconds; lyrics and everything else stay)")
     ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
                     help="AI CLI that reads chords and lyrics: claude (Claude Code) / chatgpt (Codex CLI) / gemini (agy or Gemini CLI) / none (Apple Vision only) / auto (whichever is installed)")
@@ -329,8 +330,13 @@ def main(argv=None) -> None:
         src_ext = a.input.suffix.lower() if a.input.suffix.lower() in (".png", ".jpg", ".jpeg") else ".png"
         base = (a.out.with_suffix("") if a.out else a.input.with_suffix(""))
         tmp = base.with_name(base.name + f" ({a.transpose:+d}){src_ext}")
+        issues = []
         try:
-            rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
+            if a.no_audit:
+                rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
+            else:
+                from . import audit
+                rep, issues = audit.run(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
         except RuntimeError as e:
             if "no staff" not in str(e):
                 raise
@@ -342,10 +348,15 @@ def main(argv=None) -> None:
             print(f"in-place: {rep.keys} (key from {rep.key_source}), {rep.heads} noteheads moved {rep.steps:+d} steps, "
                   f"accidentals {rep.accidentals_found}→{rep.accidentals_drawn}, chords rewritten {rep.chords} (read by {rep.chord_source})"
                   + "".join(f"\n   ! {n}" for n in rep.notes_))
+            if not a.no_audit:
+                fixed = sum(1 for i in issues if i.status == "fixed")
+                print(f"check: {fixed} fixed, {len(issues) - fixed} to look at"
+                      + "".join(f"\n   ? line {i.staff} bar {i.measure}: {i.kind} — {i.found} → {i.expected} ({i.source})" for i in issues if i.status != "fixed"))
             print(f"→ {final}")
             result.update({"inplace": True, "transposed": str(final), "keys": rep.keys, "key_source": rep.key_source, "heads": rep.heads,
                            "chords": rep.chords, "chord_source": rep.chord_source,
-                           "accidentals": [rep.accidentals_found, rep.accidentals_drawn], "notes": rep.notes_})
+                           "accidentals": [rep.accidentals_found, rep.accidentals_drawn], "notes": rep.notes_,
+                           "audit": None if a.no_audit else [i.as_json() for i in issues]})
             finish()
             return
 

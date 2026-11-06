@@ -93,17 +93,23 @@ With **Apple Vision only**, nothing leaves your Mac except the once-a-day versio
 For a picture of a single-line score (melody with chords and lyrics) the app does what you would do with correction fluid:
 it finds every notehead on the staff and moves it up or down by the number of staff steps the new key needs, lengthens or
 shortens the stem to match, replaces the key signature, recomputes the accidentals, and rewrites the chord symbols in the
-same font. Lyrics, slurs, ties, repeat signs, the title and everything else stay exactly as they were. No rhythm is read,
+same font. Slurs and ties move with their notes. Lyrics, repeat signs, the title and everything else stay exactly as they were. No rhythm is read,
 so nothing can go wrong with measures or note lengths, and a mistake affects one note, not the whole score. The chord
 symbols are read by the AI reader when one is signed in (10–20 seconds; Apple Vision alone takes a few seconds but misreads
 superscript flats and numbers on blurry captures, A♭ as A6). On a small, blurry capture the key signature is too smudged to
 count, so the app takes the key from the chord symbols, then from the AI's reading. The result has the same size as the
 original.
 
-Limits of this first version: treble clef, one melody line; ties and slurs are left where they were, so a tied note keeps
-its old curve; a notehead the detector misses stays in the old key (it is easy to spot: it is the one note not on the
-new line). The old mode, which recognizes the score, re-engraves it and opens the review window, is still there:
-Settings → Transposing → turn off **Move the notes and chords on the original picture**.
+**The result is checked before you see it.** The app compares the result with the original: a note still sitting at its
+old position is a note the detector missed, so it is added and the score is moved again; the chord symbols of the result
+are read back and compared with what should have been written. With an AI reader signed in, the AI also looks at each line
+of the original next to the same line of the result, the way you would, and lists what looks wrong. What the app can fix on
+its own evidence it fixes (green box in the review window); everything else is marked with a yellow box, and hovering it
+says what looks wrong and what it should be. The check takes a few seconds without an AI and about a minute with one. Turn
+it off in Settings → Transposing → **Check the result against the original and fix mistakes**.
+
+Limits: treble clef, one melody line. The old mode, which recognizes the score, re-engraves it and opens the review window,
+is still there: Settings → Transposing → turn off **Move the notes and chords on the original picture**.
 
 ## Image scores: recognize, transpose, review
 
@@ -183,7 +189,7 @@ $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # 
 In a source build they are `.build/release/singtogether-transpose` and `tools/ocr/.venv/bin/singtogether-ocr`.
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
-`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
+`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--no-audit` with `--inplace` to skip the result check, `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
 `--source IMAGE` with a chord-chart `.txt` to rewrite the chords on that image, `--chart-font NAME` to force the font,
 `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 
