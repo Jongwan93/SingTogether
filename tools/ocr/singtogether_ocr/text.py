@@ -276,7 +276,7 @@ def recognize(gray: np.ndarray, langs=("ko-KR", "en-US"), correction: bool = Tru
               custom_words=(), min_side: int = 0) -> list[TextBox]:
     """Vision 문자 인식. 좌표는 넘긴 이미지 기준 픽셀. 작은 조각은 min_side까지 키워서 읽는다."""
     import Vision
-    from Foundation import NSData
+    from Foundation import NSData, NSDictionary   # macOS 27: 파이썬 {}를 옵션으로 넘기면 "key does not exist"로 실패한다
 
     scale = 1.0
     if min_side and min(gray.shape) < min_side:
@@ -284,7 +284,7 @@ def recognize(gray: np.ndarray, langs=("ko-KR", "en-US"), correction: bool = Tru
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     h, w = gray.shape
     png = cv2.imencode(".png", gray)[1].tobytes()
-    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(NSData.dataWithBytes_length_(png, len(png)), {})
+    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(NSData.dataWithBytes_length_(png, len(png)), NSDictionary.dictionary())
     req = Vision.VNRecognizeTextRequest.alloc().init()
     req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
     req.setRecognitionLanguages_(list(langs))

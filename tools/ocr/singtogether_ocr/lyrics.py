@@ -36,11 +36,11 @@ class Syllable:
 def recognize_lines(gray: np.ndarray, langs=("ko-KR", "en-US"), correction: bool = True):
     """Vision 글줄 인식. (문자열, 확신도, 글자별 (x0,y0,x1,y1) 또는 None) 목록. 좌표는 gray 기준."""
     import Vision
-    from Foundation import NSData, NSMakeRange
+    from Foundation import NSData, NSDictionary, NSMakeRange   # macOS 27: 파이썬 {}를 옵션으로 넘기면 "key does not exist"로 실패한다
 
     h, w = gray.shape
     png = cv2.imencode(".png", gray)[1].tobytes()
-    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(NSData.dataWithBytes_length_(png, len(png)), {})
+    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(NSData.dataWithBytes_length_(png, len(png)), NSDictionary.dictionary())
     req = Vision.VNRecognizeTextRequest.alloc().init()
     req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
     req.setRecognitionLanguages_(list(langs))

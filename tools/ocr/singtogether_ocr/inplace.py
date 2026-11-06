@@ -887,6 +887,22 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
     # 줄 위의 머리는 구멍이 줄로 위아래 둘로 갈라지고, 기울어진 타원이라 두 반쪽이 가로로 어긋나 줄 빼기로도 안 이어진다
     # (주님은 산 같아서 16마디). 줄 띠(두께+3)를 사이에 두고 마주 보며 가로로 겹치는 작은 구멍 둘은 하나로 합친다
     cands = [[int(v) for v in stats[i]] + [float(cents[i][0]), float(cents[i][1])] for i in range(1, n) if i not in border]
+    # 오선 줄에 매달린 머리(D4·G5처럼 고리 한쪽이 줄 자체)는 줄을 빼면 구멍이 밖으로 터진다 (주를 위한 이곳에 32마디): 줄을 둔
+    # 잉크에서도 구멍을 찾아, 줄에 닿는 것 중 위에서 못 찾은 것만 더한다
+    holes2 = cv2.morphologyEx((region == 0).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n2, lab2, st2, ce2 = cv2.connectedComponentsWithStats(holes2, connectivity=4)
+    border2 = set(lab2[0]) | set(lab2[-1]) | set(lab2[:, 0]) | set(lab2[:, -1])
+    for i in range(1, n2):
+        if i in border2:
+            continue
+        x_, y_, w_, h_, a_ = (int(v) for v in st2[i])
+        # 오선 밖에 매달린 것만: 아랫줄 바로 밑, 윗줄 바로 위 (오선 안의 줄 사이 칸은 기둥·빔과 함께 구멍처럼 닫힌다)
+        bot, top = staff.lines[-1] - y0, staff.lines[0] - y0
+        touches = abs(y_ - (bot + t_line // 2 + 1)) <= 2 or abs(y_ + h_ - (top - t_line // 2)) <= 2
+        gx, gy = ce2[i][0] + staff.left, ce2[i][1] + y0
+        near_head = any(abs(gx - h.x) < 0.9 * il and abs(gy - h.y) < 0.9 * il for h in heads)   # 줄 밑에 매달린 꽉 찬 머리와 줄 사이의 쐐기
+        if touches and not near_head and not any(abs(ce2[i][0] - c[5]) < 0.5 * il and abs(ce2[i][1] - c[6]) < 0.5 * il for c in cands):
+            cands.append([x_, y_, w_, h_, a_, float(ce2[i][0]), float(ce2[i][1])])
     line_rows = {y - y0 for y in staff.lines}
     merged = []
     used: set[int] = set()
@@ -929,7 +945,10 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
             continue
         # 흐린 그림은 고리가 두꺼워 구멍이 세로로 길어지기도 한다(0.48×0.64il): 가로세로비 0.65까지. 깨끗한 악보 글꼴(Bravura)의
         # 2분음표 속은 기울어진 가는 홈이라 상자 채움이 0.48: 채움은 0.4부터
-        if not (0.4 * il <= w <= 1.05 * il and 0.28 * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and 0.4 <= area / (w * h) <= 0.92):
+        # 오선 줄이 가로지르는 구멍(줄 위의 기울어진 2분음표)은 줄을 지운 자리만큼 초승달처럼 가늘다: 채움 0.3까지 (주를 위한 이곳에 4마디)
+        crossed = any(hy0 - 1 <= ly - y0 <= hy0 + h + 1 for ly in staff.lines for hy0 in [y])
+        fill_min = 0.3 if crossed else 0.4
+        if not (0.4 * il <= w <= 1.05 * il and 0.28 * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= area / (w * h) <= 0.92):
             HOLE_LOG.append((hx, hy, "size", (round(w / il, 2), round(h / il, 2), round(area / (w * h), 2))))
             continue
         if hx < min_x or not staff.top - 1.2 * il <= hy <= staff.bottom + 1.2 * il:
@@ -1515,6 +1534,12 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         heads += find_hole_heads(page.binary, sys_, il, heads, hole_x, t_line)
         heads += find_whole_notes(page.binary, sys_, il, heads, min_x)
         heads = sorted((h for h in heads if h.x >= zone), key=lambda h: h.x)
+        # 쉼표(4분쉼표의 굽은 곳, 8분쉼표의 점)를 꽉 찬 머리로 읽은 것: 기둥이 없고 이 오선의 기둥 달린 머리보다 작다 (폭 0.9배·높이
+        # 0.8배 미만). 진짜 머리는 흐려서 기둥을 못 찾아도 크기는 같다 (주를 위한 이곳에: 쉼표 20개가 음표로 옮겨졌다)
+        stemmed = [h for h in heads if h.evidence and h.evidence.stem and not h.evidence.hollow]
+        if len(stemmed) >= 3:
+            mw, mh = float(np.median([h.w for h in stemmed])), float(np.median([h.h for h in stemmed]))
+            heads = [h for h in heads if (h.evidence and (h.evidence.stem or h.evidence.hollow)) or not (h.w < 0.9 * mw and h.h < 0.8 * mh)]
         bars = sorted(notes.find_barlines(page.binary, st, il, heads))
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
         if snapped:
@@ -1542,6 +1567,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             gap_x0, gap_x1 = max(prev_right, int(h.x - 2.6 * il)), int(h.x - h.w / 2 - 0.12 * il)
             if gap_x1 - gap_x0 >= 0.5 * il:
                 m = match_accidental(ink, gap_x0, gap_x1, h.y, il, st, t_line)
+                # 임시표는 머리 바로 앞에 붙는다(0.6il 안). 더 떨어진 것은 앞 음 뒤의 8분쉼표 (주를 위한 이곳에: 1.2–1.3il에서 ♭으로 읽혔다)
+                if m and gap_x1 - m[1][2] > 0.6 * il:
+                    m = None
                 # 앞 음의 아래로 뻗은 기둥(왼쪽에 붙고 꼬리가 오른쪽으로 말린다)은 ♭처럼 보인다: 어느 머리의 기둥 열이 상자 안이면 아니다
                 if m and any(o.evidence and o.evidence.stem and m[1][0] - 2 <= o.evidence.stem_x <= m[1][2] + 2
                              and abs(o.y - (m[1][1] + m[1][3]) / 2) < 3 * il for o in heads if o is not h):
