@@ -24,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "SingTogether")
 
         let menu = NSMenu()
+        // 맨 위에 지금 버전 (회색, 누를 수 없음). 새 버전 알림은 그 아래에 뜬다
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let version = NSMenuItem(title: "SingTogether \(UpdateCheck.current)" + (build.map { " (\($0))" } ?? ""), action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+        menu.addItem(.separator())
         updateItem.target = self
         updateItem.isHidden = true
         updateSeparator.isHidden = true

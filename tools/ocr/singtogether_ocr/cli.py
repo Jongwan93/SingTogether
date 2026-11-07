@@ -295,6 +295,7 @@ def main(argv=None) -> None:
                     help=f"target staff-line spacing after scaling (default {ingest.TARGET_INTERLINE:.0f})")
     ap.add_argument("--transpose", type=int, metavar="N", help="semitones; also writes a transposed copy (needs ./build.sh)")
     ap.add_argument("--render", action="store_true", help="render SVG/PDF (the transposed copy too)")
+    ap.add_argument("--fixes", type=Path, metavar="JSON", help="with --inplace: corrections marked in the review window, a JSON list of {kind: chord|not_moved|not_a_note|shift, x, y (original image pixels), text, steps}")
     ap.add_argument("--no-audit", action="store_true", help="with --inplace: skip the check that compares the result with the original, fixes what it can and reports the rest")
     ap.add_argument("--inplace", action="store_true", help="with --transpose: move the noteheads, key signature, accidentals and chord symbols on the original image instead of recognizing and re-engraving the score (seconds; lyrics and everything else stay)")
     ap.add_argument("--llm", default="auto", choices=llm.CHOICES,
@@ -332,11 +333,10 @@ def main(argv=None) -> None:
         tmp = base.with_name(base.name + f" ({a.transpose:+d}){src_ext}")
         issues = []
         try:
-            if a.no_audit:
-                rep = inplace.transpose_in_place(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
-            else:
-                from . import audit
-                rep, issues = audit.run(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work)
+            from . import audit
+            marks = json.loads(a.fixes.read_text()) if a.fixes else None
+            rep, issues = audit.run(a.input, a.transpose, tmp, llm_name=a.llm, debug_dir=a.debug, work=a.work,
+                                    marks=marks, check_result=not a.no_audit)
         except RuntimeError as e:
             if "no staff" not in str(e):
                 raise

@@ -1383,8 +1383,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                        work: Path | None = None, fixes: dict | None = None) -> Report:
     """src 그림을 semitones만큼 제자리에서 이조해 out에 쓴다 (out 확장자대로 PNG/JPEG). 작업은 ingest가 키운 쪽 크기로 한다.
     work: AI 답을 캐시하는 폴더 (같은 그림을 다시 옮길 때 다시 묻지 않는다).
-    fixes: 검수(audit)가 정한 수정 — {"add_heads": [(오선, x, y, 속빔)], "drop_heads": [(오선, x, y)],
-           "chords": [(오선, x, y, 새 코드)]} (작업 크기 좌표). 첫 판단을 그 자리에서만 바꾼다."""
+    fixes: 검수(audit)나 사용자가 정한 수정 — {"add_heads": [(오선, x, y, 속빔|None)], "drop_heads": [(오선, x, y)],
+           "shift_heads": [(오선, x, y, 칸)], "chords": [(오선, x, y, 새 코드)], "add_chords": [(오선, x0, y0, x1, y1,옛 코드[, 새 코드])]}
+           (작업 크기 좌표). 첫 판단을 그 자리에서만 바꾼다."""
     fixes = fixes or {}
     page = ingest.prepare(src, debug_dir=debug_dir)[0]
     systems = layout.find_systems(page, debug_dir)
@@ -1557,8 +1558,15 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             if fsi == si and not any(abs(h.x - fx) < 0.6 * il and abs(h.y - fy) < 0.6 * il for h in heads):
                 nh = Notehead(fx, fy, int(1.15 * il), int(0.95 * il))
                 nh.evidence = notes.duration_evidence(page.binary, nh, il)
-                nh.evidence.hollow = bool(fhollow)
+                if fhollow is not None:                  # None: 그림에서 잰 속 빔을 그대로
+                    nh.evidence.hollow = bool(fhollow)
                 heads.append(nh)
+        for fsi, fx, fy, fsteps in fixes.get("shift_heads", []):
+            if fsi == si:
+                near = [h for h in heads if abs(h.x - fx) < 0.8 * il and abs(h.y - fy) < 1.0 * il]
+                if near:
+                    h = min(near, key=lambda h: (h.x - fx) ** 2 + (h.y - fy) ** 2)
+                    h.step_bias = getattr(h, "step_bias", 0) + int(fsteps)
         heads.sort(key=lambda h: h.x)
         bars = sorted(notes.find_barlines(page.binary, st, il, heads))
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
@@ -1579,7 +1587,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 state_old, state_new = dict(old_alters), dict(new_alters)
                 bar_i += 1
                 prev_right = int(bars[bar_i - 1]) + 2
-            step_old = int(round((st.bottom - h.y) / (il / 2)))
+            # 사용자가 "한 칸 올려/내려"라고 표시한 머리: 검출이 칸을 잘못 읽은 것이니 옛 음 자체를 고친다 (지울 자리는 그대로)
+            step_old = int(round((st.bottom - h.y) / (il / 2))) + getattr(h, "step_bias", 0)
             hollow = bool(h.evidence and h.evidence.hollow)
             plan = HeadPlan(h, step_old, step_old + rep.steps, hollow)
             if h.evidence and h.evidence.dot:
@@ -1751,10 +1760,19 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     # 5. 코드 글자: Vision이 읽은 코드 상자를 Swift 이조기로 옮겨 같은 글꼴로 다시 쓴다
     forced: dict = {}
     # 검수가 찾은, 상자가 없어 안 바뀐 옛 코드: 그 자리를 코드 상자로 더한다 (옛 글자는 Vision이 원본에서 읽은 것)
-    for fsi, x0, y0, x1, y1, ftext in fixes.get("add_chords", []):
+    for fsi, x0, y0, x1, y1, ftext, *new_text in fixes.get("add_chords", []):
         if fsi < len(chord_boxes) and not any(min(b.x1, x1) - max(b.x0, x0) > 0 for b in chord_boxes[fsi]):
-            chord_boxes[fsi].append(text.TextBox(ftext, 1.0, x0, y0, x1, y1, "vision"))
+            if new_text and new_text[0] and ftext == new_text[0]:     # 사용자가 새 이름만 알려 줬다: 옛 이름은 거꾸로 옮겨 얻는다
+                from . import chordoverlay
+                try:
+                    ftext = chordoverlay._transpose_tokens([new_text[0]], -semitones)[0][0] or ftext
+                except Exception:
+                    ftext = "?"
+            nb = text.TextBox(ftext, 1.0, x0, y0, x1, y1, "vision")
+            chord_boxes[fsi].append(nb)
             chord_boxes[fsi].sort(key=lambda b: b.x0)
+            if new_text and new_text[0]:
+                fixes.setdefault("chords", []).append((fsi, (x0 + x1) / 2, (y0 + y1) / 2, new_text[0]))
     for fsi, fx, fy, ftext in fixes.get("chords", []):
         if fsi < len(chord_boxes):
             hit = next((b for b in chord_boxes[fsi] if b.x0 - 2 <= fx <= b.x1 + 2 and b.y0 - 0.5 * il <= fy <= b.y1 + 0.5 * il), None)

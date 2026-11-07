@@ -108,6 +108,11 @@ its own evidence it fixes (green box in the review window); everything else is m
 says what looks wrong and what it should be. The check takes a few seconds without an AI and about a minute with one. Turn
 it off in Settings → Transposing → **Check the result against the original and fix mistakes**.
 
+**You can mark what is still wrong.** Click a place on the result in the review window and say what is wrong there: use
+the suggested chord of a yellow box, type the chord it should be, move a note up or down a step, say a note was not moved,
+or say that something moved as a note is a rest or a symbol. Each mark gets a blue circle. **Fix N Marked Places** moves
+the original again with your marks and replaces the result; the marks stay until you press **Clear Marks**.
+
 Limits: treble clef, one melody line. The old mode, which recognizes the score, re-engraves it and opens the review window,
 is still there: Settings → Transposing → turn off **Move the notes and chords on the original picture**.
 
@@ -189,7 +194,7 @@ $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # 
 In a source build they are `.build/release/singtogether-transpose` and `tools/ocr/.venv/bin/singtogether-ocr`.
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
-`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--no-audit` with `--inplace` to skip the result check, `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
+`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--no-audit` with `--inplace` to skip the result check, `--fixes FILE` with `--inplace` to apply marks (a JSON list of `{"kind": "chord|not_moved|not_a_note|shift", "x", "y", "text", "steps"}` in pixels of the original), `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
 `--source IMAGE` with a chord-chart `.txt` to rewrite the chords on that image, `--chart-font NAME` to force the font,
 `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 

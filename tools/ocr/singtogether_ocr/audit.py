@@ -322,17 +322,70 @@ def check(state: dict, rep, provider: str = "none", work: Path | None = None, ou
     return issues, fixes
 
 
-def run(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir: Path | None = None, work: Path | None = None):
-    """이조 → 검수 → (고칠 것이 있으면) 고쳐서 한 번 더. (마지막 Report, 문제 목록)."""
+def user_fixes(src: Path, marks: list[dict]) -> dict:
+    """결과 창에서 사용자가 찍은 표시(원본 그림 픽셀 좌표) → 이조기의 fixes (작업 크기 좌표, 오선 번호).
+    표시: {"kind": "chord", "x", "y", "text"} / {"kind": "not_moved", "x", "y"} / {"kind": "not_a_note", "x", "y"} /
+          {"kind": "shift", "x", "y", "steps": ±1}. 점은 그 기호 위를 찍은 자리다."""
+    from . import ingest, layout
+    page = ingest.prepare(src)[0]
+    systems = layout.find_systems(page)
+    il, k = page.interline, page.scale
+    fixes: dict = {"add_heads": [], "drop_heads": [], "shift_heads": [], "chords": [], "add_chords": []}
+
+    def staff_of(y: float) -> int | None:
+        best = None
+        for si, s_ in enumerate(systems):
+            top, bot = s_.chord_band[0], s_.staff.bottom + 2.5 * il
+            if top <= y <= bot:
+                return si
+            d = min(abs(y - top), abs(y - bot))
+            best = (si, d) if best is None or d < best[1] else best
+        return best[0] if best and best[1] < 3 * il else None
+
+    for m in marks:
+        x, y = float(m.get("x", 0)) * k, float(m.get("y", 0)) * k
+        si = staff_of(y)
+        if si is None:
+            continue
+        kind = m.get("kind")
+        if kind == "not_moved":
+            fixes["add_heads"].append((si, x, y, None))
+        elif kind == "not_a_note":
+            fixes["drop_heads"].append((si, x, y))
+        elif kind == "shift" and int(m.get("steps", 0)):
+            fixes["shift_heads"].append((si, x, y, int(m["steps"])))
+        elif kind == "chord" and m.get("text"):
+            new = text.normalize_chord(str(m["text"]))
+            fixes["chords"].append((si, x, y, new))
+            # 그 자리에 코드 상자가 없을 때(옛 코드가 안 바뀐 채 남은 경우)를 위해 글자 덩어리로 상자를 만들어 둔다
+            y0, y1 = systems[si].chord_band
+            blobs = [(bx0, y0 + by0, bx1, y0 + by1) for bx0, by0, bx1, by1 in text.find_text_blobs(page.binary[y0:y1], il)]
+            hit = [b for b in blobs if b[0] - 0.3 * il <= x <= b[2] + 0.3 * il and b[1] - 0.5 * il <= y <= b[3] + 0.5 * il]
+            if hit:
+                bx0, by0 = min(b[0] for b in hit), min(b[1] for b in hit)
+                bx1, by1 = max(b[2] for b in hit), max(b[3] for b in hit)
+                fixes["add_chords"].append((si, int(bx0), int(by0), int(bx1), int(by1), new, new))
+    return fixes
+
+
+def _merge(a: dict, b: dict) -> dict:
+    return {k: list(a.get(k, [])) + list(b.get(k, [])) for k in set(a) | set(b)}
+
+
+def run(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir: Path | None = None, work: Path | None = None,
+        marks: list[dict] | None = None, check_result: bool = True):
+    """(사용자 표시대로 고쳐) 이조 → 검수 → (고칠 것이 있으면) 고쳐서 한 번 더. (마지막 Report, 문제 목록)."""
     from . import llm
     work = work or out.parent / ".singtogether-work"
-    rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work)
-    if not rep.steps and semitones % 12 == 0:
+    given = user_fixes(src, marks) if marks else {}
+    rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work, fixes=given or None)
+    if not check_result or (not rep.steps and semitones % 12 == 0):
         return rep, []
     provider = llm.pick(llm_name) if llm_name != "none" else "none"
     if rep.state.get("ai") is None:                       # 첫 판에서 AI가 안 됐으면(한도·로그인) 검수도 AI 없이
         provider = "none"
     issues, fixes = check(rep.state, rep, provider, work, out)
     if any(fixes.values()):
-        rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work, fixes=fixes)
+        rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work,
+                                         fixes=_merge(given, fixes))
     return rep, issues

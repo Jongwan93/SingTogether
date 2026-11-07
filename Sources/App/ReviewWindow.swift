@@ -17,7 +17,11 @@ final class ReviewWindowController: NSWindowController {
     private var pendingTop = true         // 처음 맞출 때 악보 맨 위가 보이게 (뒤집히지 않은 뷰라 기본은 아래쪽이 보인다)
 
     private let summary = NSTextField(labelWithString: "")
-    private let pdfView = PDFView()
+    private let pdfView = MarkablePDFView()
+    private var marks: [[String: Any]] = []    // 제자리 이조: 사용자가 결과에 찍은 고칠 곳 (원본 그림 픽셀 좌표)
+    private let applyMarksButton = NSButton(title: "Fix Marked Places", target: nil, action: nil)
+    private let clearMarksButton = NSButton(title: "Clear Marks", target: nil, action: nil)
+    private var resultPixelWidth: CGFloat = 0
     private let imageView = ReviewImageView()
     private var popover: NSPopover?
     private var rebuildWork: DispatchWorkItem?
@@ -125,7 +129,12 @@ final class ReviewWindowController: NSWindowController {
         fontPopup.target = self
         fontPopup.action = #selector(fontChanged)
         fontPopup.isHidden = !result.isChordSheet
-        let bar = NSStackView(views: [summary, NSView(), spinner, fontPopup, undoButton, fix, redo, truthButton, reveal])
+        applyMarksButton.target = self; applyMarksButton.action = #selector(applyMarks)
+        applyMarksButton.toolTip = "Transpose again with the places you marked on the result corrected"
+        clearMarksButton.target = self; clearMarksButton.action = #selector(clearMarks)
+        for b in [applyMarksButton, clearMarksButton] { b.isHidden = true }
+        pdfView.onClick = { [weak self] point in self?.resultClicked(at: point) }
+        let bar = NSStackView(views: [summary, NSView(), spinner, fontPopup, undoButton, fix, redo, truthButton, clearMarksButton, applyMarksButton, reveal])
         bar.orientation = .horizontal
         bar.spacing = 10
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 10, right: 14)
@@ -199,8 +208,8 @@ final class ReviewWindowController: NSWindowController {
             : "Original — red: notes to check (thick: \(imageView.top) most doubtful), orange: chords, purple: lyrics · click to fix (green: fixed) · ⌘+ ⌘− zoom"
         let toLook = result.checks.filter { !$0.fixed }.count, fixedN = result.checks.filter { $0.fixed }.count
         rightLabel.stringValue = result.isInPlace
-            ? (result.checks.isEmpty ? "Transposed — notes, key signature and chords moved on the original picture"
-               : "Transposed — yellow: \(toLook) place\(toLook == 1 ? "" : "s") to look at · green: \(fixedN) fixed by the check · hover a box for details")
+            ? (result.checks.isEmpty ? "Transposed — click anything that is wrong to mark it"
+               : "Transposed — yellow: \(toLook) to look at · green: \(fixedN) fixed · click anything wrong to mark it")
             : result.isChordSheet ? "Transposed — chords rewritten on the original" : "Transposed — doubtful notes are red"
         pdfView.subviews.filter { $0 is NSTextView }.forEach { $0.removeFromSuperview() }
         if let pdf = result.transposedPDF, let doc = PDFDocument(url: pdf) {
@@ -210,7 +219,9 @@ final class ReviewWindowController: NSWindowController {
             // 코드 차트: 원본 위에서 코드만 바꾼 그림
             let doc = PDFDocument()
             doc.insert(page, at: 0)
+            resultPixelWidth = img.representations.first.map { CGFloat($0.pixelsWide) } ?? img.size.width
             markChecks(on: page, image: img)
+            drawMarks(on: page)
             pdfView.document = doc
         } else if let t = result.transposed, let text = try? String(contentsOf: t, encoding: .utf8) {
             // 코드 차트: PDF가 없으니 텍스트를 그대로 보여 준다
@@ -243,6 +254,154 @@ final class ReviewWindowController: NSWindowController {
             let place = "Line \(c.staff)" + (c.measure > 0 ? ", bar \(c.measure)" : "")
             a.contents = (c.fixed ? "Fixed · " : "") + "\(place): \(c.found)" + (c.expected.isEmpty ? "" : " → should be \(c.expected)") + " (\(c.source == "check" ? "self-check" : c.source))"
             page.addAnnotation(a)
+        }
+    }
+
+    // MARK: 제자리 이조 — 결과에 고칠 곳 찍기
+
+    /// 결과 쪽 좌표 → 원본 그림 픽셀 (위가 0)
+    private func imagePoint(_ p: NSPoint, page: PDFPage) -> NSPoint {
+        let b = page.bounds(for: .mediaBox)
+        let k = b.width / max(1, resultPixelWidth)
+        return NSPoint(x: p.x / k, y: (b.height - p.y) / k)
+    }
+
+    private func resultClicked(at pagePoint: NSPoint) {
+        guard result.isInPlace, let page = pdfView.document?.page(at: 0), resultPixelWidth > 0 else { return }
+        let ip = imagePoint(pagePoint, page: page)
+        let menu = NSMenu()
+        // 노란 상자 안: 설명과, AI가 맞는 코드를 알려 줬으면 그대로 고치기
+        if let c = result.checks.first(where: { !$0.fixed && $0.box.count == 4 && ip.x >= $0.box[0] - 4 && ip.x <= $0.box[2] + 4
+                                               && ip.y >= $0.box[1] - 4 && ip.y <= $0.box[3] + 4 }) {
+            let info = NSMenuItem(title: "\(c.found) → \(c.expected)", action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
+            if c.kind == "chord", let sug = Self.chordSuggestion(c.expected) {
+                menu.addItem(item("Use \(sug) here") { [weak self] in self?.addMark(["kind": "chord", "text": sug], at: ip) })
+            }
+            menu.addItem(.separator())
+        }
+        menu.addItem(item("This chord should be…") { [weak self] in self?.askChord(at: ip) })
+        menu.addItem(.separator())
+        menu.addItem(item("Move this note up a step") { [weak self] in self?.addMark(["kind": "shift", "steps": 1], at: ip) })
+        menu.addItem(item("Move this note down a step") { [weak self] in self?.addMark(["kind": "shift", "steps": -1], at: ip) })
+        menu.addItem(item("This note was not moved") { [weak self] in self?.addMark(["kind": "not_moved"], at: ip) })
+        menu.addItem(item("This is not a note (rest or symbol)") { [weak self] in self?.addMark(["kind": "not_a_note"], at: ip) })
+        if let e = NSApp.currentEvent { NSMenu.popUpContextMenu(menu, with: e, for: pdfView) }
+    }
+
+    /// AI가 적은 '있어야 할 것'에서 코드 이름만 (예: "A/B" 또는 "F#m7, one step higher" → F#m7)
+    static func chordSuggestion(_ s: String) -> String? {
+        let pattern = "^[A-G][#b♯♭]?(m|maj|min|sus|add|dim|aug|[0-9]|\\+|°|ø)*(/[A-G][#b♯♭]?)?$"
+        return s.split(whereSeparator: { " ,;()\"'".contains($0) }).map(String.init)
+            .first { $0.range(of: pattern, options: .regularExpression) != nil }
+    }
+
+    private final class Action: NSObject {
+        let run: () -> Void
+        init(_ run: @escaping () -> Void) { self.run = run }
+        @objc func fire() { run() }
+    }
+    private var actions: [Action] = []
+    private func item(_ title: String, _ run: @escaping () -> Void) -> NSMenuItem {
+        let a = Action(run)
+        actions.append(a)
+        let i = NSMenuItem(title: title, action: #selector(Action.fire), keyEquivalent: "")
+        i.target = a
+        return i
+    }
+
+    private func askChord(at ip: NSPoint) {
+        let alert = NSAlert()
+        alert.messageText = "What should this chord be?"
+        alert.informativeText = "Type the chord in the new key, for example F#m7 or A/C#."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Mark")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let t = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        addMark(["kind": "chord", "text": t], at: ip)
+    }
+
+    private func addMark(_ m: [String: Any], at ip: NSPoint) {
+        var m = m
+        m["x"] = Double(ip.x)
+        m["y"] = Double(ip.y)
+        marks.append(m)
+        if let page = pdfView.document?.page(at: 0) { drawMarks(on: page) }
+        updateMarkButtons()
+    }
+
+    private func updateMarkButtons() {
+        applyMarksButton.isHidden = marks.isEmpty
+        clearMarksButton.isHidden = marks.isEmpty
+        applyMarksButton.title = "Fix \(marks.count) Marked Place\(marks.count == 1 ? "" : "s")"
+    }
+
+    /// 찍은 곳은 파란 상자로 (설명은 마우스를 올리면)
+    private func drawMarks(on page: PDFPage) {
+        for a in page.annotations where a.userName == "mark" { page.removeAnnotation(a) }
+        let b = page.bounds(for: .mediaBox)
+        let k = b.width / max(1, resultPixelWidth)
+        for m in marks {
+            guard let x = m["x"] as? Double, let y = m["y"] as? Double else { continue }
+            let r = NSRect(x: CGFloat(x) * k - 9, y: b.height - CGFloat(y) * k - 9, width: 18, height: 18)
+            let a = PDFAnnotation(bounds: r, forType: .circle, withProperties: nil)
+            let border = PDFBorder()
+            border.lineWidth = 2.5
+            a.border = border
+            a.color = .systemBlue
+            a.userName = "mark"
+            switch m["kind"] as? String {
+            case "chord": a.contents = "Chord → \(m["text"] as? String ?? "")"
+            case "shift": a.contents = (m["steps"] as? Int ?? 0) > 0 ? "Move up a step" : "Move down a step"
+            case "not_moved": a.contents = "Note was not moved"
+            default: a.contents = "Not a note"
+            }
+            page.addAnnotation(a)
+        }
+    }
+
+    @objc private func clearMarks() {
+        marks.removeAll()
+        if let page = pdfView.document?.page(at: 0) { drawMarks(on: page) }
+        updateMarkButtons()
+    }
+
+    @objc private func applyMarks() {
+        guard !marks.isEmpty else { return }
+        spinner.isHidden = false
+        spinner.startAnimation(nil)
+        summary.stringValue = "Transposing again with \(marks.count) correction\(marks.count == 1 ? "" : "s")…"
+        applyMarksButton.isEnabled = false
+        let marks = self.marks
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let r = try SheetOCR.rerunInPlace(self.original, semitones: self.semitones, marks: marks)
+                for old in [self.delivered] + self.extraPages { try? FileManager.default.removeItem(at: old) }
+                let made = try SheetOCR.deliverAll(r, next: self.original, semitones: self.semitones)
+                DispatchQueue.main.async {
+                    self.result = r
+                    self.delivered = made[0]
+                    self.extraPages = Array(made.dropFirst())
+                    self.load()                      // 표시는 남겨 둔다: 다음에 또 고치면 처음부터 같이 적용된다
+                    self.summary.stringValue = "Fixed \(marks.count) marked place\(marks.count == 1 ? "" : "s") → \(made[0].lastPathComponent)   ·   " + r.summary
+                    self.spinner.stopAnimation(nil); self.spinner.isHidden = true
+                    self.applyMarksButton.isEnabled = true
+                    if AppSettings.playSound { NSSound(named: "Glass")?.play() }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.summary.stringValue = "Failed: \(error.localizedDescription)"
+                    self.spinner.stopAnimation(nil); self.spinner.isHidden = true
+                    self.applyMarksButton.isEnabled = true
+                    NSSound(named: "Basso")?.play()
+                }
+            }
         }
     }
 
@@ -534,5 +693,19 @@ extension ReviewWindowController: NSSplitViewDelegate {
         let total = split.bounds.width - split.dividerThickness
         if total > 0, let left = split.subviews.first { splitRatio = left.frame.width / total }
         if applyFit(toTop: pendingTop) { pendingTop = false }
+    }
+}
+
+
+/// 결과 쪽을 누르면 그 자리(쪽 좌표)를 알려 주는 PDFView. 링크·주석 기본 동작은 그대로
+final class MarkablePDFView: PDFView {
+    var onClick: ((NSPoint) -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let onClick, let page = page(for: p, nearest: false) {
+            onClick(convert(p, to: page))
+            return
+        }
+        super.mouseDown(with: event)
     }
 }

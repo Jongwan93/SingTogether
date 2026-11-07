@@ -150,13 +150,23 @@ package enum SheetOCR {
         return try invoke(input: input, semitones: semitones, out: out, work: work)
     }
 
+    /// 제자리 이조를 결과 창에서 표시한 곳대로 고쳐 다시 (표시는 원본 그림 픽셀 좌표의 JSON 목록, `--fixes`).
+    package static func rerunInPlace(_ input: URL, semitones: Int, marks: [[String: Any]]) throws -> Result {
+        let work = workDirectory(for: input)
+        let out = work.appendingPathComponent(input.deletingPathExtension().lastPathComponent + ".musicxml")
+        let file = work.appendingPathComponent("marks.json")
+        try JSONSerialization.data(withJSONObject: marks, options: [.prettyPrinted]).write(to: file)
+        return try invoke(input: input, semitones: semitones, out: out, work: work, fixes: file)
+    }
+
     /// 사용자가 고친 압축 텍스트로 다시 만들기 (인식 없이 바로 이조·렌더링).
     /// 코드 차트면 source(원본 그림)를 주어 그 위에 코드를 다시 쓴다. font는 코드 글꼴 (nil = 자동).
     package static func rerun(text: URL, semitones: Int, source: URL? = nil, font: String? = nil) throws -> Result {
         try invoke(input: text, semitones: semitones, out: nil, work: text.deletingLastPathComponent(), source: source, font: font)
     }
 
-    private static func invoke(input: URL, semitones: Int, out: URL?, work: URL, source: URL? = nil, font: String? = nil) throws -> Result {
+    private static func invoke(input: URL, semitones: Int, out: URL?, work: URL, source: URL? = nil, font: String? = nil,
+                               fixes: URL? = nil) throws -> Result {
         guard let tool = locate() else { throw Failure.notInstalled }
         // 로그인 확인에 실패한 AI는 다시 한 번 확인해 보고, 그래도 안 되면 Apple Vision만 쓴다
         var reader = llm
@@ -166,6 +176,7 @@ package enum SheetOCR {
         if Preferences.inPlace, out != nil, extensions.contains(input.pathExtension.lowercased()) {
             args.append("--inplace")
             if !Preferences.checkResult { args.append("--no-audit") }
+            if let fixes { args += ["--fixes", fixes.path] }
         }
         if let out { args += ["--out", out.path] }
         if let source { args += ["--source", source.path] }
