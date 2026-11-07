@@ -348,6 +348,13 @@ def _tight(ink: np.ndarray, c: Chord, pad: int = 2) -> tuple[int, int, int, int]
             rows_in = (labels[max(0, int(c.y0) - Y0):int(c.y1) - Y0 + 1] == i).sum()
             if min(x + cw, cx1) - max(x, cx0) < 0.5 * cw or rows_in < 0.3 * area:
                 continue
+        # 거꾸로, 상자 위에 얹힌 다른 글(이 세상 마지막 줄: A♭ 위의 작은 "Coda")은 잉크 대부분이 상자 위에 있고 밑끝만 닿는다.
+        # 윗첨자(E⁷·Esus⁴의 숫자)도 위에 있지만 늘 오른쪽 끝이라, 상자 왼쪽 55% 위에 있는 것만 뺀다
+        if (sy + sh < int(c.y0) - Y0 + 0.3 * (c.y1 - c.y0) and cw <= 1.5 * (cx1 - cx0) + 4
+                and x + cw / 2 < cx0 + 0.55 * (cx1 - cx0)):
+            rows_in = (labels[max(0, int(c.y0) - Y0):int(c.y1) - Y0 + 1] == i).sum()
+            if rows_in < 0.25 * area:
+                continue
         # 상자보다 훨씬 넓은 성분은 글자가 아니라 밑의 빔·기둥 묶음(글자가 거기 붙기도 한다): 원래 상자 열 안쪽만 쓴다
         # (통째로 넣으면 상자가 옆 글자(1.3. 괄호)까지 자라고, 빼면 빔에 붙은 /D가 사라진다)
         (wide if cw > 1.5 * (cx1 - cx0) + 4 else keep).add(i)

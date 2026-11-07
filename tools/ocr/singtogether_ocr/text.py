@@ -37,18 +37,25 @@ class TextBox:
     def cx(self) -> float: return (self.x0 + self.x1) / 2
 
 
+_EXTENSIONS = {"2", "4", "5", "6", "7", "9", "11", "13", "69"}
+
+
 def is_chord(s: str) -> bool:
     m = CHORD_RE.match(s)
-    return bool(m) and bool(QUALITY_RE.match(m.group(3)))
+    # 숫자는 코드에 쓰는 것만 (이 세상의 부요함보다: "☩ 1.3." 도돌이 번호를 A21233으로 읽어 B²¹²³³을 써 넣었다)
+    return bool(m) and bool(QUALITY_RE.match(m.group(3))) and all(d in _EXTENSIONS for d in re.findall(r"\d+", m.group(3)))
 
 
 def normalize_chord(s: str) -> str:
     s = s.strip().translate(_FIXES).replace(" ", "")
-    s = re.sub(r"^[^A-Ga-g]+", "", s)                         # 괄호 번호("2.C2"), 점 등 앞쪽 찌꺼기
+    # 괄호 번호("2.C2"), 점, 마디줄을 l·I로 읽은 것 등 앞쪽 찌꺼기. 다른 글자는 지우지 않는다: 지우면 "time"이 "e" → E 코드가
+    # 된다 (주 이름 찬양: "last time to Coda"에 F#을 써 넣었다)
+    s = re.sub(r"^(?:[^A-Za-z]|[lIi](?=[A-Ga-g]))+", "", s)
     s = s[:1].upper() + s[1:]
     s = re.sub(r"^([A-G][#b]?)I([A-G])", r"\1/\2", s)         # D/F# 을 DIF# 로 읽는 경우
     s = re.sub(r"^([A-G][#b]?)[z°º]$", r"\g<1>2", s)          # 윗첨자 2 를 z·° 로 읽는 경우 (찬양 악보의 C2)
     s = re.sub(r"^([A-G])[°º]([2469])$", r"\1b\2", s)          # 윗첨자 ♭²를 °2로 읽는 경우 (나 주님의 기쁨 B♭²; dim은 °7만 쓴다)
+    s = re.sub(r"^([A-G][#b]?)1(2)$", r"\1\2", s)                # 윗첨자 ♭²의 ♭ 꼬리를 1로 읽는 경우 (B♭² → "Bb12"; 12는 코드 숫자가 아니다)
     s = re.sub(r"[-_.,]+$", "", s)                            # 끝에 붙는 선 조각
     s = re.sub(r"^([A-G][#b]?)(\d+)m(?!aj)", r"\1m\2", s)       # 7이 m 위에 쓰인 B⁷m 을 B7m 으로 읽는 경우 → Bm7
     s = re.sub(r"^([A-G][#b]?)(m?)sus(\d)/(\d)$", r"\1\2\3sus\4", s)   # ⁷₄가 msus 위에 쌓인 Gm⁷₄sus 를 Gmsus7/4 로 읽는 경우 → Gm7sus4
@@ -72,7 +79,8 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
     for sys_ in systems:
         y0, y1 = sys_.chord_band
         found, unread = [], []
-        for (bx0, by0, bx1, by1) in find_text_blobs(page.binary[y0:y1], il):
+        blobs = find_text_blobs(page.binary[y0:y1], il)
+        for (bx0, by0, bx1, by1) in blobs:
             box = (bx0, y0 + by0, bx1, y0 + by1)
             all_boxes.append(box)
             votes: dict[str, list[float]] = {}
@@ -95,14 +103,21 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
             if not votes and rescued:                                # 직접 읽은 유효한 코드가 하나도 없을 때만 쓴다
                 votes = rescued
             weak = not votes or max(len(v) for v in votes.values()) < 2 or all(re.fullmatch(r"[A-G][#b]?", c) for c in votes)
+            span = None
             if weak:
                 # 윗첨자가 붙은 코드(A♭, C², D⁷)는 통째로 읽으면 자주 틀린다("A6", "C'"). 큰 글자와 윗첨자를 나눠 읽는다
                 hint = next((m.group(0) for s in raw if (m := re.match(r"[A-G][#b]?", s))), None)
                 if (sup := read_superscript(page, box, il, hint)):
-                    votes = {sup[0]: [sup[1]]}
+                    votes, span = {sup[0]: [sup[1]]}, sup[2]
             if votes:
                 chord, confs = max(votes.items(), key=lambda kv: (len(kv[1]), max(kv[1])))
-                tb = TextBox(chord, max(confs) * len(confs) / len(_OCR_PASSES), *box)
+                tb = TextBox(chord, max(confs) * len(confs) / len(_OCR_PASSES), *(cut := _trim(page, box, span, il)))
+                if cut[2] < box[2]:
+                    # 잘라 낸 오른쪽은 따로 읽는다 (모든 능력: C♯sus⁴/G♯ 옆에 붙은 C♯이 한 덩어리였다; ☩ 같은 기호는 못 읽혀 빠진다)
+                    rest = (cut[2] + int(0.25 * il), box[1], box[2], box[3])
+                    nz = np.nonzero((page.binary[rest[1]:rest[3], rest[0]:rest[2]] < 128).any(axis=1))[0]
+                    if len(nz):
+                        unread.append((rest[0], rest[1] + int(nz[0]), rest[2], rest[1] + int(nz[-1]) + 1))
                 found.append(tb)
                 kept.append(tb)
             else:
@@ -114,7 +129,18 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
             ref_h = float(np.median([b.y1 - b.y0 for b in found]))
             for box in unread:
                 bh = box[3] - box[1]
-                if abs(box[1] - ref_y0) > 0.35 * ref_h or not 0.7 <= bh / ref_h <= 1.4:
+                if abs(box[1] - ref_y0) > 0.35 * ref_h or not 0.5 <= bh / ref_h <= 1.4:
+                    continue
+                # 띠 윗선에 닿은 덩어리는 코드가 띠보다 높이 쓰여 윗부분이 잘린 것이다 (이 세상의 부요함보다 마지막 줄: Coda의 A♭은
+                # ♭이 통째로 띠 위에 있다). 나눠 읽기에는 위로 1.2il, 오른쪽으로 0.6il 넓혀 보여 준다 (지울 상자는 덩어리 그대로)
+                wide = (box[0], max(0, box[1] - int(1.2 * il)), box[2] + int(0.6 * il), box[3]) if box[1] <= y0 + 1 else box
+                if bh / ref_h < 0.7:
+                    # 다른 코드 덩어리보다 작은 것(페르마타가 떨어져 나간 Coda의 A♭)은 근음과 윗첨자가 둘 다 읽힐 때만 코드다
+                    # (띠 아래쪽 음표 토막을 "A"로 읽어 내지 않게)
+                    if (sup := read_superscript(page, wide, il)):
+                        tb = TextBox(sup[0], sup[1] * 0.9 / len(_OCR_PASSES), *_grow(box, sup[2]))
+                        found.append(tb)
+                        kept.append(tb)
                     continue
                 for reps in (3, 5):
                     if (tb := read_tiled(page, box, il, CHORD_VOCAB, reps)) and is_chord(chord := normalize_chord(tb.text)):
@@ -122,6 +148,11 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
                         found.append(tb)
                         kept.append(tb)
                         break
+                else:
+                    if wide != box and (sup := read_superscript(page, wide, il)):    # 윗부분이 잘린 덩어리 (붙임줄이 지나는 E♭)
+                        tb = TextBox(sup[0], sup[1] * 0.9 / len(_OCR_PASSES), *_grow(box, sup[2]))
+                        found.append(tb)
+                        kept.append(tb)
         found.sort(key=lambda b: b.x0)
         result.append(_merge_split_boxes(found, il))
     if debug_dir:
@@ -135,9 +166,10 @@ def read_chords(page: Page, systems: list[System], debug_dir: Path | None = None
 
 
 def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
-                     hint: str | None = None) -> tuple[str, float] | None:
+                     hint: str | None = None) -> tuple[str, float, tuple[int, int]] | None:
     """덩어리 안에서 큰 글자(근음)와 오른쪽 위의 작은 글자(윗첨자)를 나눠 각각 읽는다. 둘 다 있어야 결과를 준다.
-    hint: 통째로 읽었을 때 나온 근음 글자. 나눠 읽기가 실패하면 이것을 쓴다."""
+    hint: 통째로 읽었을 때 나온 근음 글자. 나눠 읽기가 실패하면 이것을 쓴다.
+    돌려주는 것: (코드, 확신, 읽은 조각들의 상자(쪽 좌표)) — 덩어리에 옆 기호가 붙어 있어도(D♭ ☩) 글자만 지우게"""
     x0, y0, x1, y1 = box
     crop = page.binary[y0:y1, x0:x1]
     n, labels, stats, _ = cv2.connectedComponentsWithStats((crop < 128).astype(np.uint8), connectivity=8)
@@ -156,7 +188,8 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
         return read_tiled(page, (x0 + cx, y0 + cy, x0 + cx + cw, y0 + cy + ch), il, words, reps)
 
     root = ocr(main, CHORD_VOCAB, reps=3) or ocr(main, CHORD_VOCAB, reps=5)
-    rm = re.match(r"([A-G])([#b]?)(.*)", normalize_chord(root.text)) if root else None
+    # 근음 조각만 읽었으니 앞의 찌꺼기("tA", "1A")는 버리고 첫 대문자부터 본다
+    rm = re.search(r"([A-G])([#b]?)(.*)", normalize_chord(root.text)) if root else None
     if not rm and hint:
         root, rm = TextBox(hint, 0.5, 0, 0, 0, 0), re.match(r"([A-G])([#b]?)(.*)", hint)
     if not rm:
@@ -165,31 +198,60 @@ def read_superscript(page: Page, box: tuple[int, int, int, int], il: float,
     quality = rest if re.fullmatch(r"(m|maj|min|sus\d?|dim|aug)?(/[A-G][#b]?)?", rest) else ""
     confs = [root.conf]
     digits = ""
+    used = [main]
     for i, c in sups:
         mask = labels[c[1]:c[1] + c[3], c[0]:c[0] + c[2]] == i
         if not acc and _is_flat_glyph(mask):
             acc = "b"
+            used.append(c)
             continue
         d = ocr(c, ["#", "2", "7", "9", "6", "4", "11", "13"])
         t = d.text.translate(_FIXES).strip() if d else ""
         if t == "#" and not acc:
             acc = "#"
+            used.append(c)
         elif re.sub(r"\D", "", t):
             digits += re.sub(r"\D", "", t)
             confs.append(d.conf)
+            used.append(c)
     if subs and not quality:
         q = ocr((subs[0][1][0], min(c[1] for _, c in subs), max(c[0] + c[2] for _, c in subs) - subs[0][1][0],
                  max(c[1] + c[3] for _, c in subs) - min(c[1] for _, c in subs)), ["m", "maj", "sus", "dim", "aug", "min"])
         if q and re.fullmatch(r"(m|maj|min|sus|dim|aug)", q.text.strip()):
             quality = q.text.strip()
+            used += [c for _, c in subs]
     if not acc and not digits and not quality:
         return None                                            # 윗첨자를 못 읽으면 지어내지 않는다
     bass = ""
     if "/" in quality:
         quality, bass = quality.split("/", 1)
         bass = "/" + bass
-    chord = letter + acc + quality + digits + bass
-    return (chord, min(confs)) if is_chord(chord) else None
+    chord = normalize_chord(letter + acc + quality + digits + bass)
+    span = (x0 + min(c[0] for c in used), y0 + min(c[1] for c in used),
+            x0 + max(c[0] + c[2] for c in used), y0 + max(c[1] + c[3] for c in used))
+    return (chord, min(confs), span) if is_chord(chord) else None
+
+
+TRIM_LOG: list = []
+
+
+def _grow(box: tuple[int, int, int, int], span: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """띠 윗선에서 잘린 덩어리를 넓혀 읽었으면, 읽은 조각(띠 위의 ♭)까지 상자에 넣는다 (옛 ♭이 지워지게)."""
+    return min(box[0], span[0]), min(box[1], span[1]), max(box[2], span[2]), max(box[3], span[3])
+
+
+def _trim(page: Page, box: tuple[int, int, int, int], span: tuple[int, int, int, int] | None, il: float) -> tuple[int, int, int, int]:
+    """나눠 읽기가 쓴 조각 오른쪽에 빈 틈(0.25il 넘게)을 두고 0.6il 넘는 잉크가 더 붙어 있으면(이 세상: D♭ 옆의 Coda 기호 ☩)
+    상자를 쓴 조각까지 줄인다 (상자째 지우면 기호도 지워진다). 틈 없이 이어진 것(A♭/c의 /c)은 글자라 둔다."""
+    x0, y0, x1, y1 = box
+    if not span or x1 - span[2] <= 0.6 * il:
+        return box
+    cols = (page.binary[y0:y1, span[2]:x1] < 128).any(axis=0)
+    ink = np.nonzero(cols)[0]
+    if not len(ink) or ink[0] < 0.25 * il or x1 - (span[2] + ink[0]) <= 0.6 * il:
+        return box
+    TRIM_LOG.append((box, span))
+    return x0, y0, span[2] + 2, y1
 
 
 def _merge_split_boxes(found: list[TextBox], il: float) -> list[TextBox]:
@@ -202,6 +264,12 @@ def _merge_split_boxes(found: list[TextBox], il: float) -> list[TextBox]:
             same = p.text == b.text or b.text.startswith(p.text) or p.text.startswith(b.text)
             if same and b.x0 <= p.x1 + 0.3 * il:
                 longer = b if len(b.text) > len(p.text) else p
+                shorter = p if longer is b else b
+                # 짧은 쪽이 제 글자 수보다 훨씬 넓으면 코드 조각이 아니라 옆 코드를 여백으로 읽어 온 다른 덩어리다
+                # (이 세상의 부요함보다: "☩ |1.3." 덩어리가 옆 A♭을 "A"로 읽어, 합친 상자에 새 코드가 Coda 기호 위에 써졌다)
+                if shorter.x1 - shorter.x0 > (len(shorter.text) + 1) * (shorter.y1 - shorter.y0):
+                    out[-1] = longer
+                    continue
                 out[-1] = TextBox(longer.text, max(p.conf, b.conf), min(p.x0, b.x0), min(p.y0, b.y0), max(p.x1, b.x1), max(p.y1, b.y1), longer.src)
                 continue
         out.append(b)
