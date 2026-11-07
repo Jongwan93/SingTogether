@@ -341,6 +341,13 @@ def _tight(ink: np.ndarray, c: Chord, pad: int = 2) -> tuple[int, int, int, int]
         x, _, cw, _, _ = stats[i]
         if min(x + cw, cx1) - max(x, cx0) < 0.15 * cw:
             continue
+        # 글자 아래쪽에 끝만 들어온 빔 토막(보혈을 지나 Em: 상자가 왼쪽 빔까지 자라 새 F♯m이 43px 왼쪽 빔 위에 써졌다)은 뺀다.
+        # 상자 가운데보다 아래에서 시작하고, 상자 열 밖이 더 넓거나 잉크 대부분이 상자 밑이다. 옆이 잘린 글자(C♯의 C)는 위에서 시작한다
+        _, sy, _, sh, area = stats[i]
+        if sy > (c.y0 + c.y1) / 2 - Y0 and cw <= 1.5 * (cx1 - cx0) + 4:   # 넓은 덩어리는 아래에서 상자 열 안쪽만 쓴다
+            rows_in = (labels[max(0, int(c.y0) - Y0):int(c.y1) - Y0 + 1] == i).sum()
+            if min(x + cw, cx1) - max(x, cx0) < 0.5 * cw or rows_in < 0.3 * area:
+                continue
         # 상자보다 훨씬 넓은 성분은 글자가 아니라 밑의 빔·기둥 묶음(글자가 거기 붙기도 한다): 원래 상자 열 안쪽만 쓴다
         # (통째로 넣으면 상자가 옆 글자(1.3. 괄호)까지 자라고, 빼면 빔에 붙은 /D가 사라진다)
         (wide if cw > 1.5 * (cx1 - cx0) + 4 else keep).add(i)
@@ -486,6 +493,7 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     h, w = ink.shape
     font_path = FONTS[font_name]
     LOG.clear()
+    draw.erased = []                                       # erase_box로 통째로 지운 상자들 (부르는 쪽이 상자에 휩쓸린 오선·머리를 되살린다)
     boxes = []
     for c in chords:
         t = _tight(ink, c)
@@ -538,6 +546,7 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
         m = np.zeros((h, w), np.uint8)
         if erase_box:
             m[max(0, y0 - 2):min(h, y1 + 2), max(0, x0 - 2):min(w, x1 + 2)] = 1
+            draw.erased.append((max(0, x0 - 2), max(0, y0 - 2), min(w, x1 + 2), min(h, y1 + 2)))
         else:
             m[y0:y1, x0:x1] = ink[y0:y1, x0:x1]
             m = cv2.dilate(m, np.ones((3, 3), np.uint8))

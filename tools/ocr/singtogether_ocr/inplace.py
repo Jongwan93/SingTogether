@@ -1824,13 +1824,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 forced[id(hit)] = ftext
     rep.state.update(page=page, systems=systems, il=il, plans_all=plans_all, chord_boxes=chord_boxes, keysigs=keysigs, read=read)
     try:
+        before_chords = img.copy()
         rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced)
-        # 코드는 상자째 지우고 다시 쓴다: 코드 바로 밑까지 올라간 머리가 그 상자에 들면 지워진다 (이 세상 Fm 밑의 2분음표).
-        # 상자에 걸린 머리만 다시 그린다 (새 글자 위에 겹쳐도 원래 악보도 그렇게 붙어 있었다)
-        for _, x0, y0, x1, y1, *_ in getattr(_rewrite_chords, "drawn", []):
-            for hx_, hy_, hw_, hh_, hollow_ in drawn_heads:
-                if x0 - 3 <= hx_ + hw_ / 2 and hx_ - hw_ / 2 <= x1 + 3 and y0 - 3 <= hy_ + hh_ / 2 and hy_ - hh_ / 2 <= y1 + 3:
-                    draw_head(img, hx_, hy_, hw_, hh_, hollow_, il)
+        _restore_after_chords(img, before_chords, systems, ink, drawn_heads, il)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
         rep.notes_.append(f"chords not rewritten: {str(e).splitlines()[0][:120]}")
     # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄)
@@ -2025,6 +2021,63 @@ def compose_output(page, img: np.ndarray, src: Path) -> np.ndarray:
     final = color.copy()
     final[mask] = img[mask][:, None]
     return final
+
+
+def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.ndarray, drawn_heads, il: float) -> None:
+    """코드는 상자째 지우고 다시 쓴다 (흐린 그림의 회색 테 때문). 상자는 글자에 붙은 잉크까지 자라서 오선 줄·머리·기둥·이음줄도
+    같이 지워졌다 (이 세상: 맨 윗줄에 붙은 코드 11곳에서 줄이 끊기고, C7 밑 머리가 반만 남았다). 코드 쓰기가 밝게 만든 점 중
+    옛 글자가 아닌 것만 되돌린다. 새 글자는 더 어두워서 np.minimum에 그대로 남는다."""
+    from . import chordoverlay
+    region = np.zeros(img.shape, bool)
+    for x0, y0, x1, y1 in getattr(chordoverlay.draw, "erased", []):
+        region[y0:y1, x0:x1] = True
+    lit = region & (img.astype(np.int16) - before.astype(np.int16) > 40)
+    if not lit.any():
+        return
+    # 1. 오선 줄 행 (폭의 절반 넘게 검은 행): 옛 글자가 줄에 걸친 점도 줄 자리라 되돌려도 된다
+    rows = np.zeros(img.shape[0], bool)
+    for sys_ in systems:
+        st = sys_.staff
+        for y in st.lines:
+            for yy in range(max(0, y - 6), min(img.shape[0], y + 7)):
+                if ink[yy, st.left:st.right].mean() >= 0.5:
+                    rows[yy] = True
+                    seg = slice(st.left, st.right)
+                    m = lit[yy, seg]
+                    img[yy, seg][m] = np.minimum(img[yy, seg][m], before[yy, seg][m])
+    # 2. 줄 행을 뺀 옛 잉크 덩어리 중 지운 상자 밖으로 4분의 1 넘게 나가는 것 (머리·기둥·이음줄·빔). 옛 글자는 상자 안에 다 들어
+    # 있어 밖으로 안 나간다 (새 글자에 덮여 안 밝아진 점도 상자 안이다). 글자에 붙은 머리처럼 거의 다 안에 든 것은 그대로 둔다
+    bink = (before < 128)
+    bink[rows] = False
+    ys, xs = np.nonzero(lit)
+    pad = int(2 * il)
+    Y0, Y1, X0, X1 = max(0, ys.min() - pad), ys.max() + pad + 1, max(0, xs.min() - pad), xs.max() + pad + 1
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(bink[Y0:Y1, X0:X1].astype(np.uint8), connectivity=8)
+    sub_lit = lit[Y0:Y1, X0:X1]
+    hit = np.bincount(labels[region[Y0:Y1, X0:X1]], minlength=n)
+    tot = np.bincount(labels.ravel(), minlength=n)
+    keep = np.zeros(n, bool)
+    keep[1:] = (np.bincount(labels[sub_lit], minlength=n)[1:] > 0) & (tot[1:] - hit[1:] > 0.25 * tot[1:])
+    # 옛 글자가 기둥·빔에 붙어 있으면 덩어리째 밖으로 나가 글자까지 살아난다 (지금은 엘리야: B 밑에 A, F♯ 밑에 E).
+    # Vision이 글자를 읽은 상자 안은 되살리지 않는다 (그 안의 옮긴 머리는 3에서 다시 그린다)
+    letters = np.zeros(img.shape, bool)
+    for _, x0, y0, x1, y1, old, new_ in getattr(_rewrite_chords, "drawn", []):
+        if new_ and new_ != old:
+            letters[max(0, int(y0) - 1):int(y1) + 2, max(0, int(x0) - 1):int(x1) + 2] = True
+    # Vision 상자가 글자 일부만 잡으면(지금은 엘리야 E: 아래 절반) 글자가 지운 상자 밖으로 나가 기둥처럼 보인다.
+    # 글자만 한 덩어리가 글자 상자에 걸리면 옛 글자다 (빔·긴 이음줄처럼 큰 것은 글자에 걸려도 되살린다)
+    on_letter = np.bincount(labels[letters[Y0:Y1, X0:X1]], minlength=n) > 0
+    small = (stats[:, cv2.CC_STAT_WIDTH] <= 3 * il) & (stats[:, cv2.CC_STAT_HEIGHT] <= 2.5 * il)
+    keep &= ~(on_letter & small)
+    m = keep[labels] & sub_lit & ~letters[Y0:Y1, X0:X1]
+    sub, sb = img[Y0:Y1, X0:X1], before[Y0:Y1, X0:X1]
+    sub[m] = np.minimum(sub[m], sb[m])
+    # 3. 새로 그린 머리 중 지운 자리에 걸린 것은 다시 그린다 (옮긴 머리는 옛 잉크가 아니라 1·2에서 안 돌아온다)
+    for hx_, hy_, hw_, hh_, hollow_ in drawn_heads:
+        y0, y1 = max(0, int(hy_ - hh_ / 2)), int(hy_ + hh_ / 2) + 1
+        x0, x1 = max(0, int(hx_ - hw_ / 2)), int(hx_ + hw_ / 2) + 1
+        if lit[y0:y1, x0:x1].any():
+            draw_head(img, hx_, hy_, hw_, hh_, hollow_, il)
 
 
 def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes, forced: dict | None = None) -> int:
