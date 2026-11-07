@@ -1384,7 +1384,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     """src 그림을 semitones만큼 제자리에서 이조해 out에 쓴다 (out 확장자대로 PNG/JPEG). 작업은 ingest가 키운 쪽 크기로 한다.
     work: AI 답을 캐시하는 폴더 (같은 그림을 다시 옮길 때 다시 묻지 않는다).
     fixes: 검수(audit)나 사용자가 정한 수정 — {"add_heads": [(오선, x, y, 속빔|None)], "drop_heads": [(오선, x, y)],
-           "shift_heads": [(오선, x, y, 칸)], "chords": [(오선, x, y, 새 코드)], "add_chords": [(오선, x0, y0, x1, y1,옛 코드[, 새 코드])]}
+           "shift_heads": [(오선, x, y, 칸)], "drop_box": [(오선, x0, y0, x1, y1)], "shift_box": [(오선, x0, y0, x1, y1, 칸)], "chords": [(오선, x, y, 새 코드)], "add_chords": [(오선, x0, y0, x1, y1,옛 코드[, 새 코드])]}
            (작업 크기 좌표). 첫 판단을 그 자리에서만 바꾼다."""
     fixes = fixes or {}
     page = ingest.prepare(src, debug_dir=debug_dir)[0]
@@ -1567,6 +1567,16 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 if near:
                     h = min(near, key=lambda h: (h.x - fx) ** 2 + (h.y - fy) ** 2)
                     h.step_bias = getattr(h, "step_bias", 0) + int(fsteps)
+        # 사용자가 네모로 고른 곳: 안의 머리를 모두 빼거나 모두 옮긴다 (가운데가 상자 안이면)
+        pad = 0.3 * il
+        for fsi, x0, y0, x1, y1 in fixes.get("drop_box", []):
+            if fsi == si:
+                heads = [h for h in heads if not (x0 - pad <= h.x <= x1 + pad and y0 - pad <= h.y <= y1 + pad)]
+        for fsi, x0, y0, x1, y1, fsteps in fixes.get("shift_box", []):
+            if fsi == si:
+                for h in heads:
+                    if x0 - pad <= h.x <= x1 + pad and y0 - pad <= h.y <= y1 + pad:
+                        h.step_bias = getattr(h, "step_bias", 0) + int(fsteps)
         heads.sort(key=lambda h: h.x)
         bars = sorted(notes.find_barlines(page.binary, st, il, heads))
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)

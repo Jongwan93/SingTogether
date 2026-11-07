@@ -1,12 +1,11 @@
-"""제자리 이조의 검수: 첫 결과를 원본과 대조해 틀린 곳을 찾고, 근거가 둘 맞는 곳은 고쳐 한 번 더 돌리고, 나머지는 표시로 남긴다.
+"""제자리 이조의 검수: 첫 결과를 원본과 대조해 틀린 곳을 찾고, 근거가 있는 곳은 고쳐 한 번 더 돌린다. 사용자가 결과 창에서 찍은
+표시(코멘트는 AI가 표시로 바꾼다)도 여기서 이조기의 fixes로 바꾼다.
 
-검사는 셋이다.
-  1. 안 움직인 음표 (AI 없이): 이조하면 모든 머리가 움직이므로, 원본과 결과의 같은 자리에 같은 머리 모양이 그대로 남은 것은
+검사는 둘이다 (AI 없이).
+  1. 안 움직인 음표: 이조하면 모든 머리가 움직이므로, 원본과 결과의 같은 자리에 같은 머리 모양이 그대로 남은 것은
      검출기가 놓친 머리다. 그 자리에 머리를 더해 다시 돌린다.
-  2. 코드 다시 읽기 (AI 없이): 결과 그림의 코드 띠를 Vision으로 다시 읽어, 써야 했던 이름과 근음이 다르면 표시한다. 옛 코드가
-     그대로 읽히는데 그 자리에 그린 코드가 없으면 그 코드를 더해 다시 돌린다.
-  3. AI 대조 (AI가 있을 때): 원본과 결과를 오선 한 줄씩 위아래로 붙여 틀린 곳을 적게 한다. AI만의 판단으로는 고치지 않고, 그 마디에
-     로컬 근거가 있을 때만 고친다 (쉼표를 음표로 옮긴 곳: 그 마디의 기둥 없는 머리가 하나뿐일 때 뺀다). 나머지는 표시로 남긴다.
+  2. 코드 다시 읽기: 결과 그림의 코드 띠를 Vision으로 다시 읽어, 써야 했던 이름과 근음이 다르면 적어 둔다.
+AI가 오선 한 줄씩 대조하던 단계는 뺐다: 의심만 많고(한 곡에 7곳) 근거가 맞아 고친 것은 없었는데 1분이 걸렸다.
 
 결과는 Issue 목록: 종류, 오선·마디(1부터), 원본 그림 좌표의 상자, 무엇이 보이고 무엇이어야 하는지, 고쳤는지.
 """
@@ -14,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -64,20 +62,9 @@ def _to_original(state: dict, box) -> tuple[int, int, int, int]:
     return tuple(int(round(v / k)) for v in box)
 
 
-def _measure_box(state: dict, si: int, m: int, chord: bool = False) -> tuple[int, int, int, int]:
-    sys_ = state["systems"][si]
-    st, il = sys_.staff, state["il"]
-    e = _measure_edges(state, si)
-    x0, x1 = (e[m - 1], e[m]) if 1 <= m < len(e) else (e[0], e[-1])
-    y0 = sys_.chord_band[0] if chord else st.top - 1.5 * il
-    y1 = st.top if chord else st.bottom + 1.5 * il
-    return _to_original(state, (x0, y0, x1, y1))
-
-
-# MARK: 1. 안 움직인 음표
-
-def unmoved_heads(state: dict) -> list[tuple[int, float, float, bool]]:
-    """(오선, x, y, 속빔): 원본과 결과 모두에 같은 자리 같은 모양으로 남은 머리. 오선을 뺀 '둘 다 검은' 잉크에서 머리 검출을 돌린다."""
+def unmoved_heads(state: dict, loose: bool = False) -> list[tuple[int, float, float, bool]]:
+    """(오선, x, y, 속빔): 원본과 결과 모두에 같은 자리 같은 모양으로 남은 머리. 오선을 뺀 '둘 다 검은' 잉크에서 머리 검출을 돌린다.
+    loose: 사용자가 '안 움직였다'고 고른 곳에서만 쓴다 — 기둥이 곧지 않아도(흐린 기둥) 머리로 본다."""
     page, il = state["page"], state["il"]
     orig = page.binary < 128
     res = state["result"] < 128
@@ -109,7 +96,7 @@ def unmoved_heads(state: dict) -> list[tuple[int, float, float, bool]]:
             if not (0.8 * il <= bw <= 1.6 * il and 0.75 * il <= bh <= 1.3 * il and area / (bw * bh) <= 0.88):
                 continue
             hx, hy = cen[i][0] + st.left, cen[i][1] + y0
-            if hx < min_x or not _straight_stem(orig, hx, hy, il):
+            if hx < min_x or not (loose or _straight_stem(orig, hx, hy, il)):
                 continue
             # 16분음표의 짧은 둘째 빔 토막: 직사각형이라 폭을 다 채우는 줄이 높이의 30% 넘는다. 타원 머리는 가운데 몇 줄뿐
             comp = (lab_[by:by + bh, bx:bx + bw] == i)
@@ -192,29 +179,10 @@ def reread_chords(state: dict) -> tuple[list[tuple], list[tuple]]:
 
 # MARK: 3. AI 대조
 
-PROMPT = """The image {image} has two strips. The top strip (ORIGINAL) is one line of a lead sheet. The bottom strip (TRANSPOSED) is the same line after a program moved every note, the key signature and every chord symbol __DIR__ __SEMI__ semitones, from __OLD__ major to __NEW__ major, directly on the picture. Every note head must move by exactly __STEPS__ letter names __DIR__, with sharps or flats as the new key requires. Everything else (lyrics, rests, barlines, ties, slurs, text) should be unchanged apart from slurs and ties moving with their notes.
-
-Check the bottom strip against the top strip and list every mistake the program made. Kinds of mistakes:
-- CHORD: a chord symbol that is not the original chord moved __DIR__ __SEMI__ semitones (still the old chord, a wrong letter or quality), or is garbled, doubled or overlapping something.
-- NOTE_NOT_MOVED: a note head that is still at its original position.
-- NOTE_WRONG: a note head moved to the wrong line or space.
-- NOT_A_NOTE: a rest or other symbol that was turned into a note head, or a note head where the original has none.
-- ACCIDENTAL: a sharp, flat or natural that should not be there, or one that is missing.
-- KEY: the key signature is wrong or has leftover marks.
-- MARK: leftover pieces, smudges or erased parts of other symbols.
-
-Count measures from the left of this line, starting at 1. Write one line per mistake, exactly in this form, and nothing else:
-<measure> | <kind> | <what the bottom strip shows> | <what it should be>
-If there are no mistakes, write exactly: NONE"""
-
-KINDS = {"CHORD": "chord", "NOTE_NOT_MOVED": "note_not_moved", "NOTE_WRONG": "note_wrong", "NOT_A_NOTE": "not_a_note",
-         "ACCIDENTAL": "accidental", "KEY": "key", "MARK": "mark"}
-
-
-def pair_image(state: dict, si: int, orig: np.ndarray, res: np.ndarray) -> np.ndarray:
+def pair_image(state: dict, si: int, orig: np.ndarray, res: np.ndarray, box=None) -> np.ndarray:
     """오선 한 줄: 위 원본, 아래 결과. 사용자가 보는 **원본 크기의 결과 파일**에서 잘라 키운다 (폭 2000px 안으로).
     작업 크기(흐린 캡처를 4–5배 키운 것)를 보내면 원본의 흐린 기둥은 옅고 새로 그린 머리·조표만 진해서, AI가 '기둥이 지워졌다',
-    '조표가 뭉쳤다'고 잘못 본다."""
+    '조표가 뭉쳤다'고 잘못 본다. box(원본 그림 좌표)를 주면 두 줄 모두 그 자리에 빨간 네모를 그린다 (컬러로 낸다)."""
     page, il = state["page"], state["il"]
     k = page.scale
     sys_ = state["systems"][si]
@@ -224,62 +192,24 @@ def pair_image(state: dict, si: int, orig: np.ndarray, res: np.ndarray) -> np.nd
     f = min(3.0, 2000 / a.shape[1])
     a = cv2.resize(a, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC if f > 1 else cv2.INTER_AREA)
     b = cv2.resize(b, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC if f > 1 else cv2.INTER_AREA)
+    white, black, sep = 255, 0, np.zeros((12, a.shape[1]), np.uint8)
+    if box is not None:
+        a, b = cv2.cvtColor(a, cv2.COLOR_GRAY2BGR), cv2.cvtColor(b, cv2.COLOR_GRAY2BGR)
+        r = (int(box[0] * f), int((box[1] - y0) * f)), (int(box[2] * f), int((box[3] - y0) * f))
+        for img in (a, b):
+            cv2.rectangle(img, *r, (0, 0, 255), 3)
+        white, black, sep = (255, 255, 255), (0, 0, 0), np.zeros((12, a.shape[1], 3), np.uint8)
 
     def lab(img, t):
-        img = cv2.copyMakeBorder(img, 40, 0, 0, 0, cv2.BORDER_CONSTANT, value=255)
-        return cv2.putText(img, t, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
-    return np.vstack([lab(a, "ORIGINAL"), np.zeros((12, a.shape[1]), np.uint8), lab(b, "TRANSPOSED")])
-
-
-def ai_review(state: dict, provider: str, work: Path, old_fifths: int, new_fifths: int, steps: int, out: Path) -> list[tuple]:
-    """[(오선, 마디, 종류, 보이는 것, 있어야 할 것)]. 같은 그림이면 답을 캐시에서 쓴다."""
-    from . import llm
-    semi = state["semitones"]
-    prompt = (PROMPT.replace("__DIR__", "up" if semi > 0 else "down").replace("__SEMI__", str(abs(semi)))
-              .replace("__OLD__", MAJOR_BY_FIFTHS[old_fifths + 6]).replace("__NEW__", MAJOR_BY_FIFTHS[new_fifths + 6])
-              .replace("__STEPS__", str(abs(steps))))
-    out_dir = work / "audit"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    orig = cv2.imdecode(np.fromfile(str(state["src"]), np.uint8), cv2.IMREAD_GRAYSCALE)
-    res = cv2.imdecode(np.fromfile(str(out), np.uint8), cv2.IMREAD_GRAYSCALE)
-    if orig is None or res is None or orig.shape != res.shape:
-        LOG.append(("ai-skip", "images differ in size"))
-        return []
-
-    def ask(si: int) -> tuple[int, str]:
-        img = pair_image(state, si, orig, res)
-        ok, buf = cv2.imencode(".png", img)
-        key = hashlib.sha1(buf.tobytes() + prompt.encode()).hexdigest()[:16]
-        png, ans = out_dir / f"{key}.png", out_dir / f"{key}.txt"
-        if ans.exists():
-            return si, ans.read_text()
-        buf.tofile(str(png))
-        try:
-            text_ = llm.ask(provider, prompt, png, timeout=600)
-        except Exception as e:                                 # 한 줄이 실패해도 나머지는 쓴다
-            LOG.append(("ai-fail", si, str(e)[:120]))
-            return si, ""
-        ans.write_text(text_)
-        return si, text_
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        answers = list(pool.map(ask, range(len(state["systems"]))))
-    found = []
-    for si, ans in answers:
-        for line in ans.splitlines():
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) < 4 or parts[1].upper() not in KINDS:
-                continue
-            m = int(re.match(r"\d+", parts[0]).group(0)) if re.match(r"\d+", parts[0]) else 0
-            found.append((si, m, KINDS[parts[1].upper()], parts[2], parts[3]))
-    return found
+        img = cv2.copyMakeBorder(img, 40, 0, 0, 0, cv2.BORDER_CONSTANT, value=white)
+        return cv2.putText(img, t, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, black, 2)
+    return np.vstack([lab(a, "ORIGINAL"), sep, lab(b, "TRANSPOSED")])
 
 
 # MARK: 수정 정하기
 
-def check(state: dict, rep, provider: str = "none", work: Path | None = None, out: Path | None = None) -> tuple[list[Issue], dict]:
-    """첫 결과를 검사해 (문제 목록, 다시 돌릴 때 줄 fixes)."""
+def check(state: dict) -> tuple[list[Issue], dict]:
+    """첫 결과를 검사해 (문제 목록, 다시 돌릴 때 줄 fixes). AI 없이 그림만 본다 (AI 줄 대조는 의심만 많고 고치는 것이 없어 뺐다)."""
     LOG.clear()
     il = state["il"]
     issues: list[Issue] = []
@@ -301,36 +231,92 @@ def check(state: dict, rep, provider: str = "none", work: Path | None = None, ou
         issues.append(Issue("chord", si + 1, _measure_of(state, si, box[0]), _to_original(state, box),
                             f"{old} (not transposed)", "transposed", "check", "fixed"))
 
-    # 3. AI 대조
-    if provider != "none" and work is not None and out is not None:
-        from . import llm
-        label = llm.LABELS.get(provider, provider)
-        for si, m, kind, seen, want in ai_review(state, provider, work, rep.old_fifths, rep.new_fifths, rep.steps, out):
-            status = "flagged"
-            if kind == "not_a_note" and m:
-                e = _measure_edges(state, si)
-                if m < len(e):
-                    sys_, plans = state["plans_all"][si]
-                    loose = [p.head for p in plans if e[m - 1] <= p.head.x < e[m]
-                             and not (p.head.evidence and (p.head.evidence.stem or p.head.evidence.hollow))]
-                    if len(loose) == 1:                     # AI + 기둥 없는 머리 하나: 둘 다 맞으면 뺀다
-                        fixes["drop_heads"].append((si, loose[0].x, loose[0].y))
-                        status = "fixed"
-            if kind == "note_not_moved" and any(i.kind == "note_not_moved" and i.staff == si + 1 and i.measure == m for i in issues):
-                continue                                    # 로컬 검사가 이미 찾아 고쳤다
-            issues.append(Issue(kind, si + 1, m, _measure_box(state, si, m, chord=kind == "chord"), seen, want, label, status))
     return issues, fixes
+
+
+COMMENT_PROMPT = """The image {image} has two strips. The top strip (ORIGINAL) is one line of a lead sheet. The bottom strip (TRANSPOSED) is the same line after a program moved every note, the key signature and every chord symbol __DIR__ __SEMI__ semitones, from __OLD__ major to __NEW__ major, directly on the picture. The red box marks the same place on both strips.
+
+The user looked at the red box on the TRANSPOSED strip and wrote: "__TEXT__"
+
+Turn what the user wants into one of these corrections of what is inside the red box. Write exactly one line, in one of these forms, and nothing else:
+CHORD <name>: the chord symbol in the box should read <name> (in the new key, for example F#m7 or A/C#)
+UP <n>: the note heads in the box should be <n> letter names higher than they are now on the TRANSPOSED strip
+DOWN <n>: the note heads in the box should be <n> letter names lower than they are now on the TRANSPOSED strip
+NOT_MOVED: note heads in the box were left where they are on the ORIGINAL and must be moved like the others
+NOT_A_NOTE: something in the box was moved as a note head but is a rest or another symbol
+NONE: none of these does what the user asked"""
+
+
+def _mark_box(m: dict, k: float, il: float) -> tuple[float, float, float, float]:
+    """표시 → 작업 크기 상자. 네모로 고른 표시는 그 네모, 점은 그 둘레 머리 하나 크기."""
+    if m.get("box") and len(m["box"]) == 4:
+        x0, y0, x1, y1 = (float(v) * k for v in m["box"])
+        return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+    x, y = float(m.get("x", 0)) * k, float(m.get("y", 0)) * k
+    return x - 0.8 * il, y - 0.8 * il, x + 0.8 * il, y + 0.8 * il
+
+
+def read_comment(state: dict, rep, provider: str, work: Path, out: Path, m: dict) -> dict | None:
+    """사용자 코멘트 하나를 AI에게 보여 주고(빨간 네모를 친 원본·결과 한 줄) 표시 하나로 바꾼다. 모르겠으면 None."""
+    from . import llm
+    page, il = state["page"], state["il"]
+    k = page.scale
+    bx = _mark_box(m, k, il)
+    cy = (bx[1] + bx[3]) / 2
+    si = min(range(len(state["systems"])), key=lambda i: abs((state["systems"][i].staff.top + state["systems"][i].staff.bottom) / 2 - cy))
+    orig = cv2.imdecode(np.fromfile(str(state["src"]), np.uint8), cv2.IMREAD_GRAYSCALE)
+    res = cv2.imdecode(np.fromfile(str(out), np.uint8), cv2.IMREAD_GRAYSCALE)
+    if orig is None or res is None or orig.shape != res.shape:
+        return None
+    img = pair_image(state, si, orig, res, [v / k for v in bx])
+    semi = state["semitones"]
+    said = str(m.get("text", "")).replace('"', "'").replace("{", "(").replace("}", ")")[:400]
+    prompt = (COMMENT_PROMPT.replace("__DIR__", "up" if semi > 0 else "down").replace("__SEMI__", str(abs(semi)))
+              .replace("__OLD__", MAJOR_BY_FIFTHS[rep.old_fifths + 6]).replace("__NEW__", MAJOR_BY_FIFTHS[rep.new_fifths + 6])
+              .replace("__TEXT__", said))
+    out_dir = work / "audit"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ok, buf = cv2.imencode(".png", img)
+    key = hashlib.sha1(buf.tobytes() + prompt.encode()).hexdigest()[:16]
+    png, ans = out_dir / f"c-{key}.png", out_dir / f"c-{key}.txt"
+    if ans.exists():
+        answer = ans.read_text()
+    else:
+        buf.tofile(str(png))
+        try:
+            answer = llm.ask(provider, prompt, png, timeout=300)
+        except Exception as e:
+            LOG.append(("comment-fail", str(e)[:120]))
+            return None
+        ans.write_text(answer)
+    LOG.append(("comment", said, answer.strip()[:120]))
+    place = {key_: m[key_] for key_ in ("x", "y", "box") if key_ in m}
+    for line in answer.splitlines():
+        line = line.strip().strip("`*").strip()
+        if mm := re.match(r"CHORD\s*:?\s*(\S+)", line, re.I):
+            return {"kind": "chord", "text": mm.group(1).strip(".,"), **place}
+        if mm := re.match(r"(UP|DOWN)\s*:?\s*(\d+)", line, re.I):
+            n = int(mm.group(2)) * (1 if mm.group(1).upper() == "UP" else -1)
+            return {"kind": "shift", "steps": n, **place} if n else None
+        if re.match(r"NOT_MOVED", line, re.I):
+            return {"kind": "not_moved", **place}
+        if re.match(r"NOT_A_NOTE", line, re.I):
+            return {"kind": "not_a_note", **place}
+        if re.match(r"NONE", line, re.I):
+            return None
+    return None
 
 
 def user_fixes(src: Path, marks: list[dict]) -> dict:
     """결과 창에서 사용자가 찍은 표시(원본 그림 픽셀 좌표) → 이조기의 fixes (작업 크기 좌표, 오선 번호).
     표시: {"kind": "chord", "x", "y", "text"} / {"kind": "not_moved", "x", "y"} / {"kind": "not_a_note", "x", "y"} /
-          {"kind": "shift", "x", "y", "steps": ±1}. 점은 그 기호 위를 찍은 자리다."""
+          {"kind": "shift", "x", "y", "steps": ±1}. 점은 그 기호 위를 찍은 자리다. "box": [x0, y0, x1, y1]이 있으면 네모로 고른
+          곳이라 안의 것을 모두 고친다 (x, y는 그 가운데). 네모 안의 '안 움직였다'와 코멘트는 첫 판 결과가 있어야 해서 run이 다룬다."""
     from . import ingest, layout
     page = ingest.prepare(src)[0]
     systems = layout.find_systems(page)
     il, k = page.interline, page.scale
-    fixes: dict = {"add_heads": [], "drop_heads": [], "shift_heads": [], "chords": [], "add_chords": []}
+    fixes: dict = {"add_heads": [], "drop_heads": [], "shift_heads": [], "drop_box": [], "shift_box": [], "chords": [], "add_chords": []}
 
     def staff_of(y: float) -> int | None:
         best = None
@@ -347,20 +333,27 @@ def user_fixes(src: Path, marks: list[dict]) -> dict:
         si = staff_of(y)
         if si is None:
             continue
-        kind = m.get("kind")
-        if kind == "not_moved":
+        kind, boxed = m.get("kind"), bool(m.get("box"))
+        bx = _mark_box(m, k, il)
+        if kind == "not_moved" and not boxed:
             fixes["add_heads"].append((si, x, y, None))
         elif kind == "not_a_note":
-            fixes["drop_heads"].append((si, x, y))
+            fixes["drop_box" if boxed else "drop_heads"].append((si, *bx) if boxed else (si, x, y))
         elif kind == "shift" and int(m.get("steps", 0)):
-            fixes["shift_heads"].append((si, x, y, int(m["steps"])))
+            if boxed:
+                fixes.setdefault("shift_box", []).append((si, *bx, int(m["steps"])))
+            else:
+                fixes["shift_heads"].append((si, x, y, int(m["steps"])))
         elif kind == "chord" and m.get("text"):
             new = text.normalize_chord(str(m["text"]))
             fixes["chords"].append((si, x, y, new))
             # 그 자리에 코드 상자가 없을 때(옛 코드가 안 바뀐 채 남은 경우)를 위해 글자 덩어리로 상자를 만들어 둔다
             y0, y1 = systems[si].chord_band
             blobs = [(bx0, y0 + by0, bx1, y0 + by1) for bx0, by0, bx1, by1 in text.find_text_blobs(page.binary[y0:y1], il)]
-            hit = [b for b in blobs if b[0] - 0.3 * il <= x <= b[2] + 0.3 * il and b[1] - 0.5 * il <= y <= b[3] + 0.5 * il]
+            if boxed:
+                hit = [b for b in blobs if min(b[2], bx[2]) > max(b[0], bx[0]) and min(b[3], bx[3]) > max(b[1], bx[1])]
+            else:
+                hit = [b for b in blobs if b[0] - 0.3 * il <= x <= b[2] + 0.3 * il and b[1] - 0.5 * il <= y <= b[3] + 0.5 * il]
             if hit:
                 bx0, by0 = min(b[0] for b in hit), min(b[1] for b in hit)
                 bx1, by1 = max(b[2] for b in hit), max(b[3] for b in hit)
@@ -377,14 +370,52 @@ def run(src: Path, semitones: int, out: Path, llm_name: str = "none", debug_dir:
     """(사용자 표시대로 고쳐) 이조 → 검수 → (고칠 것이 있으면) 고쳐서 한 번 더. (마지막 Report, 문제 목록)."""
     from . import llm
     work = work or out.parent / ".singtogether-work"
-    given = user_fixes(src, marks) if marks else {}
+    marks = marks or []
+    later = [m for m in marks if m.get("kind") == "comment" or (m.get("kind") == "not_moved" and m.get("box"))]
+    given = user_fixes(src, [m for m in marks if m not in later]) if marks else {}
     rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work, fixes=given or None)
-    if not check_result or (not rep.steps and semitones % 12 == 0):
-        return rep, []
     provider = llm.pick(llm_name) if llm_name != "none" else "none"
-    if rep.state.get("ai") is None:                       # 첫 판에서 AI가 안 됐으면(한도·로그인) 검수도 AI 없이
+    if rep.state.get("ai") is None:                       # 첫 판에서 AI가 안 됐으면(한도·로그인) 검수·코멘트도 AI 없이
         provider = "none"
-    issues, fixes = check(rep.state, rep, provider, work, out)
+    issues: list[Issue] = []
+    if later:
+        # 첫 판 결과가 있어야 하는 표시: 네모 안의 안 움직인 머리(느슨하게 찾는다), 코멘트(AI가 표시로 바꾼다)
+        state, il, k = rep.state, rep.state["il"], rep.state["page"].scale
+        extra: dict = {"add_heads": []}
+        loose = None
+        for m in later:
+            bx = _mark_box(m, k, il)
+            si_ = min(range(len(state["systems"])), key=lambda i: abs((state["systems"][i].staff.top + state["systems"][i].staff.bottom) / 2 - (bx[1] + bx[3]) / 2))
+            where = _to_original(state, bx)
+            if m.get("kind") == "not_moved":
+                loose = unmoved_heads(state, loose=True) if loose is None else loose
+                hit = [h for h in loose if bx[0] <= h[1] <= bx[2] and bx[1] <= h[2] <= bx[3]]
+                extra["add_heads"] += hit
+                issues.append(Issue("note_not_moved", si_ + 1, _measure_of(state, si_, bx[0]), where, "marked as not moved",
+                                    f"{len(hit)} note{'s' if len(hit) != 1 else ''} found and moved", "you", "fixed" if hit else "flagged"))
+                continue
+            said = str(m.get("text", ""))
+            if provider == "none":
+                issues.append(Issue("comment", si_ + 1, _measure_of(state, si_, bx[0]), where, said, "comments need an AI reader", "you"))
+                continue
+            got = read_comment(state, rep, provider, work, out, m)
+            if got and got.get("kind") == "not_moved" and got.get("box"):
+                loose = unmoved_heads(state, loose=True) if loose is None else loose
+                extra["add_heads"] += [h for h in loose if bx[0] <= h[1] <= bx[2] and bx[1] <= h[2] <= bx[3]]
+            elif got:
+                extra = _merge(extra, user_fixes(src, [got]))
+            what = ("not understood" if not got else f"chord {got['text']}" if got["kind"] == "chord"
+                    else f"note {'up' if got['steps'] > 0 else 'down'} {abs(got['steps'])}" if got["kind"] == "shift"
+                    else got["kind"].replace("_", " "))
+            issues.append(Issue("comment", si_ + 1, _measure_of(state, si_, bx[0]), where, said, what,
+                                llm.LABELS.get(provider, provider), "fixed" if got else "flagged"))
+        if any(extra.values()):
+            given = _merge(given, extra)
+            rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work, fixes=given)
+    if not check_result or (not rep.steps and semitones % 12 == 0):
+        return rep, issues
+    found, fixes = check(rep.state)
+    issues += found
     if any(fixes.values()):
         rep = inplace.transpose_in_place(src, semitones, out, llm_name=llm_name, debug_dir=debug_dir, work=work,
                                          fixes=_merge(given, fixes))

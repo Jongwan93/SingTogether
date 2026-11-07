@@ -101,16 +101,15 @@ count, so the app takes the key from the chord symbols, then from the AI's readi
 original.
 
 **The result is checked before you see it.** The app compares the result with the original: a note still sitting at its
-old position is a note the detector missed, so it is added and the score is moved again; the chord symbols of the result
-are read back and compared with what should have been written. With an AI reader signed in, the AI also looks at each line
-of the original next to the same line of the result, the way you would, and lists what looks wrong. What the app can fix on
-its own evidence it fixes (green box in the review window); everything else is marked with a yellow box, and hovering it
-says what looks wrong and what it should be. The check takes a few seconds without an AI and about a minute with one. Turn
-it off in Settings → Transposing → **Check the result against the original and fix mistakes**.
+old position is a note the detector missed, so it is added and the score is moved again. Places it fixed get a thin green
+box in the review window. The check takes a few seconds. Turn it off in Settings → Transposing → **Check the result
+against the original and fix mistakes**.
 
-**You can mark what is still wrong.** Click a place on the result in the review window and say what is wrong there: use
-the suggested chord of a yellow box, type the chord it should be, move a note up or down a step, say a note was not moved,
-or say that something moved as a note is a rest or a symbol. Each mark gets a blue circle. **Fix N Marked Places** moves
+**You can mark what is still wrong.** Click a place on the result in the review window, or drag a box over several notes,
+and say what is wrong there: type the chord it should be, move the notes up or down a step, say they were not moved, or say
+that something moved as a note is a rest or a symbol. Or choose **Comment…** and write it in your own words ("this note
+should be one step higher"); with an AI reader signed in, the AI looks at that place on the original and the result and
+turns the comment into the change. Marks are blue circles or boxes; click one to remove it. **Fix N Marked Places** moves
 the original again with your marks and replaces the result; the marks stay until you press **Clear Marks**.
 
 Limits: treble clef, one melody line. The old mode, which recognizes the score, re-engraves it and opens the review window,
@@ -194,7 +193,7 @@ $APP/Resources/ocr/bin/singtogether-ocr chart.jpg --llm claude --transpose 2  # 
 In a source build they are `.build/release/singtogether-transpose` and `tools/ocr/.venv/bin/singtogether-ocr`.
 
 Useful `singtogether-ocr` options: `--engine homr|hybrid|auto` (hybrid reads notes locally and text with the AI CLI; auto picks hybrid when one is available),
-`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--no-audit` with `--inplace` to skip the result check, `--fixes FILE` with `--inplace` to apply marks (a JSON list of `{"kind": "chord|not_moved|not_a_note|shift", "x", "y", "text", "steps"}` in pixels of the original), `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
+`--llm claude|chatgpt|gemini|none|auto` to choose the AI for chords and lyrics, `--no-audit` with `--inplace` to skip the result check, `--fixes FILE` with `--inplace` to apply marks (a JSON list of `{"kind": "chord|not_moved|not_a_note|shift|comment", "x", "y", "box", "text", "steps"}` in pixels of the original), `--check-llm claude|chatgpt|gemini` to report whether it is installed and signed in,
 `--source IMAGE` with a chord-chart `.txt` to rewrite the chords on that image, `--chart-font NAME` to force the font,
 `--debug DIR` to save an overlay image per pipeline stage, `--no-cache`.
 

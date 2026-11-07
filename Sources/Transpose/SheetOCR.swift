@@ -212,8 +212,15 @@ package enum SheetOCR {
             if let src = dict["key_source"] as? String, src != "image" { summary += " · key from \(src)" }
             if let notes = dict["notes"] as? [String], !notes.isEmpty { summary += " · ⚠︎ " + notes.joined(separator: " · ") }
             if let audit = dict["audit"] as? [[String: Any]] {
-                let fixed = audit.filter { $0["status"] as? String == "fixed" }.count
-                summary += audit.isEmpty ? " · checked: no problems found" : " · checked: \(fixed) fixed, \(audit.count - fixed) to look at (yellow)"
+                // 의심만 가는 곳은 알리지 않는다 (사용자가 보고 표시한다). 코멘트는 적용됐는지 알린다
+                let checks = audit.filter { $0["kind"] as? String != "comment" }, comments = audit.filter { $0["kind"] as? String == "comment" }
+                let fixed = checks.filter { $0["status"] as? String == "fixed" }.count
+                summary += " · checked" + (fixed > 0 ? ": \(fixed) fixed" : "")
+                if !comments.isEmpty {
+                    let used = comments.filter { $0["status"] as? String == "fixed" }.count
+                    summary += " · comments: \(used) of \(comments.count) applied"
+                    if let why = comments.first(where: { $0["status"] as? String != "fixed" })?["expected"] as? String { summary += " (\(why))" }
+                }
             }
         } else if let s = dict["summary"] as? [String: Any] {
             func pair(_ a: String, _ b: String) -> String { "\(s[a] ?? 0)/\(s[b] ?? 0)" }

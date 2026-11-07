@@ -92,7 +92,7 @@ final class SettingsWindowController: NSWindowController {
     private let inPlace = NSButton(checkboxWithTitle: "Move the notes and chords on the original picture", target: nil, action: nil)
     private let inPlaceNote = NSTextField(wrappingLabelWithString: "Takes seconds. Off: the score is recognized, re-engraved and opened in the review window.")
     private let checkResult = NSButton(checkboxWithTitle: "Check the result against the original and fix mistakes", target: nil, action: nil)
-    private let checkNote = NSTextField(wrappingLabelWithString: "Notes left in place are moved, and anything else that looks wrong is marked in yellow in the review window. With an AI reader this takes about a minute more.")
+    private let checkNote = NSTextField(wrappingLabelWithString: "Notes the first pass left in place are found and moved. Anything still wrong can be marked in the review window and fixed.")
     private var spellings: [NSButton] = []
     private var readers: [NSButton] = []
     private let status = NSTextField(wrappingLabelWithString: "")
