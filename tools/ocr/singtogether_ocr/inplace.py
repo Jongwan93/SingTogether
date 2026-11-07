@@ -507,12 +507,16 @@ def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, 
     for i in range(1, n):
         bx, by, bw, bh, _ = stt[i]
         cx = bx0 + bx + bw / 2
-        if bx0 + bx < x0 and bx0 + bx + bw > x0 + 0.3 * il:           # 왼쪽(음자리표)에서 지울 자리로 뻗어 든 덩어리: 음자리표에 붙은 조표
+        if bx0 + bx < x0 - 0.5 * il and bx0 + bx + bw > x0 + 0.3 * il:   # 왼쪽(음자리표)에서 지울 자리로 뻗어 든 덩어리: 음자리표에 붙은 조표
             # 띠가 위아래 1.7il에서 잘려 음자리표는 키로 못 알아본다; 구멍으로 끝을 재고(없으면 x0) 그 왼쪽만 남긴다
             kx = clef_keep_x(cut, lab, stt, i, bx0, y0, staff, il)
             kx = x0 if kx is None else max(kx, x0 - int(0.5 * il))
             keep_px[(lab == i) & (np.arange(cut.shape[1])[None, :] + bx0 < kx)] = 1
             ex0 = min(ex0, kx)
+        elif bx0 + bx < x0 and x0 <= cx < x1:
+            # 음자리표 끝 어림(x0)보다 조금(0.5il 안) 왼쪽에서 시작하는 조표 덩어리: 음자리표와 따로 떨어져 있으니 통째로 지운다.
+            # 위 규칙으로 가면 ♯의 구멍을 음자리표 끝으로 알고 그 왼쪽 ♯을 남겼다 (하나님은 너를 첫 줄: ♯♯♯♯와 4가 한 덩어리)
+            ex0 = min(ex0, bx0 + bx)
         elif not (x0 <= cx < x1):                                     # 지울 자리 밖에 중심이 있는 것
             keep_px[lab == i] = 1
         elif y0 + by + bh <= staff.top - 0.3 * il:                     # 코드 글자: 줄에 안 닿은 것만 (♯의 윗부분은 줄에 닿는다)
@@ -951,12 +955,35 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         crossed = any(hy0 - 1 <= ly - y0 <= hy0 + h + 1 for ly in staff.lines for hy0 in [y])
         fill_min = 0.3 if crossed else 0.4
         w_min, h_min = (0.3, 0.2) if crossed else (0.4, 0.28)           # 고리가 두껍게 번지면 틈만 남는다 (주를 위한 이곳에 12마디)
-        if not (w_min * il <= w <= 1.05 * il and h_min * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= area / (w * h) <= 0.92):
+        # 둥근 큰 구멍: 2분음표를 칸보다 큰 동그라미로 그린 악보 (하나님은 너를: 구멍 1.3–1.4 × 1.2–1.3il, 채움 0.63–0.8).
+        # 원에 가까워야 한다 (가로세로비 0.8–1.35, 채움은 타원 π/4쯤): 빔·기둥이 둘러싼 네모(채움 0.95)와 붙임줄 틈(얇음)은 안 든다
+        fill = area / (w * h)
+        big_round = 1.05 * il < w <= 1.6 * il and 0.8 * il < h <= 1.45 * il and 0.8 <= w / h <= 1.35 and 0.6 <= fill <= 0.86
+        if not big_round and not (w_min * il <= w <= 1.05 * il and h_min * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= fill <= 0.92):
             HOLE_LOG.append((hx, hy, "size", (round(w / il, 2), round(h / il, 2), round(area / (w * h), 2))))
             continue
         if hx < min_x or not staff.top - 1.2 * il <= hy <= staff.bottom + 1.2 * il:
             HOLE_LOG.append((hx, hy, "range", 0))
             continue
+        if big_round:
+            # 큰 동그라미는 가는 고리로 둘러싸인다: 꽉 찬 머리 둘과 빔 사이의 틈(모든 능력 4째 줄)은 양옆이 머리라 두껍다.
+            # 줄을 뺀 그림에서 가운데 높이 세 줄로 재고 가장 얇은 것을 쓴다 (기둥이 옆에 붙어도 한 줄은 고리만이다)
+            def side(r: int, step: int) -> int:
+                n_, xx = 0, (x - 1 if step < 0 else x + w)
+                while 0 <= xx < cut.shape[1] and cut[r, xx] and n_ <= il:
+                    n_, xx = n_ + 1, xx + step
+                return n_
+            rows_ = [min(cut.shape[0] - 1, int(y + h * f)) for f in (0.35, 0.5, 0.65)]
+            ring = max(min(side(r, -1) for r in rows_), min(side(r, 1) for r in rows_))
+            # 글자 D·P의 구멍은 한쪽이 곧은 세로선이다; 동그라미는 위아래로 갈수록 가장자리가 안으로 든다 (주 이름 찬양: D)
+            hm = holes[y:y + h, x:x + w] > 0
+            rows_in = [r for r in range(int(0.1 * h), int(0.9 * h) + 1) if r < hm.shape[0] and hm[r].any()]
+            lefts = [int(np.argmax(hm[r])) for r in rows_in]
+            rights = [w - 1 - int(np.argmax(hm[r][::-1])) for r in rows_in]
+            flat = not rows_in or min(max(lefts) - min(lefts), max(rights) - min(rights)) < 0.12 * w
+            if ring > 0.5 * il or flat:
+                HOLE_LOG.append((hx, hy, "big-shape", (ring / il, flat)))
+                continue
         # 타원 고리는 머리 상자(구멍 + 고리)의 네 모서리 바깥이 희다; 빔·기둥·줄이 둘러싼 네모 구멍, 글자 A·4의 세모 구멍은
         # 모서리가 잉크다. 기둥이 붙는 모서리 하나는 봐준다. 고리 두께는 흐린 그림에서 0.35il까지라 머리 상자로 재고, 고리에
         # 닿은 오선 줄이 모서리에 걸리지 않게 줄을 뺀 그림(cut)에서 본다
@@ -977,7 +1004,7 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
                 if not any(abs(yy - ly) <= t_line // 2 + 1 for ly in line_rows):   # 고리에 닿은 오선 줄은 두께에 안 넣는다
                     up += 1
                 yy -= 1
-            if up > 0.35 * il:
+            if up > (0.45 if big_round else 0.35) * il:                # 큰 동그라미는 고리도 굵다 (하나님은 너를: 0.4il)
                 HOLE_LOG.append((hx, hy, "thick", up / il))
                 continue
         # 오선 밖(위 0.75il 넘게, 아래도)이면 덧줄이 있어야 한다: 코드 글자(A의 세모 구멍)와 가사 글자를 거른다
@@ -994,14 +1021,17 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
             continue
         # 마디줄은 구멍을 **가로지른다**(붙임줄×마디줄 고리): 구멍 폭 안에서만 본다. 작은 구멍 옆의 제 기둥(오선을 다 가로지르는
         # 낮은 음의 기둥)을 마디줄로 보면 안 된다 (주를 위한 이곳에 12마디)
+        # 8분쉼표가 번져 닫힌 구멍은 작다: 칸보다 큰 동그라미에는 꼬리 검사를 안 한다 (하나님은 너를: 흐려서 기둥이 줄 사이마다 끊겨
+        # 기둥 조각과 점이 비스듬한 꼬리로 보였다)
         bar_through = bool((binary[staff.top:staff.bottom + 1, int(x + staff.left):int(x + w + staff.left)] < 128).mean(axis=0).__ge__(0.9).any()) if w > 0 else False
-        if any(flag_hook(hx, hy, o, il) for o in heads) or rest_tail(binary < 128, hx, hy, il) or bar_through:
+        if any(flag_hook(hx, hy, o, il) for o in heads) or (not big_round and rest_tail(binary < 128, hx, hy, il)) or bar_through:
             HOLE_LOG.append((hx, hy, "hook/bar", 0))
             continue
-        HOLE_LOG.append((hx, hy, "ok", 0))
+        HOLE_LOG.append((hx, hy, "ok", int(big_round)))
         head = Notehead(hx, hy, head_w, head_h)
         head.evidence = notes.duration_evidence(binary, head, il)
         head.evidence.hollow = True
+        head.big_ring = big_round                    # 칸보다 큰 동그라미: 옮겨 그릴 때도 그 크기로
         out.append(head)
     return out
 
@@ -1523,6 +1553,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
     arc_jobs: list[tuple[list, int, Staff, int]] = []
+    drawn_heads: list[tuple[float, float, float, float, bool]] = []   # 새로 그린 머리 (x, y, 폭, 높이, 속 빔): 코드 상자가 지우면 다시 그린다
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
         st = sys_.staff
         t_line = line_thickness(ink, st)
@@ -1743,6 +1774,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             h = p.head
             y_new = st.bottom - p.step_new * il / 2
             w, hh = filled_w, filled_h
+            if getattr(h, "big_ring", False) and p.hollow:           # 큰 동그라미 2분음표는 원래 크기 (구멍 + 고리)
+                w, hh = max(w, 0.95 * h.w), max(hh, 0.95 * h.h)
             draw_ledgers(img, st, p.step_new, h.x, w, t_line)
             ev = h.evidence
             if ev and ev.stem:
@@ -1753,6 +1786,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 elif ev.stem_dir > 0 and y_new < h.y:                 # 아래로 뻗는 기둥인데 머리가 올라갔다: 위로 잇는다
                     cv2.line(img, (sx, int(y_new)), (sx, int(h.y)), 0, t_stem)
             draw_head(img, h.x, y_new, w, hh, p.hollow, il)
+            drawn_heads.append((h.x, y_new, w, hh, p.hollow))
             if p.dot and p.step_new != p.step_old:                     # 점은 칸에 둔다: 줄 위 음이면 바로 위 칸
                 bx0, by0, bx1, by1 = p.dot
                 dot_step = p.step_new if p.step_new % 2 else p.step_new + 1
@@ -1791,6 +1825,12 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     rep.state.update(page=page, systems=systems, il=il, plans_all=plans_all, chord_boxes=chord_boxes, keysigs=keysigs, read=read)
     try:
         rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced)
+        # 코드는 상자째 지우고 다시 쓴다: 코드 바로 밑까지 올라간 머리가 그 상자에 들면 지워진다 (이 세상 Fm 밑의 2분음표).
+        # 상자에 걸린 머리만 다시 그린다 (새 글자 위에 겹쳐도 원래 악보도 그렇게 붙어 있었다)
+        for _, x0, y0, x1, y1, *_ in getattr(_rewrite_chords, "drawn", []):
+            for hx_, hy_, hw_, hh_, hollow_ in drawn_heads:
+                if x0 - 3 <= hx_ + hw_ / 2 and hx_ - hw_ / 2 <= x1 + 3 and y0 - 3 <= hy_ + hh_ / 2 and hy_ - hh_ / 2 <= y1 + 3:
+                    draw_head(img, hx_, hy_, hw_, hh_, hollow_, il)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
         rep.notes_.append(f"chords not rewritten: {str(e).splitlines()[0][:120]}")
     # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄)
