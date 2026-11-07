@@ -1575,6 +1575,11 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         heads += find_hole_heads(page.binary, sys_, il, heads, hole_x, t_line)
         heads += find_whole_notes(page.binary, sys_, il, heads, min_x)
         heads = sorted((h for h in heads if h.x >= zone), key=lambda h: h.x)
+        # 오선 위 코드 글자의 구멍(A의 세모)을 기둥 없는 속 빈 머리로 읽은 것 (모든 능력 첫 줄: 덧줄 셋과 함께 옮겨 그려져 새 B 위에 겹쳤다).
+        # 읽은 코드 상자 안, 오선 위쪽, 기둥 없는 머리는 뺀다
+        cboxes = chord_boxes[si] if si < len(chord_boxes) else []
+        heads = [h for h in heads if not (h.y < st.top and not (h.evidence and h.evidence.stem)
+                                          and any(b.x0 <= h.x <= b.x1 and b.y0 <= h.y <= b.y1 for b in cboxes))]
         # 쉼표(4분쉼표의 굽은 곳, 8분쉼표의 점)를 꽉 찬 머리로 읽은 것: 기둥이 없고 이 오선의 기둥 달린 머리보다 작다 (폭 0.9배·높이
         # 0.8배 미만). 진짜 머리는 흐려서 기둥을 못 찾아도 크기는 같다 (주를 위한 이곳에: 쉼표 20개가 음표로 옮겨졌다)
         stemmed = [h for h in heads if h.evidence and h.evidence.stem and not h.evidence.hollow]

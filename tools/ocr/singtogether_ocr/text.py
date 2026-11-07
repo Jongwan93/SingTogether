@@ -48,10 +48,12 @@ def normalize_chord(s: str) -> str:
     s = s[:1].upper() + s[1:]
     s = re.sub(r"^([A-G][#b]?)I([A-G])", r"\1/\2", s)         # D/F# 을 DIF# 로 읽는 경우
     s = re.sub(r"^([A-G][#b]?)[z°º]$", r"\g<1>2", s)          # 윗첨자 2 를 z·° 로 읽는 경우 (찬양 악보의 C2)
+    s = re.sub(r"^([A-G])[°º]([2469])$", r"\1b\2", s)          # 윗첨자 ♭²를 °2로 읽는 경우 (나 주님의 기쁨 B♭²; dim은 °7만 쓴다)
     s = re.sub(r"[-_.,]+$", "", s)                            # 끝에 붙는 선 조각
     s = re.sub(r"^([A-G][#b]?)(\d+)m(?!aj)", r"\1m\2", s)       # 7이 m 위에 쓰인 B⁷m 을 B7m 으로 읽는 경우 → Bm7
     s = re.sub(r"^([A-G][#b]?)(m?)sus(\d)/(\d)$", r"\1\2\3sus\4", s)   # ⁷₄가 msus 위에 쌓인 Gm⁷₄sus 를 Gmsus7/4 로 읽는 경우 → Gm7sus4
     s = re.sub(r"^([A-G])#?m#(\d)", r"\1#m\2", s)                      # 근음의 ♯이 위로 올라간 G♯m⁷ 을 Gm#7·G#m#7 로 읽는 경우 → G#m7
+    s = re.sub(r"^([A-G][#b]?m?)[sS][uU][sS]", r"\1sus", s)            # 굵은 sus를 SUS·sUS로 읽는 경우 (지금은 엘리야 Esus⁴ → "ESUS")
     return s
 
 
@@ -269,6 +271,26 @@ def find_text_blobs(binary_band: np.ndarray, interline: float) -> list[tuple[int
         if h < 0.4 * interline or h > 3.5 * interline or w < 0.3 * interline:
             continue
         out.append((int(x), int(y), int(x + w), int(y + h)))
+    # 굵은 글자의 가로획(E의 가운데·아래 획, 0.7–0.8il × 0.25il)도 빔 열림을 견뎌 지워진다. 보통은 위 팽창이 다시 붙이지만
+    # 가로로 끝까지 끊기면 글자가 위아래 둘로 갈려 따로 읽힌다 (주님 다시 오실때까지: Em이 "Em"+"Cm", 새 코드 둘이 겹쳐 써졌다).
+    # 왼쪽 끝이 맞고(세로획) 위아래로 맞닿은 두 덩어리를 합친 높이가 글자만 하면 한 글자다. 이미 겹친 덩어리(아래 상자가 글자
+    # 대부분을 가진 것)는 그대로 둔다: 합치면 Vision이 다르게 읽는다 (하나님은 너를 지키시는자 E/B → "B")
+    out.sort(key=lambda b: (b[1], b[0]))
+    merged_any = True
+    while merged_any:
+        merged_any = False
+        for i, a in enumerate(out):
+            for j, b in enumerate(out):
+                if i == j or b[1] < a[1]:
+                    continue
+                if (abs(a[0] - b[0]) <= 0.3 * interline and -0.1 * interline <= b[1] - a[3] <= 0.35 * interline
+                        and max(a[3], b[3]) - a[1] <= 2.5 * interline):
+                    out[i] = (min(a[0], b[0]), a[1], max(a[2], b[2]), max(a[3], b[3]))
+                    del out[j]
+                    merged_any = True
+                    break
+            if merged_any:
+                break
     return sorted(out)
 
 
