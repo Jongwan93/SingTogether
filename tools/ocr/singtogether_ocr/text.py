@@ -61,6 +61,7 @@ def normalize_chord(s: str) -> str:
     s = re.sub(r"^([A-G][#b]?)(m?)sus(\d)/(\d)$", r"\1\2\3sus\4", s)   # ⁷₄가 msus 위에 쌓인 Gm⁷₄sus 를 Gmsus7/4 로 읽는 경우 → Gm7sus4
     s = re.sub(r"^([A-G])#?m#(\d)", r"\1#m\2", s)                      # 근음의 ♯이 위로 올라간 G♯m⁷ 을 Gm#7·G#m#7 로 읽는 경우 → G#m7
     s = re.sub(r"^([A-G][#b]?m?)[sS][uU][sS]", r"\1sus", s)            # 굵은 sus를 SUS·sUS로 읽는 경우 (지금은 엘리야 Esus⁴ → "ESUS")
+    s = re.sub(r"^([A-G][#b]?m?)sus(7),(4)", r"\1\2sus\3", s)          # 쌓인 ⁷₄를 AI가 "Gmsus7,4"로 적는다 (나 주님의 기쁨) → Gm7sus4
     return s
 
 

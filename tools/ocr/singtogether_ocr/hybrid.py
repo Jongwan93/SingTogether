@@ -137,6 +137,12 @@ def _reconcile_chord(vision: str, claude: str) -> str:
     붙이고, 다른 숫자가 있으면 Vision 쪽이 그럴듯한 코드일 때 Vision을 쓴다."""
     v = re.sub(r"(\d)\1+", r"\1", normalize_chord(vision))
     rv, rc = re.match(r"[A-G][#b]?", v), re.match(r"[A-G][#b]?", claude)
+    # Vision이 읽은 슬래시 베이스(G/B)를 AI가 빼먹었으면 붙인다. 근음 글자만 같아도 된다: Vision은 올린 ♯·♭을 자주 놓친다
+    # (지금은 엘리야: Vision "FM/E", AI "F#m" → F#m/E)
+    vb = re.search(r"/([A-G][#b]?)$", v)
+    if rv and rc and rv.group(0)[0] == rc.group(0)[0] and vb and "/" not in claude \
+            and _PLAUSIBLE.match(claude + "/" + vb.group(1)):
+        claude = claude + "/" + vb.group(1)
     if not rv or not rc or rv.group(0) != rc.group(0):
         return claude
     # Vision이 AI보다 길게 읽었고(Fmaj vs F) 그 앞부분이 AI와 같으면 AI가 접미를 빼먹은 것: Vision이 놓치는 윗첨자를 채워(maj→maj7,
@@ -145,11 +151,7 @@ def _reconcile_chord(vision: str, claude: str) -> str:
         full = re.sub(r"(maj|sus|add)$", lambda m: {"maj": "maj7", "sus": "sus4", "add": "add9"}[m.group(1)], v)
         if _PLAUSIBLE.match(full):
             return full
-    # Vision이 읽은 슬래시 베이스(G/B)를 AI가 빼먹었으면 붙인다
-    vb = re.search(r"/([A-G][#b]?)$", v)
-    if vb and "/" not in claude and _PLAUSIBLE.match(claude + "/" + vb.group(1)):
-        claude = claude + "/" + vb.group(1)
-    vd = [d for d in re.findall(r"\d", v) if d in _CHORD_DIGITS]
+    vd =[d for d in re.findall(r"\d", v) if d in _CHORD_DIGITS]
     ad = re.findall(r"\d", claude)
     if not vd or all(d in ad for d in vd):
         return claude

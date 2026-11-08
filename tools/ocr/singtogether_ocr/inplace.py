@@ -1174,6 +1174,9 @@ def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: lis
             tag = "tall"
         elif gy0 > staff.bottom + 1.3 * il and not any(abs(h.x - (gx0 + bw / 2)) <= bw / 2 + il and h.y > staff.bottom + 0.3 * il for h in heads):
             tag = "lyrics"                                   # 오선 아래 멀리, 근처에 낮은 머리도 없다: 가사
+        elif gy0 + bh < staff.top - 0.3 * il and bw <= 1.6 * il and cross_shaped(
+                binary < 128, (max(0, gx0 - int(0.3 * il)), max(0, gy0 - int(1.2 * il)), gx0 + bw + int(0.3 * il), gy0 + bh + int(0.5 * il))):
+            tag = "symbol"                                   # 오선 위 Coda 기호 𝄌의 고리 토막 (주 이름 찬양 끝줄: 옮겨져 기호가 반쯤 지워졌다)
         if tag:
             ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, tag)); continue
         comp = (lab[by:by + bh, bx:bx + bw] == i)
@@ -1460,9 +1463,32 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         rows = np.flatnonzero(band.any(axis=1))
         lowest = int(b.y0) + int(rows[-1]) if rows.size else int(b.y0)
         return base - lowest > 0.4 * il and cross_shaped(ink_all, (int(b.x0), int(b.y0), int(b.x1), int(b.y1)))
+    # 작은 글씨(D.C.·지시문)도 코드가 아니다: 상자 열의 잉크가 위아래로 이어지는 높이(Vision이 자른 위아래까지)가 글자 높이다.
+    # 그 높이로 쳐서 글자 수+1보다 넓으면 버린다 (주 이름 찬양: 띠 꼭대기에 잘린 "D.C."를 "A"로 읽어 그 밑 Coda 기호까지 지웠다)
+    def small_text(b):
+        x0, x1 = int(b.x0), int(b.x1)
+        top, bot = max(0, int(b.y0 - 2 * il)), min(ink_all.shape[0], int(b.y1 + 2 * il))
+        rows = ink_all[top:bot, x0:x1].any(axis=1)
+        mid = int((b.y0 + b.y1) / 2) - top
+        if x1 <= x0 or not rows[mid]:
+            return False
+        a, z = mid, mid
+        while a > 0 and rows[a - 1]:
+            a -= 1
+        while z + 1 < len(rows) and rows[z + 1]:
+            z += 1
+        return x1 - x0 > (len(b.text) + 1) * (z - a + 1)
+    # 1·2번 괄호의 "|1."을 품은 Vision 상자는 괄호를 잘라 근음부터로 (안 자르면 넓어서 아래에서 버려지거나 괄호까지 지운다 — 지금은 엘리야)
+    for si, row in enumerate(chord_boxes):
+        band_top = systems[si].chord_band[0] if si < len(systems) else 0
+        for b in row:
+            if b.y0 <= band_top + 1:
+                nv = _after_volta(ink_all, (int(b.x0), int(b.y0), int(b.x1), int(b.y1)), il)
+                if nv is not None and nv[0] < b.x1 - 0.3 * il:
+                    b.x0, b.y0 = nv
     # (글자 수 + 2: Vision이 Dm/F를 "D"와 "F"로 가르면 뒤 상자는 "/F"를 품어 글자보다 두 배 넓다 — 주님은 산 같아서)
     chord_boxes = [[b for b in row if b.x1 - b.x0 <= (len(b.text) + 2) * max(1, b.y1 - b.y0, med_h) and not fragment(b, row)
-                    and not floating(b, row, si)]
+                    and not floating(b, row, si) and not small_text(b)]
                    for si, row in enumerate(chord_boxes)]
     FILTER_LOG.append([(si, b.text, int(b.x0), int(b.y1)) for si, row in enumerate(chord_boxes) for b in row])
     from . import llm
@@ -1481,6 +1507,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             n_ai, n_vision = sum(1 for n in ai_t.notes if n.chord), sum(len(r) for r in chord_boxes)
             if hybrid.trust(exact, n_ai, n_vision):
                 chord_boxes, rep.chord_source = snap_to_blobs(page, systems, merged, il, chord_boxes), label
+                _fix_vision_accidentals(chord_boxes, ai_t.fifths)
             else:
                 rep.notes_.append(f"{label}'s chords did not match the picture ({int(exact * 100)}% agree): kept Apple Vision's")
                 ai_t = None
@@ -1578,8 +1605,14 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         # 오선 위 코드 글자의 구멍(A의 세모)을 기둥 없는 속 빈 머리로 읽은 것 (모든 능력 첫 줄: 덧줄 셋과 함께 옮겨 그려져 새 B 위에 겹쳤다).
         # 읽은 코드 상자 안, 오선 위쪽, 기둥 없는 머리는 뺀다
         cboxes = chord_boxes[si] if si < len(chord_boxes) else []
+        # (상자 밑 0.3il까지: C의 아래 굽은 곳이 상자 바닥 4px 밑에 머리로 잡혔다 — 주님 다시 오실때까지)
         heads = [h for h in heads if not (h.y < st.top and not (h.evidence and h.evidence.stem)
-                                          and any(b.x0 <= h.x <= b.x1 and b.y0 <= h.y <= b.y1 for b in cboxes))]
+                                          and any(b.x0 <= h.x <= b.x1 and b.y0 <= h.y <= b.y1 + 0.3 * il for b in cboxes))]
+        # 오선 밖(1il 넘게 위·아래)의 Coda 기호 𝄌: 고리를 세로획이 꿰뚫어 기둥 달린 속 빈 머리로 읽힌다 (주 이름 찬양 끝줄: 옮겨
+        # 그려져 기호가 반쯤 지워졌다). 기호는 절대 지우면 안 된다. 머리 둘레 상자가 십자 모양이면 뺀다
+        heads = [h for h in heads if not ((h.y < st.top - il or h.y > st.bottom + il)
+                                          and cross_shaped(ink, (max(0, int(h.x - 1.2 * il)), max(0, int(h.y - 1.5 * il)),
+                                                                 int(h.x + 1.2 * il), int(h.y + 1.5 * il))))]
         # 쉼표(4분쉼표의 굽은 곳, 8분쉼표의 점)를 꽉 찬 머리로 읽은 것: 기둥이 없고 이 오선의 기둥 달린 머리보다 작다 (폭 0.9배·높이
         # 0.8배 미만). 진짜 머리는 흐려서 기둥을 못 찾아도 크기는 같다 (주를 위한 이곳에: 쉼표 20개가 음표로 옮겨졌다)
         stemmed = [h for h in heads if h.evidence and h.evidence.stem and not h.evidence.hollow]
@@ -1869,25 +1902,118 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
 PLAUSIBLE_CHORD = re.compile(r"^[A-G][#b]?(m|m7|m9|maj7|M7|7|9|6|2|4|sus|sus2|sus4|7sus4|add9|add2|dim|dim7|m7b5|aug|\+|m6|69)?(/[A-G][#b]?)?$")
 
 
+def _fix_vision_accidentals(rows, fifths: int) -> None:
+    """AI가 못 읽어 Vision 글자만 있는 코드의 근음 ♯·♭: Vision은 올린 ♯을 ♭으로 자주 읽는다. ♯ 조에서 조표에 ♯이 붙은 글자를
+    ♭으로 읽었으면 ♯이다 (♭ 조도 거꾸로). 하나님은 너를 지키시는자: E장조의 G♯을 "Gb"로 — 그대로 두면 +2가 A♯이 아니라 A♭이 된다."""
+    sharps, flats = "FCGDAEB"[:max(0, fifths)], "BEADGCF"[:max(0, -fifths)]
+    for row in rows:
+        for b in row:
+            m = re.match(r"([A-G])([#b])", b.text)
+            if b.src != "vision" or not m:
+                continue
+            if m[2] == "b" and m[1] in sharps:
+                b.text = m[1] + "#" + b.text[2:]
+            elif m[2] == "#" and m[1] in flats:
+                b.text = m[1] + "b" + b.text[2:]
+
+
+def _volta_bar(ink: np.ndarray, box: tuple[int, int, int, int], il: float) -> tuple[int, int] | None:
+    """상자 꼭대기가 1·2번 괄호의 세로줄에 걸렸는가: 상자 꼭대기 안쪽 0.4il을 가는 세로줄(0.3il 폭 이하)이 다 지나고, 그 줄의
+    꼭대기에서 오른쪽으로만 괄호의 선이 1.8il 넘게 뻗는다 (괄호선은 점선이기도 해서 처음~끝 길이로). (세로줄 오른쪽 끝 열, 괄호선 바로 밑 행).
+    띠에 잘린 글자(D·E의 세로획)는 윗획이 1il 남짓이고, Coda 기호 𝄌는 팔이 왼쪽에도 뻗는다 (보혈을 지나·주님의 임재·지금은 엘리야:
+    "|1."이 코드 글자 덩어리에 붙는다; 괄호선이 띠 꼭대기에 딱 걸리기도 한다)."""
+    x0, y0, x1, _ = box
+    full = np.flatnonzero(ink[y0:y0 + max(2, int(0.4 * il)), x0:x1].all(axis=0))
+    if not full.size:
+        return None
+    run = full[: 1 + int(np.argmax(np.diff(np.append(full, 10 ** 6)) > 1))]
+    if run[-1] - run[0] + 1 > 0.3 * il:
+        return None
+    c = x0 + int(run[0])
+    r = y0
+    while r > 0 and ink[r - 1, c:c + len(run)].any():
+        r -= 1
+    rows = slice(max(0, r - 2), r + int(0.3 * il) + 3)                 # 줄 끝이 괄호선 위로 조금 솟기도 한다
+    line = np.flatnonzero(ink[rows, c:c + int(3 * il)].any(axis=0))
+    left = ink[rows, max(0, c - int(0.6 * il)):c].any(axis=0).sum()
+    if not (line.size and line[-1] - line[0] >= 1.8 * il and left <= 0.15 * il):
+        return None
+    # 괄호선 바로 밑(0.25il)은 비어 있다: 번호·코드는 그 아래에서 시작한다. 글자 꼭대기(D(add9)의 D 세로획과 윗첨자들이 이어진 것)는
+    # 바로 밑이 글자 몸이다 (주님은 산 같아서: 코드 6개의 근음이 잘렸다)
+    band = ink[rows, c + len(run):c + int(3 * il)]
+    filled = np.flatnonzero(band.sum(axis=1) >= 1.0 * il)
+    if not filled.size:
+        return None
+    lb = rows.start + int(filled[-1]) + 2
+    below = ink[lb:lb + max(3, int(0.25 * il)), c + int(1.0 * il):c + int(3.5 * il)]
+    return (c + len(run), lb) if below.size and below.any(axis=0).mean() < 0.3 else None
+
+
+def _after_volta(ink: np.ndarray, box: tuple[int, int, int, int], il: float) -> tuple[int, int] | None:
+    """상자 왼쪽 끝이 괄호 세로줄이면 (번호 "1."을 건너뛴 근음 글자의 왼쪽 끝, 괄호선 바로 밑 행). 근음은 남은 조각 중 가장 큰 것의
+    키 80% 넘는 조각들의 맨 왼쪽이다 (번호 글씨는 코드보다 작다). 상자 꼭대기가 괄호선에 걸려 있으면 같이 지워지니(지금은 엘리야
+    "|2. A") 꼭대기도 그 밑으로 내린다. 괄호가 아니면 None."""
+    x0, y0, x1, y1 = box
+    v = _volta_bar(ink, (x0, y0, min(x1, x0 + int(1.5 * il)), y1), il)
+    if v is None:
+        return None
+    c, lb = v
+    y0 = max(y0, lb)
+    reg = ink[y0:y1, c + 1:x1].astype(np.uint8)
+    n, _, st, _ = cv2.connectedComponentsWithStats(reg, connectivity=8)
+    if n < 2:
+        return None
+    hmax = st[1:, cv2.CC_STAT_HEIGHT].max()
+    xs = [st[i, cv2.CC_STAT_LEFT] for i in range(1, n) if st[i, cv2.CC_STAT_HEIGHT] >= 0.8 * hmax]
+    return c + 1 + int(min(xs)) - 1, y0
+
+
 def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None):
     """hybrid.merge_chords가 준 상자는 Vision 중심 둘레의 작은 상자(x−0.3il…x+0.9il)라 옛 글자를 다 못 지운다(A♭의 윗첨자, Fm의 F).
     코드 띠의 잉크 덩어리(find_text_blobs: 윗첨자까지 뭉친 상자) 중 그 자리에 있는 것으로 바꾼다. Vision 상자가 있던 것(both)은
     그 Vision 상자에 걸치는 덩어리를 전부 합친다(Amaj7/E처럼 덩어리가 둘로 갈라진 코드도 통째로 지우게); AI만 읽은 코드는
     남은 덩어리 중 가장 가까운 것 하나에 붙인다 (앞 오선 끝의 코드가 다음 오선 앞에 놓이는 일이 있어, 남의 덩어리를 뺏지 않게).
     덩어리가 없으면 그대로 두고, 그리기는 잉크가 없어 건너뛴다."""
+    ink_all = page.binary < 128
     for si, (sys_, row) in enumerate(zip(systems, rows)):
         y0, y1 = sys_.chord_band
         blobs = [(bx0, y0 + by0, bx1, y0 + by1) for bx0, by0, bx1, by1 in text.find_text_blobs(page.binary[y0:y1], il)]
         vrow = vision_rows[si] if vision_rows else []
         vboxes = [(v.x0, v.y0, v.x1, v.y1) for v in vrow]
         taken: set[int] = set()
+        reserved: set[int] = set()               # 한 칸 민 AI 전용 코드 몫으로 남겨 둔 덩어리 (Vision 상자 쪽이 가져가지 않게)
         drop: list = []
         # Vision만 읽은 코드와 AI만 읽은 코드가 사이에 짝지어진 코드 없이 이웃하면 같은 코드다 (찬양의 열기: Vision의 "Cm"과 AI의
         # Em7 — 근음이 달라 짝이 안 됐다). AI 이름을 쓰고 Vision 자리를 쓴다; 흐린 캡처에서 AI는 91–100%, Vision은 48–62%
         # 같은 앵커 틈 안에서는 왼쪽부터 차례로 짝짓는다 (가장 가까운 것을 고르면 Cm이 Em7 대신 Asus4를 받았다 — 찬양의 열기)
         both_x = sorted(b.x0 for b in row if b.src == "both")
+        # 다만 AI 코드 어림 자리 가까이에 Vision이 못 읽은 글자 덩어리가 Vision 상자보다 가까이 있으면 그게 그 코드의 자리다
+        # (하나님은 너를 지키시는자: AI는 줄 끝 G♯을 빼먹었는데, AI의 E가 10il 떨어진 Vision "G♭" 자리에 써지고 진짜 E는 그대로였다)
+        free = [((bb[0] + bb[2]) / 2, bb) for bb in blobs if bb[3] - bb[1] >= 0.8 * il
+                and not any(v[0] <= (bb[0] + bb[2]) / 2 <= v[2] for v in vboxes)]
+
+        def own_blob(c, v):
+            cx = c.x0 + 0.3 * il
+            dv = abs((v.x0 + v.x1) / 2 - cx)
+            return any(abs(mx - cx) < dv and bb[2] - bb[0] <= (len(c.text) + 1) * il for mx, bb in free)
+        # AI가 "X…, X"로 읽은 두 코드를 Vision이 앞의 것만 "X"로 읽으면 정렬은 AI의 뒤 X를 그 상자에 짝짓는다 (모든 능력: C♯sus⁴/G♯
+        # 자리에 D♯이 써지고 바로 옆 진짜 C♯은 그대로). 짝 바로 왼쪽의 AI 전용 코드가 같은 근음으로 시작하고 더 길며, Vision 상자
+        # 바로 오른쪽(1il 안)에 Vision이 못 읽은 덩어리가 있으면 한 칸씩 민다: 긴 이름이 Vision 자리를, 짝의 이름이 그 덩어리를
+        ordered = sorted(row, key=lambda b: b.x0)
+        for c, n in zip(ordered, ordered[1:]):
+            rn = re.match(r"[A-G][#b]?", n.text)
+            if c.src != "claude" or n.src != "both" or not rn or not c.text.startswith(rn.group(0)) or len(c.text) <= len(n.text):
+                continue
+            vb = next((v for v in vboxes if v[0] <= n.x0 + 0.3 * il <= v[2]), None)
+            nxt = [bb for mx, bb in free if vb is not None and vb[2] - 0.2 * il <= bb[0] <= vb[2] + il]
+            if nxt:
+                bb = min(nxt)
+                reserved.add(blobs.index(bb))
+                c.text, n.text = n.text, c.text                 # n(짝, Vision 자리)은 긴 이름, c(AI 전용)는 짧은 이름을
+                c.x0, c.x1 = bb[0] - 0.3 * il, bb[2]           # 덩어리 자리로 (아래 AI 전용 자리 찾기가 cx = x0 + 0.3il로 쓴다)
         for v in sorted((b for b in row if b.src == "vision"), key=lambda b: b.x0):
-            cands = sorted((c for c in row if c.src == "claude" and not any(min(v.x0, c.x0) < bx < max(v.x0, c.x0) for bx in both_x)),
+            cands = sorted((c for c in row if c.src == "claude" and not any(min(v.x0, c.x0) < bx < max(v.x0, c.x0) for bx in both_x)
+                            and not own_blob(c, v)),
                            key=lambda c: c.x0)
             if cands:
                 c = cands[0]
@@ -1918,12 +2044,20 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     def foreign(bb):
                         mid = (bb[0] + bb[2]) / 2
                         return not (vb[0] <= mid <= vb[2]) and any(v is not vb and v[0] <= mid <= v[2] for v in vboxes)
-                    ks = [k for k, bb in enumerate(blobs) if k not in taken and bb[2] > vb[0] + 2 and bb[0] < vb[2] - 2
+                    # 왼쪽으로 삐져나온 덩어리는 제 폭의 30% 넘게 상자 안이어야 한다 (이 세상: 1·2번 괄호의 "2."가 A♭ 상자에 8px
+                    # 걸쳐 같이 지워졌다). 오른쪽은 조금만 걸쳐도 받는다: Vision이 맨 글자만 잡으면 윗첨자(F²의 ², F♯의 ♯)가 그렇다
+                    ks = [k for k, bb in enumerate(blobs) if k not in taken | reserved and bb[2] > vb[0] + 2 and bb[0] < vb[2] - 2
+                          and (bb[0] >= vb[0] or min(bb[2], vb[2]) - vb[0] > 0.3 * (bb[2] - bb[0]))
+                          # 상자 바닥 밑에서 시작해 상자 열 밖으로 나가는 것은 늘임표·이음줄·빔이다 (이 세상 끝줄 A♭ 밑의 늘임표).
+                          # 열 안에 든 것은 빔 거르기에 잘린 글자 다리다 (지금은 엘리야·찬양의 열기 A). 덩어리 상자는 0.3il씩 불어 있다
+                          and (bb[1] < vb[3] - 0.1 * il or (bb[0] >= vb[0] - 0.4 * il and bb[2] <= vb[2] + 0.4 * il))
                           and not foreign(bb)]
                     # Vision 상자가 근음 글자를 빼고 잡기도 한다(F♯m을 "♯m"만): 바로 왼쪽 0.2il 안에 붙은, 다른 Vision 상자에
                     # 들지 않은 덩어리는 같은 코드다
                     # (근음 글자라면 바닥이 코드 바닥과 같다: 1·2번 괄호의 "2."는 바닥이 0.5il 위라 받지 않는다 — 주 이름 찬양)
-                    while ks:
+                    # Vision이 근음 글자부터 읽었으면(A♭을 "Ab") 왼쪽 덩어리는 근음이 아니다 (이 세상: 왼쪽에 붙은 Coda 기호를 지웠다)
+                    left_ok = not (re.match(r"[A-G]", vtext) and vtext[0] == b.text[:1])
+                    while ks and left_ok:
                         left = min(blobs[k][0] for k in ks)
                         bottom = max(blobs[k][3] for k in ks)
                         more = [k for k, bb in enumerate(blobs) if k not in taken and k not in ks and 0 <= left - bb[2] <= 0.2 * il
@@ -1935,12 +2069,25 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     # AI 이름이 Vision 글자보다 길면(A → Asus4) 바로 오른쪽에 붙은 덩어리("sus4")도 같은 코드다: 안 지우면 새 글자가 그 위에 겹친다
                     if ks and len(b.text) > len(vtext):
                         right_edge = max(blobs[k][2] for k in ks)
-                        ks += [k for k, bb in enumerate(blobs) if k not in taken and k not in ks and -0.15 * il <= bb[0] - right_edge <= 0.3 * il
+                        ks += [k for k, bb in enumerate(blobs) if k not in taken | reserved and k not in ks and -0.15 * il <= bb[0] - right_edge <= 0.3 * il
                                and bb[1] < vb[3] and bb[3] > vb[1] and not any(v[0] <= (bb[0] + bb[2]) / 2 <= v[2] for v in vboxes if v is not vb)]
                     if ks:
                         taken.update(ks)
                         b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
                         b.x1, b.y1 = max(blobs[k][2] for k in ks), max(blobs[k][3] for k in ks)
+                        # AI 이름이 Vision 글자보다 길지 않으면 오른쪽에 더 쓸 글자가 없다: 번진 덩어리가 옆 기호까지 품어도
+                        # (이 세상: D♭과 Coda 기호가 한 덩어리) Vision 상자 끝 너머로 넓히지 않는다
+                        if len(b.text) <= len(vtext):
+                            b.x1 = min(b.x1, vb[2] + 0.3 * il)
+                        # 띠보다 높이 쓰인 코드(이 세상 끝줄의 A♭)는 덩어리가 띠에 잘려 있다: 띠 위는 Vision 상자대로.
+                        # (띠를 넓혀 덩어리를 다시 찾으면 위의 "al Coda"가 Fm에 붙어 지워졌다)
+                        if vb[1] < y0:
+                            b.y0, b.x1 = min(b.y0, vb[1]), max(b.x1, vb[2])
+                        # 1·2번 괄호의 "|1."이 근음 글자와 한 덩어리(Vision 상자도 같이)면 괄호는 빼고 근음부터 (주님의 임재 "|1.C²")
+                        if b.y0 <= y0 + 1:
+                            nv = _after_volta(ink_all, (int(b.x0), int(b.y0), int(b.x1), int(b.y1)), il)
+                            if nv is not None:
+                                b.x0, b.y0 = nv
                         # Vision은 맨 글자(F)로 읽었는데 AI가 접미를 붙였고(Fmaj7) 잉크 덩어리가 대문자 하나 폭(높이의 0.95배 아래)이면
                         # AI가 지어낸 것이다 (주님 다시 오실때까지). 접미가 있으면 덩어리가 글자보다 넓다
                         if re.fullmatch(r"[A-G]", vtext) and b.text.startswith(vtext) and len(b.text) > 1:
@@ -1960,12 +2107,21 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                 # AI만 읽은 코드의 x는 이웃 코드 사이를 고르게 나눈 어림이라 크게 빗나간다 (찬양의 열기: Vision이 놓친 D가 3il 왼쪽).
                 # 양옆의 자리 잡힌 코드 사이(앵커 틈) 안에서, 안 쓴 덩어리 중 가장 가까운 것 (틈 폭의 절반 또는 1.5il 안)
                 if src == "claude":
+                    # 기호 덩어리는 자리 후보가 아니다: 못 찾으면 옛 코드가 남지만 기호를 지우는 것보다 낫다
+                    # (주 이름 찬양: AI만 읽은 B가 Coda 기호에, 보혈을 지나: D가 1번 괄호의 "|1."에 써졌다)
+                    def symbol(bb):
+                        bx = (int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3]))
+                        if cross_shaped(ink_all, bx):
+                            return True
+                        return bx[1] <= y0 + 1 and _volta_bar(ink_all, bx, il) is not None
                     left = max((o.x1 for o in row if o is not b and o.src != "claude" and o.x0 < cx), default=sys_.staff.left)
                     right = min((o.x0 for o in row if o is not b and o.src != "claude" and o.x0 > cx), default=sys_.staff.right)
                     tol = max(1.5 * il, 0.5 * (right - left))
                     near = [k for k, bb in enumerate(blobs) if k not in taken and left - 2 < (bb[0] + bb[2]) / 2 < right + 2
                             and bb[0] - tol <= cx <= bb[2] + tol and bb[3] - bb[1] >= 0.8 * il        # 윗첨자 조각(⁴)은 안 됨
-                            and bb[2] - bb[0] <= (len(b.text) + 1) * il]                              # 지시문("Last time")은 안 됨
+                            and bb[2] - bb[0] <= (len(b.text) + 1.6) * il                             # 지시문("Last time")은 안 됨
+                            and not symbol(bb)]
+                    # (+0.6il: 덩어리 상자는 양옆 0.3il씩 불어 있다 — 보혈을 지나 D가 52px > 2il이라 빠지고 C 자리로 밀렸다)
                 else:
                     near = [k for k, bb in enumerate(blobs) if k not in taken and bb[0] - 0.5 * il <= cx <= bb[2] + 0.5 * il]
                 if near:
@@ -1973,9 +2129,14 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     ks = [k]
                     if src == "claude":                           # 한 코드가 덩어리 둘로 갈라진 것(D/F♯의 올린 ♯)은 함께
                         for k2, bb in enumerate(blobs):
+                            # 위아래 틈은 0.6il까지, 가로로 안에 든 조각은 0.9il까지: 빔 거르기에 잘린 같은 글자다
+                            # (찬양의 열기 끝줄 A의 꼭짓점이 0.7il 위에 따로 남았다)
+                            inside = bb[0] >= blobs[k][0] - 0.35 * il and bb[2] <= blobs[k][2] + 0.35 * il
                             if k2 not in taken and k2 != k and min(bb[2], blobs[k][2]) - max(bb[0], blobs[k][0]) > -0.35 * il \
-                               and min(bb[3], blobs[k][3]) - max(bb[1], blobs[k][1]) > -0.6 * il \
-                               and bb[2] - bb[0] < max(2.0, 0.9 * len(b.text)) * il:   # 위아래로 갈라진 A도, 떨어진 "sus4"(Asus4)도
+                               and min(bb[3], blobs[k][3]) - max(bb[1], blobs[k][1]) > -(0.9 if inside else 0.6) * il \
+                               and bb[2] - bb[0] < max(2.5, len(b.text) + 1.6) * il:   # 위아래로 갈라진 A도, 떨어진 "sus4"(Asus4)도
+                               # (한 덩어리에서 고르는 한도와 같게: 보혈을 지나 D⁷이 조각 하나에만 붙어 D가 남았다)
+                               # (2.5il: 덩어리 상자는 0.3il씩 불어 있어 A의 다리 조각이 2.04il — 지금은 엘리야; 괄호선 "2. ----"은 6il)
                                 ks.append(k2)
                     taken.update(ks)
                     b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
