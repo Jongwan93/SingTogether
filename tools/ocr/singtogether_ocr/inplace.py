@@ -1871,7 +1871,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     for arcs, dy, st_, t_ in arc_jobs:
         move_arcs(img, arcs, dy, st_, t_)
 
-    rep.state.update(result=img.copy(), drawn_chords=getattr(_rewrite_chords, "drawn", []), semitones=semitones, src=src, ai=ai_t)
+    moved_arcs = [(x0, y0, x0 + m.shape[1], y0 + m.shape[0], dy) for arcs, dy, _, _ in arc_jobs for y0, x0, m in arcs]
+    rep.state.update(result=img.copy(), drawn_chords=getattr(_rewrite_chords, "drawn", []), semitones=semitones, src=src, ai=ai_t,
+                     moved_arcs=moved_arcs)
     final = compose_output(page, img, src)
     out.parent.mkdir(parents=True, exist_ok=True)
     ext = out.suffix.lower() if out.suffix.lower() in (".png", ".jpg", ".jpeg") else ".png"

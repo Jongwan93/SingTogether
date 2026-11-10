@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 singtogether-ocr = "singtogether_ocr.cli:main"
 singtogether-eval = "singtogether_ocr.eval.compare:main"
+singtogether-inplace-check = "singtogether_ocr.eval.inplace_check:main"
 
 [dependency-groups]
 dev = ["pytest", "music21>=9"]   # music21은 평가(singtogether-eval)에만 쓴다. 앱 번들에는 안 들어간다
