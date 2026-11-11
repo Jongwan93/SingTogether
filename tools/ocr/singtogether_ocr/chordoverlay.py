@@ -376,7 +376,23 @@ def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int]) -> tuple[tuple[i
     if not comps:
         return None
     s = max(comps, key=lambda s: (s[3], -s[0]))
-    others = [c for c in comps if c is not s and c[0] > s[0] + 0.5 * s[2]]
+    # 근음 글자에 빔·이음줄 끝이 붙었으면(모든 능력: A의 왼발이 빔 끝에 닿아 새 B가 빔 위에 써졌다) 양 끝의 납작한 열(글자 키의
+    # 40% 아래; 흐린 그림의 빔은 글자 키의 30%만큼 굵다)이 글자 키의 30% 넘게 이어지는 만큼 잘라 낸다. 글자의 발·세리프는 그보다 좁다
+    lab_ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:x1].astype(np.uint8), 8)[1]
+    comp = lab_[s[1]:s[1] + s[3], s[0]:s[0] + s[2]] == next(i for i in range(1, n) if (stats[i] == s).all())
+    ext = np.array([(np.flatnonzero(c)[-1] - np.flatnonzero(c)[0] + 1) if c.any() else 0 for c in comp.T])
+    flat = ext < 0.4 * s[3]
+    a, b = 0, len(ext)
+    while a < b and flat[a]:
+        a += 1
+    while b > a and flat[b - 1]:
+        b -= 1
+    root = s
+    if b - a >= 0.3 * s[3] and (a > 0.3 * s[3] or len(ext) - b > 0.3 * s[3]):    # 전부 납작하면(낱말 밑줄 등) 그대로
+        a, b = (a if a > 0.3 * s[3] else 0), (b if len(ext) - b > 0.3 * s[3] else len(ext))
+        rows = np.flatnonzero(comp[:, a:b].any(axis=1))
+        s = np.array([s[0] + a, s[1] + rows[0], b - a, rows[-1] - rows[0] + 1, s[4]])
+    others = [c for c in comps if c is not root and c[0] > s[0] + 0.5 * s[2]]
     # 윗첨자 = 근음보다 작고 **바닥이 떠 있는** 것 (근음 바닥보다 0.2cap 위). 소문자 m·sus는 작아도 바닥이 같다 (Em은 윗첨자가 아니다)
     # 하나라도 그러면 윗첨자 악보다: Gm⁷·C⁴sus 처럼 m·sus는 바닥에 있고 숫자만 올린 코드가 흔하다 (전부로 재면 그런 코드가 반대표가 된다)
     small = any(c[3] <= 0.8 * s[3] and c[1] + c[3] <= s[1] + s[3] - 0.2 * s[3] for c in others)
@@ -564,6 +580,25 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
                  and abs((b[1] + b[3]) / 2 - (y0 + y1) / 2) < (y1 - y0) and b[0] >= x1 - 0.3 * (y1 - y0) and b[2] > x1]
         right += [b[0] for b in obstacles if b[0] >= x1 - 1 and y0 - 2 <= (b[1] + b[3]) / 2 <= y1 + 2
                   and (b[3] - b[1]) < 2.5 * (y1 - y0)]                 # 같은 줄의 낱말만 (가사 줄의 키 큰 상자는 빼고)
+        # 오른쪽 바로 옆의 작은 기호(늘임표·숫자 등: 대문자 키의 2배 폭, 1.6배 키 안)도 한계다 (주 이름 찬양: B를 Db로 바꾸니
+        # b가 늘임표 위에 겹쳤다). 긴 이음줄·기둥은 글자 뒤로 지나가는 것이라 빼고, 상자에서 대문자 키의 1.5배 안만 본다
+        if uniform:
+            cap_ = max(6.0, page_cap)
+            sx0, sx1 = x1 + 1, min(w, int(x1 + 1.5 * cap_))
+            if sx1 > sx0:
+                n_, _, st_, _ = cv2.connectedComponentsWithStats(ink[y0:y1, sx0:sx1].astype(np.uint8), 8)
+                for i_ in range(1, n_):
+                    bx_, by_, bw_, bh_, ba_ = st_[i_]
+                    if ba_ < 0.05 * cap_ * cap_ or bx_ + bw_ >= sx1 - sx0:      # 창 밖으로 이어지는 것(긴 곡선)은 빼고
+                        continue
+                    wy0_, wy1_ = max(0, y0 - int(cap_)), min(h, y1 + int(cap_))
+                    _, flab, fst, _ = cv2.connectedComponentsWithStats(ink[wy0_:wy1_, sx0 + bx_:sx0 + bx_ + bw_].astype(np.uint8), 8)
+                    ids_ = np.unique(flab[y0 - wy0_ + by_:y0 - wy0_ + by_ + bh_][flab[y0 - wy0_ + by_:y0 - wy0_ + by_ + bh_] > 0])
+                    # 그 조각을 위아래로 넓힌 창에서 다시 재서: 창 위·아래 끝에 닿으면 기둥·꼬리다 (주님 다시 오실때까지: 8분음표
+                    # 꼬리 때문에 G가 작아졌다)
+                    if ids_.size and bw_ <= 2 * cap_ and all(fst[j][3] <= 1.6 * cap_ and fst[j][1] > 0
+                                                             and fst[j][1] + fst[j][3] < wy1_ - wy0_ for j in ids_):
+                        right.append(sx0 + bx_)
         # 오른쪽 코드 앞에 여백을 둔다 (오선 악보: 대문자 높이의 0.3; 붙여 쓰면 Bbm7/Ab와 Ab가 한 낱말로 읽힌다)
         gap = max(2, int(round(0.3 * page_cap))) if uniform else 2
         limit = (min(right) - gap) if right else min(w - 2, x0 + 3 * (x1 - x0) + 4 * (y1 - y0))
@@ -587,6 +622,12 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
                     cond = max(0.6, avail / mask.shape[1])
                     mask = cv2.resize(mask, (max(1, int(round(mask.shape[1] * cond))), mask.shape[0]), interpolation=cv2.INTER_AREA)
             py, px = ry1 - cap_h - r_top, x0 - 1           # 근음 대문자 바닥을 원래 바닥에
+            # 상자가 근음 왼쪽의 이음줄·빔 끝까지 품었으면(근음 왼쪽에 근음 키의 60% 넘는 덩어리가 없다) 근음 왼쪽 끝에 쓴다
+            # (이 세상: B♭m⁷ 상자가 왼쪽 이음줄까지 넓어 새 Cm⁷이 이음줄 위에 2il 왼쪽으로 써졌다)
+            if rx0 - x0 > 0.3 * (ry1 - ry0):
+                n_, _, st_, _ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:rx0].astype(np.uint8), 8)
+                if not any(st_[i][3] >= 0.6 * (ry1 - ry0) for i in range(1, n_)):
+                    px = rx0 - 1
         else:
             hgt = int(round(height_for(c, t))) + 1
             if hgt != y1 - y0:                             # 상자가 글자 일부였다: 아래선(글자 바닥)을 기준으로 다시 잡는다

@@ -105,7 +105,10 @@ def check_symbols(truth: list[dict], allow: list, r: dict, f: float) -> list[dic
     for t in truth:
         x0, y0, x1, y1 = _scaled(t["box"], f)
         skip[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad] = True
-        new_text[max(0, y0 - int(0.6 * il)):y1 + pad, max(0, x0 - int(1.0 * il)):x1 + int(2.5 * il)] = True
+        # 새 글자는 옛 것보다 길 수 있다: 같은 줄 다음 코드 앞까지 (없으면 2.5il)
+        nxt = [_scaled(o["box"], f)[0] for o in truth if o["system"] == t["system"] and _scaled(o["box"], f)[0] > x1]
+        right = min(nxt) if nxt else x1 + int(2.5 * il)
+        new_text[max(0, y0 - int(0.6 * il)):y1 + pad, max(0, x0 - int(1.0 * il)):max(x1 + pad, right)] = True
     for box in allow:
         x0, y0, x1, y1 = _scaled(box, f)
         skip[max(0, y0):y1, max(0, x0):x1] = True
@@ -129,8 +132,15 @@ def check_symbols(truth: list[dict], allow: list, r: dict, f: float) -> list[dic
                     skip[max(0, b[1] - pad):b[3] + pad, max(0, b[0] - pad):b[2] + pad] = True
     out = []
     min_area = 0.06 * il * il
+    # 새 코드 글자가 실제로 차지한 상자 (+0.15il): 거기서 지나가던 곡선이 끊긴 것은 글자 뒤로 지나가게 일부러 비운 것이다
+    behind = np.zeros((H, W), bool)
+    k3 = max(3, int(0.3 * il)) | 1
+    nn_, _, nst, _ = cv2.connectedComponentsWithStats(cv2.dilate((now & ~orig & new_text).astype(np.uint8), np.ones((k3, k3), np.uint8)), 8)
+    for x, y, w, h, area in nst[1:]:
+        if area >= 0.5 * il * il:
+            behind[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad] = True
     thin = max(2, int(0.15 * il))
-    for kind, mask in (("lost", orig & ~now & ~skip), ("gained", now & ~orig & ~skip & ~new_text)):
+    for kind, mask in (("lost", orig & ~now & ~skip & ~behind), ("gained", now & ~orig & ~skip & ~new_text)):
         m = (mask & region).astype(np.uint8)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))   # 흐린 가장자리 한두 점은 뺀다
         n, _, stt, _ = cv2.connectedComponentsWithStats(cv2.dilate(m, np.ones((5, 5), np.uint8)), connectivity=8)

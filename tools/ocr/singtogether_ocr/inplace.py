@@ -1297,12 +1297,15 @@ def find_line_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], il: 
     return out
 
 
-def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int, staff: Staff, t_line: int) -> None:
-    """곡선 픽셀을 지우고(오선 줄은 잇고) dy만큼 옮겨 다시 찍는다."""
+def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int, staff: Staff, t_line: int,
+              avoid: np.ndarray | None = None) -> None:
+    """곡선 픽셀을 지우고(오선 줄은 잇고) dy만큼 옮겨 다시 찍는다. avoid(새 코드 글자 둘레)는 건드리지 않는다."""
     H, W = img.shape[:2]
+    if avoid is None:
+        avoid = np.zeros((H, W), bool)
     for y0, x0, m in arcs:
-        md = cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0
         h, w = m.shape
+        md = (cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0) & ~avoid[y0:y0 + h, x0:x0 + w]
         region = img[y0:y0 + h, x0:x0 + w]
         keep = np.zeros(h, bool)
         for ly in staff.lines:
@@ -1322,7 +1325,7 @@ def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int,
         if sy1 <= sy0:
             continue
         dst = img[ny + sy0:ny + sy1, x0:x0 + w]
-        dst[m[sy0:sy1] > 0] = 0
+        dst[(m[sy0:sy1] > 0) & ~avoid[ny + sy0:ny + sy1, x0:x0 + w]] = 0
 
 
 def on_barline(ink: np.ndarray, staff: Staff, x: float, il: float) -> bool:
@@ -1861,15 +1864,19 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             if hit is not None:
                 forced[id(hit)] = ftext
     rep.state.update(page=page, systems=systems, il=il, plans_all=plans_all, chord_boxes=chord_boxes, keysigs=keysigs, read=read)
+    letters_new = np.zeros(img.shape[:2], bool)
     try:
         before_chords = img.copy()
         rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced)
+        letters_new = img.astype(np.int16) - before_chords.astype(np.int16) < -60    # 새 코드 글자 잉크
         _restore_after_chords(img, before_chords, systems, ink, drawn_heads, il)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
         rep.notes_.append(f"chords not rewritten: {str(e).splitlines()[0][:120]}")
-    # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄)
+    # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄).
+    #    새 코드 글자 둘레(0.15il)는 지우지도 찍지도 않는다: 곡선이 글자 뒤로 지나가게 (이 세상: 올라간 붙임줄이 새 E♭·C를 덮었다)
+    avoid = cv2.dilate(letters_new.astype(np.uint8), np.ones((max(3, int(0.3 * il)) | 1,) * 2, np.uint8)) > 0
     for arcs, dy, st_, t_ in arc_jobs:
-        move_arcs(img, arcs, dy, st_, t_)
+        move_arcs(img, arcs, dy, st_, t_, avoid)
 
     moved_arcs = [(x0, y0, x0 + m.shape[1], y0 + m.shape[0], dy) for arcs, dy, _, _ in arc_jobs for y0, x0, m in arcs]
     rep.state.update(result=img.copy(), drawn_chords=getattr(_rewrite_chords, "drawn", []), semitones=semitones, src=src, ai=ai_t,
@@ -1905,11 +1912,15 @@ PLAUSIBLE_CHORD = re.compile(r"^[A-G][#b]?(m|m7|m9|maj7|M7|7|9|6|2|4|sus|sus2|su
 
 
 def _fix_vision_accidentals(rows, fifths: int) -> None:
-    """AI가 못 읽어 Vision 글자만 있는 코드의 근음 ♯·♭: Vision은 올린 ♯을 ♭으로 자주 읽는다. ♯ 조에서 조표에 ♯이 붙은 글자를
+    """AI가 못 읽어 Vision 글자만 있는 코드의 근음 ♯·♭: Vision은 올린 ♯을 ♭으로 읽거나 아예 놓친다. ♯ 조에서 조표에 ♯이 붙은 글자를
     ♭으로 읽었으면 ♯이다 (♭ 조도 거꾸로). 하나님은 너를 지키시는자: E장조의 G♯을 "Gb"로 — 그대로 두면 +2가 A♯이 아니라 A♭이 된다."""
     sharps, flats = "FCGDAEB"[:max(0, fifths)], "BEADGCF"[:max(0, -fifths)]
     for row in rows:
         for b in row:
+            if b.src == "vision" and re.match(r"[A-G](?![#b])", b.text) and (b.text[0] in sharps or b.text[0] in flats):
+                # 임시표가 없는데 조표가 바꾸는 글자면 조표대로 (이 세상: A♭장조의 B♭m⁷을 Vision이 ♭ 없이 "Bm7"로)
+                b.text = b.text[0] + ("#" if b.text[0] in sharps else "b") + b.text[1:]
+                continue
             m = re.match(r"([A-G])([#b])", b.text)
             if b.src != "vision" or not m:
                 continue
@@ -2144,7 +2155,36 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     b.x0, b.y0 = min(blobs[k][0] for k in ks), min(blobs[k][1] for k in ks)
                     b.x1, b.y1 = max(blobs[k][2] for k in ks), max(blobs[k][3] for k in ks)
                 elif src == "claude":
-                    drop.append(b)                     # 자리를 모르는 AI 전용 코드: 임시 상자가 이웃 글자에 걸치면 그걸 덮어쓴다
+                    # 맞는 덩어리가 없으면, 너무 넓은 덩어리(글자에 빔 끝·기둥이 붙었다: 주님 한 분만으로의 G) 안의 글자만 한 잉크
+                    # 조각(키 0.8il 넘게, 폭 0.4il~글자 수+1 il) 중 가장 가까운 것을 쓴다
+                    pieces = []
+                    for k, bb in enumerate(blobs):
+                        if k in taken or not (left - 2 < (bb[0] + bb[2]) / 2 < right + 2) or not (bb[0] - tol <= cx <= bb[2] + tol) \
+                           or bb[2] - bb[0] <= (len(b.text) + 1.6) * il or symbol(bb):
+                            continue
+                        bx0, by0, bx1, by1 = (int(v) for v in bb)
+                        n_, _, st_, _ = cv2.connectedComponentsWithStats(ink_all[by0:by1, bx0:bx1].astype(np.uint8), 8)
+                        cs = [(x, y, w_, h_) for x, y, w_, h_, _ in st_[1:] if w_ >= 0.25 * il]
+                        for x, y, w_, h_ in cs:
+                            if not (h_ >= 0.8 * il and h_ <= 2.5 * il and 0.4 * il <= w_ <= (len(b.text) + 1) * il):
+                                continue
+                            # 낱말 속 글자는 아니다: 옆 1.5il 안에 바닥이 같은(0.2il 안) 비슷한 키의 조각이 있으면 낱말이다
+                            # (주 이름 찬양: "D.S. al Coda"의 a·S에 B를 써 넣었다; 점으로 떨어진 D.S.도 1.5il 안이다)
+                            gx, gy = bx0 + x, by0 + y                   # 덩어리 상자가 낱말을 자르기도 해서 둘레 창에서 잰다
+                            wx0, wy0 = max(0, int(gx - 2 * il)), max(0, int(gy - 0.3 * il))
+                            win = ink_all[wy0:int(gy + h_ + 0.3 * il), wx0:int(gx + w_ + 2 * il)].astype(np.uint8)
+                            m_, _, wst, _ = cv2.connectedComponentsWithStats(win, 8)
+                            if any(w2 >= 0.1 * il and h2 >= 0.5 * h_ and w2 <= 1.4 * h2 and abs((wy0 + y2 + h2) - (gy + h_)) <= 0.2 * il   # l·i도; 납작한 늘임표는 글자가 아니다
+                                   and (0 <= wx0 + x2 - (gx + w_) <= 1.5 * il or 0 <= gx - (wx0 + x2 + w2) <= 1.5 * il)
+                                   for x2, y2, w2, h2, _ in wst[1:]):
+                                continue
+                            pieces.append((k, (bx0 + x, by0 + y, bx0 + x + w_, by0 + y + h_)))
+                    if pieces:
+                        k, pb = min(pieces, key=lambda p: abs((p[1][0] + p[1][2]) / 2 - cx))
+                        taken.add(k)
+                        b.x0, b.y0, b.x1, b.y1 = pb
+                    else:
+                        drop.append(b)                 # 자리를 모르는 AI 전용 코드: 임시 상자가 이웃 글자에 걸치면 그걸 덮어쓴다
         # Vision만 읽은 "코드"가 다른 코드의 상자 안에 있으면 그 코드의 윗첨자 조각이다 (쌓인 ⁷₄를 "A"로, 올린 ⁴를 "D"로):
         # 지우면 안 되고, 옮겨 쓰면 그 코드 위에 글자가 덧씌워진다
         # Vision만 읽은 코드는 AI가 못 본 것이라 믿음이 약하다. 버리는 것: 다른 코드의 상자 안(쌓인 ⁷₄를 "A"로), 다른 코드와 폭의
@@ -2164,7 +2204,57 @@ def snap_to_blobs(page, systems: list[System], rows, il: float, vision_rows=None
                     drop.append(b)
         for b in drop:
             row.remove(b)
+        _read_orphans(page, row, blobs, y0, il, ink_all)
     return rows
+
+
+def _read_orphans(page, row, blobs, band_top: int, il: float, ink_all: np.ndarray) -> None:
+    """AI도 Vision도 못 읽은 코드 (찬양의 열기 A, 나 주님의 기쁨 줄 끝 C): 어느 코드도 안 가져간 덩어리 중 글자 하나 모양
+    (키 0.8~2.5il, 폭 0.4il~키의 1.4배, 바닥이 줄의 코드 바닥과 0.3il 안)이고 기호·낱말 속 글자가 아닌 것을 따로 잘라 읽는다.
+    Vision은 글자 하나짜리를 무시하므로 같은 조각을 이어 붙여 읽는다 (read_tiled). 코드로 읽힌 것만 Vision 코드로 더한다.
+    빔 거르기에 위아래로 잘린 글자(A의 꼭짓점)는 가로로 겹치고 0.9il 안에 붙은 조각을 합친다."""
+    if len(row) < 2:
+        return
+    base = float(np.median([b.y1 for b in row]))
+    def used(bb):
+        return any(min(bb[2], b.x1) - max(bb[0], b.x0) > 0.3 * (bb[2] - bb[0]) for b in row)
+    free = [bb for bb in blobs if not used(bb)]
+    groups: list[list] = []
+    for bb in sorted(free, key=lambda bb: bb[1]):
+        g = next((g for g in groups if min(bb[2], max(x[2] for x in g)) - max(bb[0], min(x[0] for x in g)) > 0.5 * (bb[2] - bb[0])
+                  and bb[1] - max(x[3] for x in g) <= 0.9 * il), None)
+        (g.append(bb) if g is not None else groups.append([bb]))
+    for g in groups:
+        bx = (int(min(x[0] for x in g)), int(min(x[1] for x in g)), int(max(x[2] for x in g)), int(max(x[3] for x in g)))
+        # 덩어리 상자는 0.3il씩 불었지만 글자 끝을 자르기도 한다 (나 주님의 기쁨 C의 오른쪽): 상자에 걸친 잉크 조각 전체로
+        wx0, wy0 = max(0, int(bx[0] - il)), max(0, int(bx[1] - il))
+        win = ink_all[wy0:int(bx[3] + il), wx0:int(bx[2] + il)].astype(np.uint8)
+        n_, lab_, wst, _ = cv2.connectedComponentsWithStats(win, 8)
+        core = lab_[bx[1] - wy0:bx[3] - wy0, bx[0] - wx0:bx[2] - wx0]
+        ids = [i for i in np.unique(core) if i and wst[i][4] >= 0.05 * il * il]
+        # 빔·이음줄 토막이다 (이 세상: 빔 끝을 "Ab"로 읽었다). 창 가장자리에 닿은 조각은 창 밖으로 더 뻗는다
+        if not ids or any(wst[i][2] > 2.5 * il or wst[i][0] == 0 or wst[i][0] + wst[i][2] >= win.shape[1] for i in ids):
+            continue
+        x0, y0 = wx0 + min(wst[i][0] for i in ids), wy0 + min(wst[i][1] for i in ids)
+        x1, y1 = wx0 + max(wst[i][0] + wst[i][2] for i in ids), wy0 + max(wst[i][1] + wst[i][3] for i in ids)
+        if any(min(x1, b.x1) - max(x0, b.x0) > 0 and min(y1, b.y1) - max(y0, b.y0) > 0 for b in row):
+            continue
+        w, h = x1 - x0, y1 - y0
+        if not (0.8 * il <= h <= 2.5 * il and 0.4 * il <= w <= 1.4 * h and abs(y1 - base) <= 0.3 * il):
+            continue
+        if cross_shaped(ink_all, (x0, y0, x1, y1)) or (y0 <= band_top + 1 and _volta_bar(ink_all, (x0, y0, x1, y1), il) is not None):
+            continue
+        # 낱말 속 글자는 아니다: 옆 1.5il 안에 바닥이 같은 비슷한 키의 글자 모양 조각이 있으면 낱말이다 (D.C.·Coda)
+        wx0, wy0 = max(0, int(x0 - 2 * il)), max(0, int(y0 - 0.3 * il))
+        n_, _, wst, _ = cv2.connectedComponentsWithStats(ink_all[wy0:int(y1 + 0.3 * il), wx0:int(x1 + 2 * il)].astype(np.uint8), 8)
+        if any(w2 >= 0.1 * il and h2 >= 0.5 * h and w2 <= 1.4 * h2 and abs((wy0 + yy + h2) - y1) <= 0.2 * il
+               and (0 <= wx0 + xx - x1 <= 1.5 * il or 0 <= x0 - (wx0 + xx + w2) <= 1.5 * il) for xx, yy, w2, h2, _ in wst[1:]):
+            continue
+        r = text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 3) or text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 5)
+        name = text.normalize_chord(re.sub(r"^([A-G])[Il|]$", r"\1", r.text)) if r else ""
+        if r and r.conf >= 0.9 and text.is_chord(name) and PLAUSIBLE_CHORD.match(name):
+            row.append(text.TextBox(name, r.conf, x0, y0, x1, y1, "vision"))
+    row.sort(key=lambda b: b.x0)
 
 
 def compose_output(page, img: np.ndarray, src: Path) -> np.ndarray:
@@ -2229,16 +2319,92 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
     # 옛 글자가 기둥·빔에 붙어 있으면 덩어리째 밖으로 나가 글자까지 살아난다 (지금은 엘리야: B 밑에 A, F♯ 밑에 E).
     # Vision이 글자를 읽은 상자 안은 되살리지 않는다 (그 안의 옮긴 머리는 3에서 다시 그린다)
     letters = np.zeros(img.shape, bool)
+    lboxes = []
     for _, x0, y0, x1, y1, old, new_ in getattr(_rewrite_chords, "drawn", []):
         if new_ and new_ != old:
-            letters[max(0, int(y0) - 1):int(y1) + 2, max(0, int(x0) - 1):int(x1) + 2] = True
+            lboxes.append((max(0, int(y0) - 1), int(y1) + 2, max(0, int(x0) - 1), int(x1) + 2))
+            letters[lboxes[-1][0]:lboxes[-1][1], lboxes[-1][2]:lboxes[-1][3]] = True
     # Vision 상자가 글자 일부만 잡으면(지금은 엘리야 E: 아래 절반) 글자가 지운 상자 밖으로 나가 기둥처럼 보인다.
     # 글자만 한 덩어리가 글자 상자에 걸리면 옛 글자다 (빔·긴 이음줄처럼 큰 것은 글자에 걸려도 되살린다)
     on_letter = np.bincount(labels[letters[Y0:Y1, X0:X1]], minlength=n) > 0
     small = (stats[:, cv2.CC_STAT_WIDTH] <= 3 * il) & (stats[:, cv2.CC_STAT_HEIGHT] <= 2.5 * il)
     keep &= ~(on_letter & small)
-    m = keep[labels] & sub_lit & ~letters[Y0:Y1, X0:X1]
+    # 거의 다 지운 상자 안에 든 긴 곡선(3il 넘게 넓다: 이 세상의 이음줄은 E♭·Fm 상자 둘에 93%가 들었다)도 후보로 둔다. 글자가 붙은
+    # 상자 안은 아래 세로획 검사가 막는다
+    wide = (stats[:, cv2.CC_STAT_WIDTH] > 3 * il) & (np.bincount(labels[sub_lit], minlength=n) > 0)
+    wide[0] = False
+    keep |= wide
+    # 글자 상자를 그냥 지나가는 곡선·빔(그 상자 안 부분에 글자 높이의 세로획이 없다: 세로 런 0.6il 이하)은 상자 안까지 되살린다
+    # (이 세상: Vision 상자가 글자에 붙은 이음줄까지 품어 이음줄 가운데가 끊겼다). 상자마다 따로 잰다: 같은 이음줄이 이웃 코드의
+    # F를 지나면 그 상자에서만 글자가 붙은 것이다
+    sub_letters = letters[Y0:Y1, X0:X1]
+    m = keep[labels] & sub_lit & ~sub_letters
+    for ya, yb, xa, xb in lboxes:
+        ya, yb, xa, xb = max(0, ya - Y0), max(0, yb - Y0), max(0, xa - X0), max(0, xb - X0)
+        if yb <= ya or xb <= xa:
+            continue
+        lab_b, lit_b = labels[ya:yb, xa:xb], sub_lit[ya:yb, xa:xb]
+        for i in np.unique(lab_b[lit_b]):
+            if i == 0 or not keep[i]:
+                continue
+            part = lab_b == i
+            runs = 0
+            for col in part.T:
+                if col.any():
+                    d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+                    runs = max(runs, int((np.flatnonzero(d == -1) - np.flatnonzero(d == 1)).max()))
+            if runs <= 0.6 * il:
+                m[ya:yb, xa:xb] |= part & lit_b
+            else:
+                # 글자가 붙은 덩어리(이 세상: 이음줄이 Fm의 F에 닿는다)는 상자 밖에서 들어오는 가는 곡선을 따라 상자 안의 가는 잉크
+                # (세로 런 0.4il 이하)만 잇는다. 글자 기둥은 굵어서 거기서 멈춘다
+                g0, g1, h0, h1 = max(0, ya - 2), min(labels.shape[0], yb + 2), max(0, xa - 2), min(labels.shape[1], xb + 2)
+                comp = labels[g0:g1, h0:h1] == i
+                cvr = np.zeros(comp.shape, np.int32)
+                for c in range(comp.shape[1]):
+                    col = comp[:, c]
+                    if col.any():
+                        d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+                        for a_, b_ in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
+                            cvr[a_:b_, c] = b_ - a_
+                thin_ = comp & (cvr <= 0.4 * il)
+                inner = np.zeros_like(thin_)
+                inner[ya - g0:yb - g0, xa - h0:xb - h0] = True
+                seed = thin_ & ~inner                              # 상자 바로 밖(2px 테)의 가는 곡선
+                nl, tl, tst, _ = cv2.connectedComponentsWithStats(thin_.astype(np.uint8), connectivity=8)
+                # 상자 안의 길고 납작한 가는 조각도 곡선이다 (폭 2il 넘게, 키의 2배 넘게): 글자를 지나며 굵어진 곳에서 끊겨 밖과
+                # 안 이어져도 (이 세상: Fm의 m 위). 글자의 가로획·m의 아치는 그보다 짧다
+                longs = [j for j in range(1, nl) if tst[j][2] > 2 * il and tst[j][2] > 2 * tst[j][3]]
+                ids_ = set(np.unique(tl[seed]).tolist()) | set(longs)
+                ids_.discard(0)
+                if not ids_:
+                    continue
+                grow = np.isin(tl, list(ids_)) & inner
+                m[g0:g1, h0:h1] |= grow & sub_lit[g0:g1, h0:h1]
+    # 새 코드 글자 하나하나의 상자(+0.15il)는 되살리지 않는다: 새 글자가 옛 것보다 넓으면 되살린 이음줄이 글자를 긋는다
+    # (모든 능력 C♯m⁷: 옮기지 못한 붙임줄이 C의 몸통을 지났다). 곡선은 글자 뒤로 지나가게 끊긴다. 글자마다 따로 잰다: 코드 전체
+    # 상자로 하면 키 작은 m 위를 지나는 이음줄까지 비었다 (이 세상 Gm)
     sub, sb = img[Y0:Y1, X0:X1], before[Y0:Y1, X0:X1]
+    new_ink = (sub.astype(np.int16) - sb.astype(np.int16) < -60).astype(np.uint8)
+    nn_, _, nst, _ = cv2.connectedComponentsWithStats(new_ink, connectivity=8)
+    nst = np.array([st for st in nst[1:] if st[4] >= 0.03 * il * il] or np.zeros((0, 5), int)).reshape(-1, 5)
+    nst = np.vstack([np.zeros((1, 5), int), nst])
+    pad_ = max(1, int(0.15 * il))
+    m_all = m.copy()
+    for x, y, w_, h_, _ in nst[1:]:
+        m[max(0, y - pad_):y + h_ + pad_, max(0, x - pad_):x + w_ + pad_] = False
+    # 다만 그 안에서도 빔처럼 굵은 것(세로 런 0.35il 넘게; 붙임줄은 더 가늘다)은 새 글자 획 둘레(0.15il) 밖이면 되살린다
+    # (주님은 산 같아서: B/D# 밑을 지나는 빔이 비었다)
+    vr = np.zeros(sb.shape, np.int32)
+    dark = sb < 128
+    for c in range(dark.shape[1]):
+        col = dark[:, c]
+        if col.any():
+            d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+            for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
+                vr[a:b, c] = b - a
+    near_new = cv2.dilate(new_ink, np.ones((max(3, int(0.3 * il)) | 1,) * 2, np.uint8)) > 0
+    m |= m_all & (vr > 0.35 * il) & ~near_new
     sub[m] = np.minimum(sub[m], sb[m])
     # 3. 새로 그린 머리 중 지운 자리에 걸린 것은 다시 그린다 (옮긴 머리는 옛 잉크가 아니라 1·2에서 안 돌아온다)
     for hx_, hy_, hw_, hh_, hollow_ in drawn_heads:

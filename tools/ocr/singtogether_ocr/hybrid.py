@@ -175,7 +175,10 @@ def _chord_cost(v: str, c: str) -> float:
         common = len(os.path.commonprefix([nv, nc]))
         return 0.1 + 0.3 * (1 - common / max(len(nv), len(nc)))
     if rv and rc and rv.group(0)[0] == rc.group(0)[0]:   # Vision은 윗첨자 ♭을 6으로 읽는다 (A♭→A6): 글자만 같아도 짝이 된다
-        return 0.7
+        # 슬래시 베이스까지 같으면 더 싸다: Vision "FM/E"가 AI의 "F♯m F♯m/E" 중 앞의 것과 짝지어지면 둘째 F♯m 자리가 비고
+        # 한 칸씩 밀렸다 (지금은 엘리야)
+        bv, bc = re.search(r"/([A-G][#b]?)$", nv), re.search(r"/([A-G][#b]?)$", nc)
+        return 0.6 if bv and bc and bv.group(1) == bc.group(1) else 0.7
     return 1.3
 
 
