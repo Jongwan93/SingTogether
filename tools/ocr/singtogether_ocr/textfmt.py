@@ -29,7 +29,8 @@ _BASES = [Fraction(4), Fraction(2), Fraction(1), Fraction(1, 2), Fraction(1, 4),
 
 def from_text(text: str, engine: str = "text") -> Transcription:
     t = Transcription(engine)
-    pending_chord = None
+    pending: list[str] = []            # 아직 음표에 못 붙인 코드 (읽은 순서)
+    last: Note | None = None           # 바로 앞 음표·쉼표
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -60,7 +61,11 @@ def from_text(text: str, engine: str = "text") -> Transcription:
             elif re.match(r"^\{\d$", tok):
                 meas.ending = int(tok[1])
             elif (c := _CHORD.match(tok)):
-                pending_chord = c.group(1)
+                # 한 음표 앞에 코드가 둘: AI가 쉼표나 마디 끝 위의 코드를 다음 음표 앞에 몰아 적는다 ("[Bb2] [Gmsus] C4/16", 나 주님의 기쁨).
+                # 앞 것은 바로 앞 음표가 비었으면 거기, 아니면 다음 음표들에 차례로 붙인다. 하나라도 버리면 하이브리드 병합의 짝이 밀린다
+                if pending and last is not None and last.chord is None:
+                    last.chord = pending.pop(0)
+                pending.append(c.group(1))
                 t.has_chords = True
             elif (n := _NOTE.match(tok)):
                 step, acc, octv, d, dot, tie = n.groups()
@@ -69,12 +74,14 @@ def from_text(text: str, engine: str = "text") -> Transcription:
                     note.tie_stop = True
                 elif not meas.notes and t.measures and t.measures[-1].notes and t.measures[-1].notes[-1].tie_start:
                     note.tie_stop = True
-                note.chord, pending_chord = pending_chord, None
+                note.chord = pending.pop(0) if pending else None
                 meas.notes.append(note)
+                last = note
             elif (r := _REST.match(tok)):
                 note = Note(None, duration=_duration(*r.groups()), dots=int(bool(r.group(2))))
-                note.chord, pending_chord = pending_chord, None
+                note.chord = pending.pop(0) if pending else None
                 meas.notes.append(note)
+                last = note
         for v, verse in enumerate(parts[1:]):
             sylls = verse.split()
             if not sylls:

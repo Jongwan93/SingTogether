@@ -61,7 +61,8 @@ def normalize_chord(s: str) -> str:
     s = re.sub(r"^([A-G][#b]?)(m?)sus(\d)/(\d)$", r"\1\2\3sus\4", s)   # ⁷₄가 msus 위에 쌓인 Gm⁷₄sus 를 Gmsus7/4 로 읽는 경우 → Gm7sus4
     s = re.sub(r"^([A-G])#?m#(\d)", r"\1#m\2", s)                      # 근음의 ♯이 위로 올라간 G♯m⁷ 을 Gm#7·G#m#7 로 읽는 경우 → G#m7
     s = re.sub(r"^([A-G][#b]?m?)[sS][uU][sS]", r"\1sus", s)            # 굵은 sus를 SUS·sUS로 읽는 경우 (지금은 엘리야 Esus⁴ → "ESUS")
-    s = re.sub(r"^([A-G][#b]?m?)sus(7),(4)", r"\1\2sus\3", s)          # 쌓인 ⁷₄를 AI가 "Gmsus7,4"로 적는다 (나 주님의 기쁨) → Gm7sus4
+    s = re.sub(r"^([A-G][#b]?m?)sus([79])[,/(]?([24])\)?$", r"\1\2sus\3", s)  # 쌓인 ⁷₄를 AI가 "Gmsus7,4"·"Gmsus74"·"Gmsus7(4)"로 적는다 (나 주님의 기쁨) → Gm7sus4
+    s = re.sub(r"^([A-G][#b]?m?)([24])sus(?![24])", r"\1sus\2", s)     # sus 위의 ⁴를 앞에 적은 "C#4sus/G#" (모든 능력과 모든 권세) → C#sus4/G#
     return s
 
 
@@ -277,14 +278,18 @@ def _merge_split_boxes(found: list[TextBox], il: float) -> list[TextBox]:
     return out
 
 
-def read_tiled(page: Page, box: tuple[int, int, int, int], il: float, words, reps: int = 3) -> TextBox | None:
+def read_tiled(page: Page, box: tuple[int, int, int, int], il: float, words, reps: int = 3,
+               keep: np.ndarray | None = None) -> TextBox | None:
     """Vision은 글자 하나짜리 조각을 무시하므로, 같은 조각을 reps번 이어 붙여 단어처럼 보이게 한다.
-    여백은 0.5il이 가장 잘 읽혔다 (1il 이상이면 자주 빈 결과). 상자는 쪽 좌표."""
+    여백은 0.5il이 가장 잘 읽혔다 (1il 이상이면 자주 빈 결과). 상자는 쪽 좌표.
+    keep: 쪽 크기의 참/거짓 그림. 주면 그 밖의 잉크를 지우고 읽는다 (여백에 든 옆 기호의 점을 "•A"로 읽는다)."""
     x0, y0, x1, y1 = box
     for pad in (int(0.5 * il), int(0.25 * il), int(il)):
         g = page.gray[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
         if g.size == 0:
             continue
+        if keep is not None:
+            g = np.where(keep[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad], g, 255).astype(np.uint8)
         gap = np.full((g.shape[0], max(4, int(0.3 * il))), 255, np.uint8)
         tiled = np.hstack(sum(([g, gap] for _ in range(reps)), [])[:-1])
         r = recognize(tiled, ("en-US",), correction=False, custom_words=words, min_side=128)

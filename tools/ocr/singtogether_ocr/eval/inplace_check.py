@@ -3,6 +3,8 @@
     singtogether-inplace-check                       # 정답이 있는 곡 전부 (AI 읽기는 truth/inplace/work/의 캐시)
     singtogether-inplace-check --songs "보혈을 지나"
     singtogether-inplace-check --llm none            # Apple Vision만 (AI 없는 경로)
+    singtogether-inplace-check --llm gemini          # 다른 AI (읽기는 같은 캐시 폴더의 gemini-crops에)
+    singtogether-inplace-check --work /tmp/again     # 캐시 없이 새로 읽어 본다 (AI가 매번 같게 읽는지)
     singtogether-inplace-check --sheets              # 틀린 곳 조각 그림: out/inplace/<이름>-*.png
     singtogether-inplace-check --init "보혈을 지나"   # 지금 결과로 정답 초안과 검수 그림을 만든다 (손으로 고쳐 쓴다)
 
@@ -252,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--overview", action="store_true", help="write per-system review pictures with the truth boxes")
     ap.add_argument("--init", metavar="SONG", help="write a draft truth from the current result")
     ap.add_argument("--semitones", type=int, default=2)
+    ap.add_argument("--work", type=Path, help="AI read cache folder instead of truth/inplace/work (a new folder reads again); "
+                                                "compared with the usual report, written to report-<llm>-<folder>.json")
     a = ap.parse_args(argv)
     images = score_images()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -264,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     wanted = {_nfc(s) for s in a.songs} if a.songs else None
     report_path = OUT / f"report-{a.llm}.json"
     before = json.loads(report_path.read_text()) if report_path.exists() else None
+    work_root = a.work or TRUTH / "work"
+    if a.work:
+        report_path = OUT / f"report-{a.llm}-{a.work.name}.json"
     keys: dict[str, list[str]] = {}
     total = {"ok": 0, "chords": 0, "lost": 0, "gained": 0}
     for path in sorted(TRUTH.glob("*.json")):
@@ -271,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         if (wanted and song not in wanted) or song not in images:
             continue
         data = json.loads(path.read_text())
-        r = _run(images[song], data.get("semitones", 2), a.llm, TRUTH / "work" / song)
+        r = _run(images[song], data.get("semitones", 2), a.llm, work_root / song)
         f = r["page"].scale / data.get("scale", r["page"].scale)
         chords = check_chords(data["chords"], r, f)
         symbols = check_symbols(data["chords"], data.get("allow", []), r, f)

@@ -367,9 +367,19 @@ def _tight(ink: np.ndarray, c: Chord, pad: int = 2) -> tuple[int, int, int, int]
     return X0 + int(xs.min()), Y0 + int(ys.min()), X0 + int(xs.max()) + 1, Y0 + int(ys.max()) + 1
 
 
-def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int]) -> tuple[tuple[int, int, int, int], bool] | None:
+def _longest_run(row: np.ndarray) -> int:
+    """한 행에서 가장 긴 연속 잉크 길이."""
+    if not row.any():
+        return 0
+    d = np.diff(np.r_[0, row.astype(np.int8), 0])
+    return int((np.flatnonzero(d == -1) - np.flatnonzero(d == 1)).max())
+
+
+def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int], cap: float | None = None) -> tuple[tuple[int, int, int, int], bool] | None:
     """상자 안 근음 대문자의 상자와, 나머지 글자가 윗첨자처럼 작은지(근음의 80% 아래): (상자, 작음). 가장 키 큰 덩어리가
-    근음 (같으면 왼쪽). 상자 높이의 30% 안 되는 조각(점·찌꺼기)은 뺀다."""
+    근음 (같으면 왼쪽). 상자 높이의 30% 안 되는 조각(점·찌꺼기)은 뺀다.
+    cap: 쪽의 대문자 키(알면). 근음이 그보다 25% 넘게 크면 곡선·빔이 글자 위나 아래에 붙은 것이다: 대문자 키보다 긴 가로 획이 있는
+    행이 아래쪽에만 있으면 위 끝에서, 위쪽에만 있으면 아래 끝에서 cap만큼만 글자로 본다."""
     x0, y0, x1, y1 = t
     n, _, stats, _ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:x1].astype(np.uint8), 8)
     comps = [stats[i] for i in range(1, n) if stats[i][3] >= 0.3 * (y1 - y0)]
@@ -390,8 +400,17 @@ def _root_letter(ink: np.ndarray, t: tuple[int, int, int, int]) -> tuple[tuple[i
     root = s
     if b - a >= 0.3 * s[3] and (a > 0.3 * s[3] or len(ext) - b > 0.3 * s[3]):    # 전부 납작하면(낱말 밑줄 등) 그대로
         a, b = (a if a > 0.3 * s[3] else 0), (b if len(ext) - b > 0.3 * s[3] else len(ext))
-        rows = np.flatnonzero(comp[:, a:b].any(axis=1))
+        comp = comp[:, a:b]
+        rows = np.flatnonzero(comp.any(axis=1))
+        comp = comp[rows[0]:rows[-1] + 1]
         s = np.array([s[0] + a, s[1] + rows[0], b - a, rows[-1] - rows[0] + 1, s[4]])
+    # 이음줄이 글자 밑에 닿은 E♭ (이 세상의 부요함보다 끝 줄): 바닥을 이음줄 밑에 맞추면 새 글자가 원래보다 18px 내려앉아 이음줄에 겹쳤다
+    if cap and s[3] > 1.25 * cap:
+        wide = np.flatnonzero([_longest_run(r) > 1.1 * cap for r in comp])
+        if wide.size and wide[0] > 0.8 * cap:
+            s = np.array([s[0], s[1], s[2], int(round(cap)), s[4]])
+        elif wide.size and wide[-1] < s[3] - 0.8 * cap:
+            s = np.array([s[0], s[1] + s[3] - int(round(cap)), s[2], int(round(cap)), s[4]])
     others = [c for c in comps if c is not root and c[0] > s[0] + 0.5 * s[2]]
     # 윗첨자 = 근음보다 작고 **바닥이 떠 있는** 것 (근음 바닥보다 0.2cap 위). 소문자 m·sus는 작아도 바닥이 같다 (Em은 윗첨자가 아니다)
     # 하나라도 그러면 윗첨자 악보다: Gm⁷·C⁴sus 처럼 m·sus는 바닥에 있고 숫자만 올린 코드가 흔하다 (전부로 재면 그런 코드가 반대표가 된다)
@@ -544,6 +563,9 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     roots = [p[0] if p else None for p in parts]
     cap_hs = [r[3] - r[1] for r in roots if r]
     page_cap = float(np.median(cap_hs)) if cap_hs else page_h
+    # 곡선이 붙어 대문자 키보다 큰 근음은 쪽 대문자 키로 다시 잰다
+    parts = [_root_letter(ink, t, page_cap) if (p and p[0][3] - p[0][1] > 1.25 * page_cap) else p for p, t in zip(parts, boxes)]
+    roots = [p[0] if p else None for p in parts]
     # 근음 뒤 글자(sus4, 7, /C♯)가 윗첨자처럼 작은 악보인가: 글자가 둘 이상인 코드들의 다수결
     # 표는 근음 뒤에 숫자·♯♭이 있는 코드만 낸다 (C⁷·B♭²·Esus⁴): 슬래시·m만 있는 코드(E/D·Dm)는 윗첨자 악보에서도 바닥에 쓰여 반대표가 된다
     # (슬래시 베이스의 ♯도 바닥에 쓰는 악보가 있어 숫자만 센다)

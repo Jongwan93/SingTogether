@@ -59,7 +59,7 @@ def align(a: list, b: list, cost, gap_a: float, gap_b: float) -> list[tuple[int 
 
 def place(vision: list[tuple[int, float, float, str, float]], claude: list[str], cost, systems: list[System],
           gap_a: float = 0.6, gap_b: float = 0.6, keep_vision_only=lambda text, conf: True,
-          claude_sys: list[int | None] | None = None, reconcile=None) -> tuple[list[Placed], float]:
+          claude_sys: list[int | None] | None = None, reconcile=None) -> tuple[list[Placed], float, float]:
     """vision: (오선, x, y, 글자, 확신도) 읽기 순서. claude: 글자 열. → Placed 목록과 앵커 비율.
     keep_vision_only: Claude에 짝이 없는 Vision 항목을 남길지 (글자, 확신도)로 정한다.
     claude_sys: Claude 항목이 든 오선 번호(알면). 다른 오선의 Vision 항목과는 짝을 비싸게 하고, 짝 없는 항목은 제 오선 안에 놓는다
@@ -114,8 +114,11 @@ def place(vision: list[tuple[int, float, float, str, float]], claude: list[str],
             last_anchor = anchor
         elif j is not None:
             # Claude 전용 빈 항목(음절 없는 음표)은 자리를 모르니 끼워 넣지 않는다. 바로 앞 Claude 항목과 같은 코드도 넣지 않는다:
-            # AI가 한 마디의 코드를 다음 마디에 또 적은 것이라(주 이름 찬양 G♯m7 ×2), 넣으면 Vision만 읽은 진짜 코드(B)를 덮는다
-            if claude[j] and not (j > 0 and claude[j] == claude[j - 1]) and not (j + 1 < len(claude) and claude[j] == claude[j + 1]):
+            # AI가 한 마디의 코드를 다음 마디에 또 적은 것이라(주 이름 찬양 G♯m7 ×2), 넣으면 Vision만 읽은 진짜 코드(B)를 덮는다.
+            # 같은 오선 안에서만: 줄 첫 코드는 앞 줄 끝 코드를 다시 적는 일이 흔하다 (주님 한 분만으로: 앞 줄 끝 G, 다음 줄 첫 G가 빠졌다)
+            def same(k: int) -> bool:
+                return 0 <= k < len(claude) and claude[j] == claude[k] and (csys[j] is None or csys[j] == csys[k])
+            if claude[j] and not same(j - 1) and not same(j + 1):
                 pending.append((claude[j], csys[j]))
         else:
             si, x, y, text, conf = vision[i]
@@ -146,9 +149,12 @@ def _reconcile_chord(vision: str, claude: str) -> str:
     if not rv or not rc or rv.group(0) != rc.group(0):
         return claude
     # Vision이 AI보다 길게 읽었고(Fmaj vs F) 그 앞부분이 AI와 같으면 AI가 접미를 빼먹은 것: Vision이 놓치는 윗첨자를 채워(maj→maj7,
-    # sus→sus4, add→add9) 그럴듯하면 그것을 쓴다
-    if len(v) > len(claude) and v.startswith(claude) and "/" not in v[len(claude):]:
-        full = re.sub(r"(maj|sus|add)$", lambda m: {"maj": "maj7", "sus": "sus4", "add": "add9"}[m.group(1)], v)
+    # sus→sus4, add→add9) 그럴듯하면 그것을 쓴다. 슬래시 베이스는 떼고 견준다 (지금은 엘리야: Vision "Asus/D", AI "A/D" → Asus4/D)
+    vbase, _, vbass = v.partition("/")
+    cbase, _, cbass = claude.partition("/")
+    if len(vbase) > len(cbase) and vbase.startswith(cbase) and vbass == cbass:
+        full = re.sub(r"(maj|sus|add)$", lambda m: {"maj": "maj7", "sus": "sus4", "add": "add9"}[m.group(1)], vbase)
+        full += "/" + vbass if vbass else ""
         if _PLAUSIBLE.match(full):
             return full
     vd =[d for d in re.findall(r"\d", v) if d in _CHORD_DIGITS]

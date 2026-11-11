@@ -2218,7 +2218,8 @@ def _read_orphans(page, row, blobs, band_top: int, il: float, ink_all: np.ndarra
     base = float(np.median([b.y1 for b in row]))
     def used(bb):
         return any(min(bb[2], b.x1) - max(bb[0], b.x0) > 0.3 * (bb[2] - bb[0]) for b in row)
-    free = [bb for bb in blobs if not used(bb)]
+    # 글자 하나가 될 수 없는 넓은 덩어리(괄호 줄·빔)는 묶지 않는다: 바로 밑 글자와 한 무리가 되어 같이 버려진다 (지금은 엘리야: "1." 괄호 밑 A)
+    free = [bb for bb in blobs if not used(bb) and bb[2] - bb[0] <= 4 * il]
     groups: list[list] = []
     for bb in sorted(free, key=lambda bb: bb[1]):
         g = next((g for g in groups if min(bb[2], max(x[2] for x in g)) - max(bb[0], min(x[0] for x in g)) > 0.5 * (bb[2] - bb[0])
@@ -2237,6 +2238,7 @@ def _read_orphans(page, row, blobs, band_top: int, il: float, ink_all: np.ndarra
             continue
         x0, y0 = wx0 + min(wst[i][0] for i in ids), wy0 + min(wst[i][1] for i in ids)
         x1, y1 = wx0 + max(wst[i][0] + wst[i][2] for i in ids), wy0 + max(wst[i][1] + wst[i][3] for i in ids)
+        own = (wx0, wy0, np.isin(lab_, ids))               # 글자 조각 (창 좌표): 읽을 때 옆 잉크를 지운다
         if any(min(x1, b.x1) - max(x0, b.x0) > 0 and min(y1, b.y1) - max(y0, b.y0) > 0 for b in row):
             continue
         w, h = x1 - x0, y1 - y0
@@ -2250,7 +2252,11 @@ def _read_orphans(page, row, blobs, band_top: int, il: float, ink_all: np.ndarra
         if any(w2 >= 0.1 * il and h2 >= 0.5 * h and w2 <= 1.4 * h2 and abs((wy0 + yy + h2) - y1) <= 0.2 * il
                and (0 <= wx0 + xx - x1 <= 1.5 * il or 0 <= x0 - (wx0 + xx + w2) <= 1.5 * il) for xx, yy, w2, h2, _ in wst[1:]):
             continue
-        r = text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 3) or text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 5)
+        # 글자 조각만 남기고 읽는다: 여백에 든 옆 기호(괄호 번호 "1."의 점)를 "•AA"로 읽었다 (지금은 엘리야). 회색 테까지 2px 넓힌다
+        keep = np.zeros(ink_all.shape, bool)
+        keep[own[1]:own[1] + own[2].shape[0], own[0]:own[0] + own[2].shape[1]] = own[2]
+        keep = cv2.dilate(keep.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        r = text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 3, keep) or text.read_tiled(page, (x0, y0, x1, y1), il, text.CHORD_VOCAB, 5, keep)
         name = text.normalize_chord(re.sub(r"^([A-G])[Il|]$", r"\1", r.text)) if r else ""
         if r and r.conf >= 0.9 and text.is_chord(name) and PLAUSIBLE_CHORD.match(name):
             row.append(text.TextBox(name, r.conf, x0, y0, x1, y1, "vision"))
