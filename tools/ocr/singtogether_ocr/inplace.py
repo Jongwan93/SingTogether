@@ -176,14 +176,19 @@ def draw_head(img: np.ndarray, cx: float, cy: float, w: float, h: float, hollow:
         cv2.ellipse(img, c, axes, -HEAD_TILT, 0, 360, 0, -1, cv2.LINE_AA)
 
 
-def head_shape(ink: np.ndarray, heads: list[Notehead], staff: Staff, t_line: int, il: float) -> tuple[float, float]:
+def head_shape(ink: np.ndarray, heads: list[Notehead], staff: Staff, t_line: int, il: float) -> tuple[float, float] | None:
     """그림의 머리 크기 (폭, 높이): 오선 줄 위에 앉은, 기둥 달린 속 찬 머리들의 잉크에서 줄과 기둥 열을 빼고 잰 너비·높이의 중앙값.
     악보 글꼴마다 머리 크기가 달라서(Leipzig는 1.2il × 0.85il, 표준은 1.2 × 0.82) 정해 두면 새 머리가 작거나 커 보인다.
     검출 상자(h.w, h.h)는 기둥 밑동·안티에일리어싱이 붙어 더 크다. 칸에 든 머리는 위아래 줄이 가장자리에 붙어 줄 빼기로 안
     빠지고(위아래가 머리 잉크다) 높이를 부풀리므로 줄 위 머리만 잰다 (줄이 머리 한가운데를 지나 잉크에 묻힌다); 덧줄 음은 덧줄이
-    머리 밖으로 나와 폭을 부풀리므로 뺀다. 잴 머리가 없으면 1.2il × 0.82il."""
+    머리 밖으로 나와 폭을 부풀리므로 뺀다.
+    흐린 캡처의 머리는 번져서 1.9 × 1.6il쯤 되어 위 창(±0.8il)과 한도(1.3il)에 다 걸린다 (13곡 중 11곡이 기본값 1.2 × 0.82il로
+    떨어져 새 머리가 원본의 2/3 크기로 그려졌다). 그러면 넓은 창에서 머리보다 가는 줄·기둥을 열림 연산으로 지우고 가운데를 품은
+    덩어리를 잰다. 그래도 잴 머리가 없으면 None (부르는 쪽이 쪽의 다른 오선에서 잰 크기를 쓴다)."""
     H, W = ink.shape
-    ws, hs = [], []
+    ws, hs, bws, bhs = [], [], [], []
+    k = max(3, int(round(0.5 * il)) | 1)
+    disk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     for h in heads:
         ev = h.evidence
         if not ev or ev.hollow or not ev.stem:
@@ -198,13 +203,36 @@ def head_shape(ink: np.ndarray, heads: list[Notehead], staff: Staff, t_line: int
         t_stem = max(1, int(round(0.08 * il)))
         box[:, max(0, ev.stem_x - t_stem - 1 - x0):max(0, ev.stem_x + t_stem + 2 - x0)] = 0
         rows, cols = np.flatnonzero(box.sum(axis=1) >= 3), np.flatnonzero(box.sum(axis=0) >= 3)   # 기둥 찌꺼기(2px)는 뺀다
-        if rows.size < 0.5 * il or cols.size < 0.6 * il or rows.size > 1.3 * il or cols.size > 1.5 * il:
+        if not (rows.size < 0.5 * il or cols.size < 0.6 * il or rows.size > 1.3 * il or cols.size > 1.5 * il):
+            ws.append(float(cols[-1] - cols[0] + 1))
+            hs.append(float(rows[-1] - rows[0] + 1))
+        # 흐린 머리: 넓은 창, 열림 뒤 가운데 덩어리. 머리를 지나는 줄은 양옆에 남으므로 폭은 몸통 높이의 35%가 넘는 열만 센다
+        # (타원은 그 기준에서 93.7%가 남는다). 머리에 닿은 위아래 줄은 가운데 열 위아래에 혹으로 남으므로(이 세상: 높이 2.0il)
+        # 높이는 가운데에서 폭의 30%만큼 비킨 두 열에서 재서 되돌린다 (타원은 거기서 높이의 80%)
+        x0, x1 = int(round(h.x - 1.4 * il)), int(round(h.x + 1.4 * il)) + 1
+        y0, y1 = int(round(h.y - 1.2 * il)), int(round(h.y + 1.2 * il)) + 1
+        if x0 < 0 or y0 < 0 or x1 > W or y1 > H:
             continue
-        ws.append(float(cols[-1] - cols[0] + 1))
-        hs.append(float(rows[-1] - rows[0] + 1))
-    if len(ws) < 2:
-        return 1.2 * il, 0.82 * il
-    return float(np.median(ws)), float(np.median(hs))
+        body = cv2.morphologyEx(ink[y0:y1, x0:x1].astype(np.uint8), cv2.MORPH_OPEN, disk)
+        _, lab, st_, _ = cv2.connectedComponentsWithStats(body, 8)
+        c = lab[int(round(h.y)) - y0, int(round(h.x)) - x0]
+        if not c:
+            continue
+        mask = lab == c
+        cols = np.flatnonzero(mask.sum(axis=0) >= 0.35 * st_[c][3])
+        if not cols.size:
+            continue
+        bw = float(cols.size) / 0.937
+        mid = (cols[0] + cols[-1]) / 2
+        bh = float(np.mean([mask[:, int(round(mid + d * bw))].sum() for d in (-0.3, 0.3)])) / 0.8
+        if 0.5 * il <= bh <= 2.0 * il and 0.6 * il <= bw <= 2.4 * il:
+            bws.append(bw)
+            bhs.append(float(bh))
+    if len(ws) >= 2:
+        return float(np.median(ws)), float(np.median(hs))
+    if len(bws) >= 2:
+        return float(np.median(bws)), float(np.median(bhs))
+    return None
 
 
 def draw_ledgers(img: np.ndarray, staff: Staff, step: int, cx: float, w: int, t_line: int) -> None:
@@ -865,6 +893,18 @@ def flag_hook(x: float, y: float, o: Notehead, il: float) -> bool:
     if not -0.4 * il <= x - ev.stem_x <= 0.9 * il:
         return False
     return (ev.stem_dir < 0 and y < o.y - 1.5 * il) or (ev.stem_dir > 0 and y > o.y + 1.5 * il)
+
+
+def column_fill(ink: np.ndarray, h: Notehead) -> float:
+    """머리 상자 가운데 절반 열에서 가장 긴 세로 잉크 길이의 중앙값 / 머리 높이. 꽉 찬 머리는 1에 가깝고(13곡 1500개 중 가장
+    낮은 것 0.85), 머리로 잘못 잡은 빔 토막·꼬리 끝처럼 기울어진 띠는 띠 두께만큼만 이어진다 (0.56–0.72)."""
+    y0, y1 = max(0, int(h.y - h.h / 2)), int(h.y + h.h / 2)
+    runs = []
+    for c in range(max(0, int(h.x - h.w / 4)), min(ink.shape[1], int(h.x + h.w / 4))):
+        d = np.diff(np.r_[0, ink[y0:y1, c].astype(np.int8), 0])
+        starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        runs.append(int((ends - starts).max()) if starts.size else 0)
+    return float(np.median(runs)) / max(1, h.h) if runs else 1.0
 
 
 FILTER_LOG: list = []          # Vision 상자 거르기 뒤에 남은 (오선, 글자, x0, y1) (디버깅용)
@@ -1582,6 +1622,10 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 old_spacing = (kboxes[1][0] + kboxes[1][2] - kboxes[0][0] - kboxes[0][2]) / 2
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
+    # 머리 크기를 못 잰 오선(잴 머리가 모자람)은 쪽의 다른 오선에서 잰 크기를 쓴다: 한 쪽 안에서 머리 크기가 들쭉날쭉하지 않게
+    shapes = [x for s_, syms_ in zip(systems, symbols)
+              if (x := head_shape(ink, syms_.noteheads, s_.staff, line_thickness(ink, s_.staff), il))]
+    page_shape = (float(np.median([x[0] for x in shapes])), float(np.median([x[1] for x in shapes]))) if shapes else (1.2 * il, 0.82 * il)
     arc_jobs: list[tuple[list, int, Staff, int]] = []
     drawn_heads: list[tuple[float, float, float, float, bool]] = []   # 새로 그린 머리 (x, y, 폭, 높이, 속 빔): 코드 상자가 지우면 다시 그린다
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
@@ -1622,6 +1666,14 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         if len(stemmed) >= 3:
             mw, mh = float(np.median([h.w for h in stemmed])), float(np.median([h.h for h in stemmed]))
             heads = [h for h in heads if (h.evidence and (h.evidence.stem or h.evidence.hollow)) or not (h.w < 0.9 * mw and h.h < 0.8 * mh)]
+        # 기둥 없는 속 빈 머리가 오선 밖(0.75il 넘게)인데 덧줄이 없으면 머리가 아니다: 오선 끝에서 다음 줄로 넘어가는 붙임줄 끝이
+        # 오선 위에 만든 고리 (주 이름 찬양: 덧줄 달린 2분음표로 옮겨 그려졌다). 구멍 머리 검출기와 같은 기준이다
+        heads = [h for h in heads if not (h.evidence and h.evidence.hollow and not h.evidence.stem
+                                          and ((h.y < st.top - 0.75 * il and ledger_count(ink, st, h.x, il, t_line, False) < 1)
+                                               or (h.y > st.bottom + 0.75 * il and ledger_count(ink, st, h.x, il, t_line, True) < 1)))]
+        # 빔 토막·8분음표 꼬리 끝을 꽉 찬 머리로 읽은 것 (주님 한 분만으로: 오선 위 빔 토막이 덧줄 달린 머리로 옮겨 그려지고 빔이
+        # 사라졌다; 주님 다시 오실때까지·주 이름 찬양: 꼬리 끝). 가운데 열의 세로 잉크가 머리 높이에 못 미친다
+        heads = [h for h in heads if (h.evidence and h.evidence.hollow) or column_fill(ink, h) >= 0.78]
         # 검수가 정한 수정: 못 찾은 머리 더하기, 음표가 아닌 것 빼기
         for fsi, fx, fy in fixes.get("drop_heads", []):
             if fsi == si:
@@ -1810,7 +1862,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             draw_key_signature(img, st, rep.new_fifths, kstart, kend, il, samples.get(new_kind), old_spacing)
 
         # 4. 그리기: 머리, 덧줄, 기둥 연장, 임시표
-        filled_w, filled_h = head_shape(ink, heads, st, t_line, il)       # 지우기 전 잉크에서 잰다 (ink는 page.binary라 그대로다)
+        filled_w, filled_h = head_shape(ink, heads, st, t_line, il) or page_shape   # 지우기 전 잉크에서 잰다 (ink는 page.binary라 그대로다)
         for p in plans:
             h = p.head
             y_new = st.bottom - p.step_new * il / 2
