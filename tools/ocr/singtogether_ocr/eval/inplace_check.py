@@ -116,7 +116,9 @@ def check_symbols(truth: list[dict], allow: list, r: dict, f: float) -> list[dic
         skip[max(0, y0):y1, max(0, x0):x1] = True
     for (s, plans), ks in zip(r["plans"], r["keysigs"]):   # 조표·박자표를 다시 쓰는 자리: 오선 왼쪽 끝 ~ 첫 음표 앞 (♯·♭이 오선 위로 나온다)
         first = min((p.head.x for p in plans), default=ks[3] + 2 * il)
-        end = min(max(ks[3] + 1.5 * il, first - 1.0 * il), ks[3] + 5 * il)   # 새 조표가 더 길고 박자표도 다시 쓴다; 쉼표로 시작하는 줄에서 멀리 가지 않게
+        # 새 조표가 더 길고 박자표도 다시 쓴다: 자리가 좁으면 첫 머리 위까지 쓴다 (주님 한 분만으로: 1♯ → 3♯, 셋째 ♯이 첫 음 위).
+        # 오선 위 행만이고 코드 글자는 코드 검사가 따로 본다. 쉼표로 시작하는 줄에서 멀리 가지 않게
+        end = min(max(ks[3] + 1.5 * il, first + 0.5 * il), ks[3] + 5 * il)
         rows = slice(max(0, int(s.chord_band[0] - 1.5 * il)), int(s.staff.top))
         skip[rows, max(0, int(s.staff.left - il)):int(end)] = True
     for x0, y0, x1, y1, dy in r["arcs"]:              # 옮긴 이음줄·붙임줄: 옛 자리와 새 자리

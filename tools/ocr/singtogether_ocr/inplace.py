@@ -250,13 +250,16 @@ def draw_ledgers(img: np.ndarray, staff: Staff, step: int, cx: float, w: int, t_
             cv2.line(img, (x0, y), (x1, y), 0, t_line)
 
 
-def glyph(kind: str, il: float) -> np.ndarray:
-    """임시표 잉크 마스크 (흰 바탕 0, 잉크 255). 가운데가 음표 자리. 폭 1.4il, 높이 3.2il."""
+def glyph(kind: str, il: float, line: int = 0) -> np.ndarray:
+    """임시표 잉크 마스크 (흰 바탕 0, 잉크 255). 가운데가 음표 자리. 폭 1.4il, 높이 3.2il.
+    line: 세로획의 최소 두께(px; 부르는 쪽이 오선 줄 두께와 원본 1.2픽셀 중 큰 것을 준다). 흐린 캡처는 4배쯤 키워 작업하는데
+    세로획 0.07il(2px)은 원래 크기로 줄이면 0.5px라 회색으로 흐려졌다 (하나님은 너를·찬양의 열기의 새 조표). 가로 굵은 획은 1.6배.
+    줄간격의 0.25·0.3배를 넘지는 않는다 (작게 줄여 쓸 때 획이 뭉개지지 않게)."""
     W, H = int(1.4 * il), int(3.2 * il)
     g = np.zeros((H, W), np.uint8)
     cx, cy = W // 2, H // 2
-    t1 = max(1, int(round(0.07 * il)))           # 세로획
-    t2 = max(2, int(round(0.17 * il)))           # 가로 굵은 획
+    t1 = max(1, int(round(0.07 * il)), min(line, int(round(0.25 * il))))           # 세로획
+    t2 = max(2, int(round(0.17 * il)), min(int(round(1.6 * line)), int(round(0.3 * il))))   # 가로 굵은 획
     if kind == "sharp":
         for dx in (-0.17, 0.17):
             x = int(cx + dx * il)
@@ -276,8 +279,8 @@ def glyph(kind: str, il: float) -> np.ndarray:
     return g
 
 
-def draw_glyph(img: np.ndarray, kind: str, cx: float, cy: float, il: float) -> None:
-    g = glyph(kind, il)
+def draw_glyph(img: np.ndarray, kind: str, cx: float, cy: float, il: float, line: int = 0) -> None:
+    g = glyph(kind, il, line)
     h, w = g.shape
     x0, y0 = int(round(cx - w / 2)), int(round(cy - h / 2))
     H, W = img.shape[:2]
@@ -466,6 +469,36 @@ def clef_keep_x(cut: np.ndarray, lab: np.ndarray, stt, clef_i: int, bx0: int, y0
     if glyph and min(glyph) - loop_right <= 1.2 * il:
         return bx0 + int(min(glyph) - 0.45 * il)
     return bx0 + int(loop_right + 0.45 * il)
+
+
+def ink_right_edge(img: np.ndarray, staff: Staff, t_line: int, il: float, x_from: int, x_to: int) -> int:
+    """x_from부터 오른쪽으로, 오선 안에 잉크가 이어지는 마지막 열 + 1. 음자리표 안에서 시작하면 그 오른쪽 끝이다.
+    줄 둘레 행은 아예 안 본다: 지운 자리에 다시 그은 줄은 원래 줄보다 1–2px 두꺼워 줄 빼기 뒤에도 열마다 남는다 (하나님은 너를:
+    끝까지 잉크가 이어진다고 봐서 새 조표가 첫 음 위로 밀렸다)."""
+    y0, y1 = max(0, int(staff.top - 0.3 * il)), int(staff.bottom + 0.3 * il) + 1
+    x_from, x_to = max(0, x_from), min(img.shape[1], max(x_from + 1, x_to))
+    band = (img[y0:y1, x_from:x_to] < 128).astype(np.uint8)
+    pad = t_line // 2 + 2
+    for y in staff.lines:
+        band[max(0, y - y0 - pad):max(0, y - y0 + pad + 1)] = 0
+    cols = band.sum(axis=0) > 0
+    x = 0
+    while x < len(cols) and cols[x]:
+        x += 1
+    return x_from + x
+
+
+def first_ink(img: np.ndarray, staff: Staff, t_line: int, il: float, x_from: int, x_to: int) -> int:
+    """x_from부터 오른쪽으로 오선 안(줄 둘레 행 빼고)에 처음 잉크가 있는 열. 없으면 x_to. 오선 위아래는 안 본다: 윗줄에 붙은
+    코드 글자 바닥을 첫 잉크로 봐서 새 조표 자리가 좁아졌다 (주님 다시 오실때까지)."""
+    y0, y1 = int(staff.top), int(staff.bottom) + 1
+    x_from, x_to = max(0, x_from), min(img.shape[1], max(x_from + 1, x_to))
+    band = (img[y0:y1, x_from:x_to] < 128).astype(np.uint8)
+    pad = t_line // 2 + 2
+    for y in staff.lines:
+        band[max(0, y - y0 - pad):max(0, y - y0 + pad + 1)] = 0
+    cols = np.flatnonzero(band.sum(axis=0) > 0)
+    return x_from + int(cols[0]) if cols.size else x_to
 
 
 def find_clef_end(ink: np.ndarray, staff: Staff, t_line: int, il: float) -> int | None:
@@ -790,7 +823,7 @@ def ask_key(provider: str, page, staff: Staff, work: Path) -> int | None:
 
 
 def draw_key_signature(img: np.ndarray, staff: Staff, fifths: int, start_x: int, limit_x: int, il: float,
-                       sample: tuple[np.ndarray, float] | None = None, spacing: float | None = None) -> None:
+                       sample: tuple[np.ndarray, float] | None = None, spacing: float | None = None, line: int = 0) -> None:
     """새 조표. sample = (그림에서 거둔 같은 종류 글자의 마스크, 그 글자 중심과 자리의 y 차이): 있으면 그림의 글꼴 그대로 찍는다."""
     if fifths == 0:
         return
@@ -811,7 +844,7 @@ def draw_key_signature(img: np.ndarray, staff: Staff, fifths: int, start_x: int,
         if mask is not None:
             stamp(img, mask, cx, staff.bottom - steps[k] * il / 2 + sample[1] * shrink)
         else:
-            draw_glyph(img, kind, cx, staff.bottom - steps[k] * il / 2 - (0.45 * il if kind == "flat" else 0), il * shrink)
+            draw_glyph(img, kind, cx, staff.bottom - steps[k] * il / 2 - (0.45 * il if kind == "flat" else 0), il * shrink, line)
 
 
 def ring_closed(ink: np.ndarray, h: Notehead) -> bool:
@@ -1161,6 +1194,34 @@ def ai_hollow_fix(heads: list[Notehead], bars: list[float], measures: list, il: 
             AI_HOLLOW_LOG.append((h.x, h.y, "hollow", str(a.duration), round(sum(exact) / len(heads), 2), len(heads), len(ai_notes)))
             n += 1
     return n
+
+
+def ai_extra_hollow(heads: list[Notehead], measures: list, il: float, staff: Staff) -> list[Notehead]:
+    """AI 전사에 없는 기둥 없는 속 빈 머리: 오선 끝에서 다음 줄로 넘어가는 붙임줄이 맨 윗줄 위에 만든 열린 고리, 8분쉼표 (주 이름 찬양,
+    주님 한 분만으로). 크기·고리·자리로는 흐린 진짜 2분음표(검출 상자가 머리 옆으로 비낀 점2분음표)와 안 갈린다.
+    ai_hollow_fix처럼 머리 열과 AI 음표 열을 음높이로 맞춰, AI에 짝이 없거나 짝의 음높이가 다르고 2분음표보다 짧은 것
+    (주 이름 찬양: 고리를 F5로, AI는 그 자리를 D♯5 8분음표로 읽었다) 중 앞뒤 짝(있는 쪽)이 음높이까지 맞은 것만 고른다."""
+    from . import hybrid
+    ai_notes = [x for m in measures for x in m.notes if x.step]
+    if not ai_notes or not heads:
+        return []
+    hp = [step_pitch(int(round((staff.bottom - h.y) / (il / 2)))) for h in heads]
+    cost = lambda a, b: 0.0 if a == (b.step, b.octave) else (0.6 if a[0] == b.step else 1.0)
+    pairs = hybrid.align(hp, ai_notes, cost, 0.6, 0.6)
+    exact = [i is not None and j is not None and hp[i] == (ai_notes[j].step, ai_notes[j].octave) for i, j in pairs]
+    if sum(exact) < 0.7 * len(heads):
+        return []
+    out = []
+    for k, (i, j) in enumerate(pairs):
+        if i is None or exact[k] or (j is not None and ai_notes[j].duration >= 2):
+            continue
+        h = heads[i]
+        if not (h.evidence and h.evidence.hollow and not h.evidence.stem):
+            continue
+        near = [exact[k + d] for d in (-1, 1) if 0 <= k + d < len(pairs) and pairs[k + d][0] is not None and pairs[k + d][1] is not None]
+        if near and all(near):
+            out.append(h)
+    return out
 
 
 ARC_LOG: list[tuple] = []     # find_arcs가 후보마다 (x0, y0, x1, y1, 판정) 을 남긴다 (디버깅용)
@@ -1631,6 +1692,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
         st = sys_.staff
         t_line = line_thickness(ink, st)
+        stroke = max(t_line, int(round(1.2 * page.scale)))   # 새로 그리는 ♯·♭ 세로획: 원래 크기로 줄여도 1px 넘게 (회색으로 안 흐려지게)
         # 음자리표·조표 자리에서 잡힌 가짜 머리(보혈을 지나: 음자리표 고리, 주를 위한 이곳에: 줄 위 ♯의 굵은 획)는 뺀다 — 옮겨 그려지고,
         # 첫 머리 자리가 조표 안이 되면 조표를 못 지운다. 글자를 믿는 오선은 조표 다음 잉크(kend)부터, 아니면 글자 수만큼 뒤부터
         zone = max(clef_right, kend - 0.3 * il if real else clef_right + (0.3 + 1.1 * abs(rep.old_fifths)) * il)
@@ -1706,6 +1768,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         snapped = ledger_snap(ink, st, heads, il, t_line, page.binary)
         if snapped:
             rep.notes_.append(f"staff {si + 1}: {snapped} noteheads moved to the ledger line they sit on")
+        if ai_t is not None:
+            extra = ai_extra_hollow(heads, [m for m in ai_t.measures if m.system == si], il, st)
+            heads = [h for h in heads if h not in extra]
         if ai_t is not None and blurry:
             n_fix = ai_hollow_fix(heads, bars, [m for m in ai_t.measures if m.system == si], il, st, AI_HOLLOW_RUN)
             if n_fix:
@@ -1828,38 +1893,67 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 return None
 
             # 쌓아 쓴 조표(♯♯ 위에 ♯ 아래)는 글자당 0.85il쯤 차지한다; 그 안에서 틈을 찾으면 마지막 글자가 남는다
-            key_end = gap_after(clef_end + int((0.3 + 1.1 * abs(rep.old_fifths)) * il))
+            key_from = clef_end + int((0.3 + 1.1 * abs(rep.old_fifths)) * il)
+            key_end = gap_after(key_from)
             need_key = (0.25 + 0.7 * n_new + 0.2) * il
             # 틈이 없으면(박자표에 쉼표·첫 음이 붙은 찬양의 열기) 글자 수로 어림한 끝까지만: 첫 머리까지 지우면 쉼표가 사라진다.
             # 덩어리 단위로 지우므로 어림 끝에 걸친 4는 통째로 지워지고 그 너머 중심의 쉼표는 남는다
             est_end = clef_end + int((0.3 + 1.1 * abs(rep.old_fifths) + (1.5 if si == 0 else 0)) * il)   # 번진 ♯은 글자당 1.1il
             x_end, with_ts = min(first, est_end), si == 0 and ai_t is not None
+            glued = False
             if key_end is not None and key_end - clef_end >= need_key:
-                x_end, with_ts = key_end, False
+                x_end = key_end
+                # 틈이 어림한 조표 끝 바로 뒤면 박자표는 그 너머에 남는다. 한참(0.8il 넘게) 뒤면 조표와 4/4가 틈 없이 붙어 박자표까지
+                # 지운 것이라 다시 쓴다 (이 세상·주 이름 찬양·찬양의 열기: 예전에는 안 써서 4/4가 사라졌다)
+                if key_end - key_from <= 0.8 * il:
+                    with_ts = False
+                glued = with_ts
+            elif with_ts and x_end < first and prof[x_end] > empty and (ts_end := gap_after(x_end)) is not None:
+                # 어림한 끝이 박자표 숫자 한가운데(잉크 위)면 박자표 뒤 틈까지 지운다 (주님 다시 오실때까지: 4/4 앞 반만 지워지고 그 위에
+                # 새 ♯을 썼다). 끝이 이미 틈이면 안 늘린다 (주님의 임재 앞에서: 4/4 앞 틈에서 4/4 뒤까지 늘려 지우고 안 썼다)
+                x_end, glued = ts_end, True
             x_end = max(clef_end + int(0.5 * il), x_end)
             KEY_LOG.append((si, clef_end, key_end, x_end, first, with_ts, kboxes[0]))
             erase_key_area(img, ink, st, t_line, il, clef_end, x_end)
-            # 지운 뒤 지운 끝과 첫 머리 사이에 박자표 크기의 잉크(오선 안, 높이 1.5il 넘게)가 남았으면 원래 박자표가 살아 있다:
-            # 새로 쓰면 둘이 겹친다 (주를 위한 이곳에: C 앞에 4/4가 끼었다)
+            # 지운 뒤 지운 끝과 첫 머리 사이에 박자표가 남았으면 새로 안 쓴다 (주를 위한 이곳에: C 앞에 4/4가 끼었다). 첫 머리 왼쪽 끝
+            # 앞까지만, 폭 0.4il 넘는 것만 본다 (이 세상: 첫 음의 기둥을 박자표로 봤다). 조표와 붙어 박자표까지 지운 경우(glued)는
+            # 뒤에 쉼표가 오기도 해서(찬양의 열기) 위아래로 쌓인 숫자 둘이나 오선 높이만 한 덩어리만 박자표로 본다
             if with_ts:
-                band = (img[int(st.top):int(st.bottom) + 1, x_end:max(x_end + 1, first)] < 128).astype(np.uint8)
+                head0 = int(heads[0].x - heads[0].w / 2 - 0.15 * il)
+                band = (img[int(st.top):int(st.bottom) + 1, x_end:max(x_end + 1, head0)] < 128).astype(np.uint8)
                 band = strip_staff_lines(band, [y - int(st.top) for y in st.lines], t_line)
                 n_, _, stt_, _ = cv2.connectedComponentsWithStats(band, connectivity=8)
-                if any(stt_[i][3] >= 1.5 * il for i in range(1, n_)):
+                comps = [stt_[i] for i in range(1, n_) if stt_[i][2] >= 0.4 * il]
+                if glued:
+                    mid = (st.bottom - st.top) / 2
+                    digits = [c for c in comps if 1.0 * il <= c[3] <= 2.4 * il]
+                    survived = any(a[1] + a[3] / 2 < mid < b[1] + b[3] / 2 and min(a[0] + a[2], b[0] + b[2]) > max(a[0], b[0])
+                                   for a in digits for b in digits) or \
+                        any(c[3] >= 3.7 * il and c[1] <= 0.25 * il and c[1] + c[3] >= 3.75 * il for c in comps)   # 붙은 4/4는 오선을 꽉 채운다 (번진 4분쉼표도 3.5il이지만 위가 비었다)
+                else:
+                    survived = any(c[3] >= 1.5 * il for c in comps)
+                if survived:
                     with_ts = False
-            need = (0.25 + 0.7 * n_new + (1.4 if with_ts else 0)) * il
-            scale = max(0.6, min(1.0, (x_end - clef_end) / need)) if need else 1.0
-            x = clef_end + 0.25 * il * scale
+            # 새 조표는 지운 뒤 남은 음자리표 잉크의 실제 오른쪽 끝에서 띄워 쓴다: 구멍으로 잰 끝(고리 + 획 두께)보다 번진 음자리표의
+            # 오른쪽 획이 더 나와 있어 첫 ♭이 거기 묻혔다 (이 세상의 부요함보다)
+            start = max(clef_end, ink_right_edge(img, st, t_line, il, clef_end - int(0.6 * il), x_end))
+            # 쓸 자리는 지운 끝까지가 아니라 그 뒤 첫 잉크(첫 음·쉼표)의 0.3il 앞까지: 새 조표 글자가 옛것보다 많으면(C→D, A→B)
+            # 지운 폭 안에 넣느라 0.6배로 줄이고도 넘쳐 4/4가 첫 음에 겹쳤다 (주님 한 분만으로·지금은 엘리야 때처럼)
+            room = max(x_end, min(first_ink(img, st, t_line, il, x_end, int(heads[0].x)) - int(0.3 * il),
+                                  int(heads[0].x - heads[0].w / 2 - 0.15 * il)))
+            need = (0.3 + 0.7 * n_new + (1.4 if with_ts else 0)) * il
+            scale = max(0.6, min(1.0, (room - start) / need)) if need else 1.0
+            x = start + 0.3 * il * scale
             if n_new:
                 draw_key_signature(img, st, rep.new_fifths, int(x), int(x + (0.7 * n_new * scale + 0.5) * il), il,
-                                   samples.get(new_kind), 0.7 * il * scale)
+                                   samples.get(new_kind), 0.7 * il * scale, stroke)
                 x += 0.7 * n_new * scale * il + 0.3 * il * scale
             if with_ts:
                 draw_time_signature(img, st, ai_t.beats, ai_t.beat_type, int(x), il, scale)
         else:
             for b in kboxes:                                               # 글자 상자는 흐린 가장자리 획(♯의 왼쪽 세로획)을 놓치기도 해 여유를 둔다
                 erase(img, (b[0] - int(0.15 * il), b[1] - int(0.1 * il), b[2] + int(0.15 * il), b[3] + int(0.1 * il)), st, t_line)
-            draw_key_signature(img, st, rep.new_fifths, kstart, kend, il, samples.get(new_kind), old_spacing)
+            draw_key_signature(img, st, rep.new_fifths, kstart, kend, il, samples.get(new_kind), old_spacing, stroke)
 
         # 4. 그리기: 머리, 덧줄, 기둥 연장, 임시표
         filled_w, filled_h = head_shape(ink, heads, st, t_line, il) or page_shape   # 지우기 전 잉크에서 잰다 (ink는 page.binary라 그대로다)
@@ -1888,7 +1982,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 if (smp := samples.get(p.acc_new)):
                     stamp(img, smp[0], h.x - w / 2 - 0.75 * il, y_new + smp[1])
                 else:
-                    draw_glyph(img, p.acc_new, h.x - w / 2 - 0.75 * il, y_new, il)
+                    draw_glyph(img, p.acc_new, h.x - w / 2 - 0.75 * il, y_new, il, stroke)
 
         if arcs:
             arc_jobs.append((arcs, int(round(-rep.steps * il / 2)), st, t_line))

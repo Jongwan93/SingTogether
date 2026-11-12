@@ -105,6 +105,10 @@ def unmoved_heads(state: dict, loose: bool = False) -> list[tuple[int, float, fl
                 LOG.append(("unmoved-beam", si, round(hx), round(hy)))
                 continue
             h = notes.Notehead(hx, hy, int(bw), int(bh))
+            # 8분음표 꼬리 끝·빔 토막: 제자리 이조가 같은 기준으로 머리에서 뺀 것이다. 다시 넣으면 오선 위에 큰 머리가 생긴다 (주 이름 찬양)
+            if inplace.column_fill(orig, h) < 0.78:
+                LOG.append(("unmoved-flag", si, round(hx), round(hy)))
+                continue
             h.evidence = notes.duration_evidence(page.binary, h, il)
             h.evidence.hollow = False
             found.append(h)
