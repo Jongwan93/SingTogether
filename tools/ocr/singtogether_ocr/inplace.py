@@ -864,6 +864,38 @@ def ring_closed(ink: np.ndarray, h: Notehead) -> bool:
     return bool(mid_rows[:, :q[0]].any() and mid_rows[:, -q[0]:].any() and mid_cols[:q[1], :].any() and mid_cols[-q[1]:, :].any())
 
 
+def ring_left(ink: np.ndarray, h: Notehead, il: float) -> tuple[float, float, tuple[int, int, int, int]] | None:
+    """속 빈 머리 상자가 점2분음표의 고리를 벗어나 오른쪽 기둥과 점 위에 잡혔으면 (진짜 고리 속 가운데 x, y, 점 상자)를 돌려준다
+    (나 주님의 기쁨, 주님의 임재 앞에서 첫 줄 둘: 상자가 고리에서 1.2il 오른쪽이라 옮길 때 점을 지우고 머리를 기둥 오른쪽에
+    그렸다). 모두 맞아야 한다: 상자 가운데가 꽉 찬 덩어리가 아니고(꽉 찬 머리; 기둥과 줄이 지나면 0.64쯤), 가까이(가로 0.45il·세로 0.7il 안)에 고리 속이
+    없고(오선 줄이 고리 속을 둘로 가른 머리), 왼쪽 0.5–1.8il에 고리 속(잉크에 둘러싸인 흰 덩어리, 폭 0.25–1.6il·높이 0.2–1.3il:
+    흐린 캡처의 머리는 크다)이 있고, 그 고리 오른쪽에 점이 있다."""
+    H, W = ink.shape
+    x0, x1 = max(0, int(h.x - 2.2 * il)), min(W, int(h.x + 0.6 * il))
+    y0, y1 = max(0, int(h.y - 1.4 * il)), min(H, int(h.y + 1.4 * il))
+    if x1 - x0 < il or y1 - y0 < il:
+        return None
+    core = ink[max(0, int(h.y - 0.3 * il)):int(h.y + 0.3 * il), max(0, int(h.x - 0.3 * il)):int(h.x + 0.3 * il)]
+    if core.size == 0 or core.mean() >= 0.8:
+        return None
+    n, _, stats, cents = cv2.connectedComponentsWithStats((~ink[y0:y1, x0:x1].astype(bool)).astype(np.uint8), connectivity=4)
+    holes = []
+    for i in range(1, n):
+        x, y, w, hh, area = stats[i]
+        if x == 0 or y == 0 or x + w >= x1 - x0 or y + hh >= y1 - y0:
+            continue
+        if 0.25 * il <= w <= 1.6 * il and 0.2 * il <= hh <= 1.3 * il and area >= 0.05 * il * il:
+            holes.append((x0 + cents[i][0], y0 + cents[i][1]))
+    if any(abs(cx - h.x) < 0.45 * il and abs(cy - h.y) < 0.7 * il for cx, cy in holes):
+        return None
+    left = [(cx, cy) for cx, cy in holes if -1.8 * il <= cx - h.x <= -0.5 * il and abs(cy - h.y) <= 0.6 * il]
+    if not left:
+        return None
+    cx, cy = max(left)
+    dot = find_dot(ink, Notehead(cx, cy, h.w, h.h), il, reach=2.1)
+    return (cx, cy, dot) if dot else None
+
+
 def find_hollow_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Notehead], min_x: float) -> list[Notehead]:
     """notes.find_noteheads가 놓친 속 빈 머리(기둥 달린 2분음표). 닫힘으로 속을 메우면 기둥 아랫부분이 머리에 붙어
     세로로 긴 덩어리가 되는데, 거기서는 '세로로 긴 것은 꼬리'라며 버린다. 여기서는 덩어리에서 가장 넓은 띠(머리)를 잘라 본다.
@@ -938,6 +970,15 @@ def column_fill(ink: np.ndarray, h: Notehead) -> float:
         starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
         runs.append(int((ends - starts).max()) if starts.size else 0)
     return float(np.median(runs)) / max(1, h.h) if runs else 1.0
+
+
+def bar_rest(h: Notehead, staff: Staff, head_h: float) -> bool:
+    """꽉 찬 "머리"가 온쉼표·2분쉼표인가: 줄에 매달리거나 얹힌 납작한 네모 (이 세상의 부요함보다 끝줄, 주 이름 찬양 둘째 줄과
+    "Last time to Coda" 마디: 쉼표가 음표로 옮겨 그려졌다). 기둥이 없고, 오선 안이고, 높이가 쪽의 기둥 달린 머리 높이(head_h)의
+    0.85배 미만이다. 13곡에서 쉼표는 0.76–0.79, 오선 안 진짜 머리는 0.92 넘게 (흐려서 네모 모서리가 둥글어 모양으로는 못 가른다)."""
+    if h.evidence and (h.evidence.stem or h.evidence.hollow):
+        return False
+    return staff.top < h.y < staff.bottom and h.h < 0.85 * head_h
 
 
 FILTER_LOG: list = []          # Vision 상자 거르기 뒤에 남은 (오선, 글자, x0, y1) (디버깅용)
@@ -1472,10 +1513,10 @@ def find_whole_notes(binary: np.ndarray, sys_: System, il: float, heads: list[No
     return out
 
 
-def find_dot(ink: np.ndarray, h: Notehead, il: float) -> tuple[int, int, int, int] | None:
-    """머리 오른쪽 0.55–1.6il, 위아래 0.6il 안의 작은 덩어리(한 변 0.12–0.45il, 꽉 참) = 부점. 줄 위 음의 점은 위 칸에 있다."""
+def find_dot(ink: np.ndarray, h: Notehead, il: float, reach: float = 1.6) -> tuple[int, int, int, int] | None:
+    """머리 오른쪽 0.55–reach il, 위아래 0.6il 안의 작은 덩어리(한 변 0.12–0.45il, 꽉 참) = 부점. 줄 위 음의 점은 위 칸에 있다."""
     H, W = ink.shape
-    x0, x1 = int(h.x + 0.55 * il), min(W, int(h.x + 1.6 * il))
+    x0, x1 = int(h.x + 0.55 * il), min(W, int(h.x + reach * il))
     y0, y1 = max(0, int(h.y - 0.6 * il)), min(H, int(h.y + 0.6 * il))
     if x1 <= x0 or y1 <= y0:
         return None
@@ -1687,6 +1728,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     shapes = [x for s_, syms_ in zip(systems, symbols)
               if (x := head_shape(ink, syms_.noteheads, s_.staff, line_thickness(ink, s_.staff), il))]
     page_shape = (float(np.median([x[0] for x in shapes])), float(np.median([x[1] for x in shapes]))) if shapes else (1.2 * il, 0.82 * il)
+    stem_hs = [h.h for syms_ in symbols for h in syms_.noteheads if h.evidence and h.evidence.stem and not h.evidence.hollow]
+    head_h = float(np.median(stem_hs)) if len(stem_hs) >= 5 else None     # 검출 상자 높이 (쉼표 거르기용)
     arc_jobs: list[tuple[list, int, Staff, int]] = []
     drawn_heads: list[tuple[float, float, float, float, bool]] = []   # 새로 그린 머리 (x, y, 폭, 높이, 속 빔): 코드 상자가 지우면 다시 그린다
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
@@ -1736,6 +1779,14 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         # 빔 토막·8분음표 꼬리 끝을 꽉 찬 머리로 읽은 것 (주님 한 분만으로: 오선 위 빔 토막이 덧줄 달린 머리로 옮겨 그려지고 빔이
         # 사라졌다; 주님 다시 오실때까지·주 이름 찬양: 꼬리 끝). 가운데 열의 세로 잉크가 머리 높이에 못 미친다
         heads = [h for h in heads if (h.evidence and h.evidence.hollow) or column_fill(ink, h) >= 0.78]
+        # 줄에 매달린 온쉼표·줄에 얹힌 2분쉼표를 꽉 찬 머리로 읽은 것
+        if head_h:
+            heads = [h for h in heads if not bar_rest(h, st, head_h)]
+        # 점2분음표 상자가 고리 오른쪽(기둥과 점 위)에 잡힌 것: 고리 가운데로 옮기고 점을 단다. 높이도 고리에 맞춘다 (옛 상자
+        # 높이로 지우면 고리 아랫부분이 짧은 선으로 남았다)
+        for h in heads:
+            if h.evidence and h.evidence.hollow and (r := ring_left(ink, h, il)):
+                h.x, h.y, h.evidence.dot, h.dot_box = r[0], r[1], True, r[2]
         # 검수가 정한 수정: 못 찾은 머리 더하기, 음표가 아닌 것 빼기
         for fsi, fx, fy in fixes.get("drop_heads", []):
             if fsi == si:
@@ -1791,7 +1842,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             hollow = bool(h.evidence and h.evidence.hollow)
             plan = HeadPlan(h, step_old, step_old + rep.steps, hollow)
             if h.evidence and h.evidence.dot:
-                plan.dot = find_dot(ink, h, il)
+                plan.dot = getattr(h, "dot_box", None) or find_dot(ink, h, il)
             gap_x0, gap_x1 = max(prev_right, int(h.x - 2.6 * il)), int(h.x - h.w / 2 - 0.12 * il)
             if gap_x1 - gap_x0 >= 0.5 * il:
                 m = match_accidental(ink, gap_x0, gap_x1, h.y, il, st, t_line)
