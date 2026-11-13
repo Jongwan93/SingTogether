@@ -381,9 +381,10 @@ def erase_key_glyphs(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int
     return erased
 
 
-def ledger_count(ink: np.ndarray, staff: Staff, x: float, il: float, t_line: int, below: bool) -> int:
+def ledger_count(ink: np.ndarray, staff: Staff, x: float, il: float, t_line: int, below: bool, joined: bool = False) -> int:
     """x에서 오선 아래(또는 위)로 이어진 덧줄 수. 덧줄 = 그 줄 자리의 행 띠에서 x를 지나는 잉크 런이 1.45–3il (머리만이면 1.3il
-    아래, 빔·이음줄은 더 길다). 첫 덧줄이 없으면 0."""
+    아래, 빔·이음줄은 더 길다). 첫 덧줄이 없으면 0. joined면 여러 머리 밑을 잇는 긴 덧줄(주 이름 찬양 둘째 줄 끝: 9il)도
+    받는다 — 줄 두께 검사는 그대로라 빔은 안 든다. 그때는 머리가 큰 동그라미라 두께를 머리 바깥 ±1.4il 열에서 잰다."""
     H, W = ink.shape
     xi, n = int(round(x)), 0
     for k in range(1, 5):
@@ -398,12 +399,13 @@ def ledger_count(ink: np.ndarray, staff: Staff, x: float, il: float, t_line: int
             l -= 1
         while r + 1 < W and row[r + 1]:
             r += 1
-        if not 1.45 * il <= r - l + 1 <= 3.0 * il:
+        if not 1.45 * il <= r - l + 1 <= (12.0 if joined else 3.0) * il:
             break
         # 덧줄은 줄 두께다; 빔(0.4il 두께)이 같은 자리를 지나도 길이는 맞는다. 머리 바깥쪽(±0.9il) 열에서 그 행을 지나는 세로 잉크
         # 런이 한쪽이라도 줄 두께의 1.5배 안이어야 한다
         thin = False
-        for xo in (xi - int(0.9 * il), xi + int(0.9 * il)):
+        side = int((1.4 if joined else 0.9) * il)
+        for xo in (xi - side, xi + side):
             if not 0 <= xo < W or not ink[y, xo]:
                 continue
             a = b = y
@@ -983,6 +985,7 @@ def bar_rest(h: Notehead, staff: Staff, head_h: float) -> bool:
 
 FILTER_LOG: list = []          # Vision 상자 거르기 뒤에 남은 (오선, 글자, x0, y1) (디버깅용)
 KEY_LOG: list[tuple] = []      # 조표 통째 지우기가 오선마다 (오선 번호, 음자리표 끝, 틈, 지운 끝, 첫 머리, 박자표 다시 씀, 상자)를 남긴다 (디버깅용)
+PLAN_LOG: list[tuple] = []     # transpose_in_place가 옮길 머리마다 (오선, x, y, 속 빔, 옛 칸, 새 칸)을 남긴다 (디버깅용, 부를 때마다 비운다)
 HOLE_LOG: list[tuple] = []     # find_hole_heads가 후보마다 (x, y, 떨어진 검사 또는 "ok", 값)을 남긴다 (디버깅용)
 
 
@@ -993,7 +996,8 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
     직사각형은 0.95쯤, 붙임줄·마디줄·줄의 세모는 0.5 아래). 기둥이 있어야 하고 마디줄 위면 아니다. 머리 상자 = 구멍 + 고리 0.35il."""
     staff = sys_.staff
     H, W = binary.shape
-    y0, y1 = max(0, int(staff.top - 1.6 * il)), min(H, int(staff.bottom + 1.6 * il))
+    # 덧줄 밑에 매달린 큰 머리(B3, 주 이름 찬양 둘째 줄 끝 2분음표)의 고리 속은 오선 아래 2.3il까지 내려간다: 창은 3il
+    y0, y1 = max(0, int(staff.top - 3.0 * il)), min(H, int(staff.bottom + 3.0 * il))
     region = (binary[y0:y1, staff.left:staff.right + 1] < 128).astype(np.uint8)
     cut = strip_staff_lines(region, [y - y0 for y in staff.lines], t_line)
     # 구멍은 3×3 열림(깎았다 되돌림)을 거쳐 잰다: 줄을 뺀 자리에 남는 1–2px 틈이 구멍에 붙어 상자를 넓히고 채움을 0.34까지
@@ -1012,6 +1016,7 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
     holes2 = cv2.morphologyEx((region == 0).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     n2, lab2, st2, ce2 = cv2.connectedComponentsWithStats(holes2, connectivity=4)
     border2 = set(lab2[0]) | set(lab2[-1]) | set(lab2[:, 0]) | set(lab2[:, -1])
+    in_space: set[tuple[float, float]] = set()       # 두 줄에 닿은 칸 안 구멍: 번진 머리라 폭 1.4il까지 (그 칸 높이를 꽉 채운다)
     for i in range(1, n2):
         if i in border2:
             continue
@@ -1019,10 +1024,30 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         # 오선 밖에 매달린 것만: 아랫줄 바로 밑, 윗줄 바로 위 (오선 안의 줄 사이 칸은 기둥·빔과 함께 구멍처럼 닫힌다)
         bot, top = staff.lines[-1] - y0, staff.lines[0] - y0
         touches = abs(y_ - (bot + t_line // 2 + 1)) <= 2 or abs(y_ + h_ - (top - t_line // 2)) <= 2
+        # 오선 안 칸의 머리가 번져 고리 위아래가 두 줄에 닿은 것도 (이 세상의 부요함보다 끝줄 2번 괄호의 2분음표): 줄을 빼면
+        # 구멍이 터진다. 기둥·빔·마디줄이 둘러싼 칸은 옆이 곧다: 고리는 줄에 닿는 맨 위·아래 두 행이 가장 넓은 행의 0.8배
+        # 아래로 좁아진다 (그 머리 0.69·0.59, 주님의 임재 앞에서 다섯째 줄 점2분음표 0.69·0.75, 기둥 사이 칸 0.83 넘게)
+        lines_in = [ly - y0 for ly in staff.lines]
+        between = any(abs(y_ - (a + t_line // 2 + 1)) <= 2 and abs(y_ + h_ - (b - t_line // 2)) <= 2
+                      for a, b in zip(lines_in, lines_in[1:]))
+        if between:
+            hm = lab2[y_:y_ + h_, x_:x_ + w_] == i
+            rw = hm.sum(axis=1)
+            between = h_ >= 4 and max(rw[:2].mean(), rw[-2:].mean()) < 0.8 * rw.max()
+            # 가운데 행에서 좌우 잉크가 얇은 고리(0.5il 아래)이고 그 바깥은 희다: 꽉 찬 머리 사이의 둥근 틈은 한쪽이 머리라 두껍다
+            r_ = y_ + h_ // 2
+            def flank(xx: int, step: int) -> int:
+                n_ = 0
+                while 0 <= xx < region.shape[1] and region[r_, xx] and n_ <= il:
+                    n_, xx = n_ + 1, xx + step
+                return n_
+            between = between and 0 < flank(x_ - 1, -1) <= 0.5 * il and 0 < flank(x_ + w_, 1) <= 0.5 * il
         gx, gy = ce2[i][0] + staff.left, ce2[i][1] + y0
         near_head = any(abs(gx - h.x) < 0.9 * il and abs(gy - h.y) < 0.9 * il for h in heads)   # 줄 밑에 매달린 꽉 찬 머리와 줄 사이의 쐐기
-        if touches and not near_head and not any(abs(ce2[i][0] - c[5]) < 0.5 * il and abs(ce2[i][1] - c[6]) < 0.5 * il for c in cands):
+        if (touches or between) and not near_head and not any(abs(ce2[i][0] - c[5]) < 0.5 * il and abs(ce2[i][1] - c[6]) < 0.5 * il for c in cands):
             cands.append([x_, y_, w_, h_, a_, float(ce2[i][0]), float(ce2[i][1])])
+            if between and not touches:
+                in_space.add((float(ce2[i][0]), float(ce2[i][1])))
     line_rows = {y - y0 for y in staff.lines}
     merged = []
     used: set[int] = set()
@@ -1070,13 +1095,15 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         fill_min = 0.3 if crossed else 0.4
         w_min, h_min = (0.3, 0.2) if crossed else (0.4, 0.28)           # 고리가 두껍게 번지면 틈만 남는다 (주를 위한 이곳에 12마디)
         # 둥근 큰 구멍: 2분음표를 칸보다 큰 동그라미로 그린 악보 (하나님은 너를: 구멍 1.3–1.4 × 1.2–1.3il, 채움 0.63–0.8).
-        # 원에 가까워야 한다 (가로세로비 0.8–1.35, 채움은 타원 π/4쯤): 빔·기둥이 둘러싼 네모(채움 0.95)와 붙임줄 틈(얇음)은 안 든다
+        # 원에 가까워야 한다 (가로세로비 0.8–1.5, 채움은 타원 π/4쯤): 빔·기둥이 둘러싼 네모(채움 0.95)와 붙임줄 틈(얇음)은 안 든다.
+        # 덧줄 밑 큰 2분음표는 1.36 (주 이름 찬양 둘째 줄 끝)
         fill = area / (w * h)
-        big_round = 1.05 * il < w <= 1.6 * il and 0.8 * il < h <= 1.45 * il and 0.8 <= w / h <= 1.35 and 0.6 <= fill <= 0.86
-        if not big_round and not (w_min * il <= w <= 1.05 * il and h_min * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= fill <= 0.92):
+        big_round = 1.05 * il < w <= 1.6 * il and 0.8 * il < h <= 1.45 * il and 0.8 <= w / h <= 1.5 and 0.6 <= fill <= 0.86
+        w_max = 1.4 if (cxm, cym) in in_space else 1.05
+        if not big_round and not (w_min * il <= w <= w_max * il and h_min * il <= h <= 0.8 * il and 0.65 <= w / h <= 2.8 and fill_min <= fill <= 0.92):
             HOLE_LOG.append((hx, hy, "size", (round(w / il, 2), round(h / il, 2), round(area / (w * h), 2))))
             continue
-        if hx < min_x or not staff.top - 1.2 * il <= hy <= staff.bottom + 1.2 * il:
+        if hx < min_x or not staff.top - 2.0 * il <= hy <= staff.bottom + 2.0 * il:
             HOLE_LOG.append((hx, hy, "range", 0))
             continue
         if big_round:
@@ -1105,7 +1132,10 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         rx, ry = int((hw0 - w) / 2) + 2, int((hh0 - h) / 2) + 2
         corners = [(x - rx, y - ry), (x + w + rx, y - ry), (x - rx, y + h + ry), (x + w + rx, y + h + ry)]
         inked = sum(1 for px, py in corners if 0 <= py < cut.shape[0] and 0 <= px < cut.shape[1] and cut[py, px])
-        if inked >= 2:
+        # 칸 안 구멍(AI가 확인한다)은 둘까지: 번진 큰 고리는 기둥과 고리 자체가 모서리에 걸린다 (주님의 임재 앞에서 점2분음표).
+        # 오선 밖 큰 동그라미도 둘까지: 고리 위를 지나는 덧줄이 모서리에 걸린다 (주 이름 찬양 둘째 줄 끝 B3; 덧줄은 아래에서 본다)
+        loose = (cxm, cym) in in_space or (big_round and not staff.top <= hy <= staff.bottom)
+        if inked >= (3 if loose else 2):
             HOLE_LOG.append((hx, hy, "corners", inked))
             continue
         # 구멍 바로 위·아래의 잉크는 고리 두께(0.35il 아래)여야 한다: 비스듬한 빔(0.4–0.5il)이 기둥·줄과 둘러싼 구멍은 모서리가
@@ -1122,14 +1152,21 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
                 HOLE_LOG.append((hx, hy, "thick", up / il))
                 continue
         # 오선 밖(위 0.75il 넘게, 아래도)이면 덧줄이 있어야 한다: 코드 글자(A의 세모 구멍)와 가사 글자를 거른다
-        if (hy < staff.top - 0.75 * il and ledger_count(binary < 128, staff, hx, il, t_line, False) < 1) or \
-           (hy > staff.bottom + 0.75 * il and ledger_count(binary < 128, staff, hx, il, t_line, True) < 1):
+        if (hy < staff.top - 0.75 * il and ledger_count(binary < 128, staff, hx, il, t_line, False, joined=big_round) < 1) or \
+           (hy > staff.bottom + 0.75 * il and ledger_count(binary < 128, staff, hx, il, t_line, True, joined=big_round) < 1):
             HOLE_LOG.append((hx, hy, "ledger", 0))
             continue
         head_w, head_h = int(max(w + 0.4 * il, 1.2 * il)), int(max(h + 0.4 * il, 0.9 * il))   # 고리가 두꺼우면 구멍보다 머리가 훨씬 크다
+        if (cxm, cym) in in_space:                   # 두 줄에 닿는 번진 고리는 줄 밖까지 0.35il씩: 작게 지우면 고리 위아래가 남는다
+            head_w, head_h = int(w + 0.7 * il), int(h + 0.7 * il)
+        # 기둥이 없으면 온음표일 수 있다 (주님의 임재 앞에서 다섯째 줄: 이음줄 끝이 붙어 온음표 검출기는 상자를 1.3il 위로 잡았다).
+        # 가로로 긴 구멍만, AI가 그 자리를 온음표로 읽어야 쓴다 (ai_unconfirmed)
+        need_dur = 2 if (cxm, cym) in in_space else 0
         if not short_stem(region, cx, cy, head_w, il):
-            HOLE_LOG.append((hx, hy, "stem", 0))
-            continue
+            if w < 1.1 * h:
+                HOLE_LOG.append((hx, hy, "stem", 0))
+                continue
+            need_dur = 4
         if any(abs(hx - o.x) < 0.7 * il and abs(hy - o.y) < 0.7 * il for o in heads):
             HOLE_LOG.append((hx, hy, "dup", 0))
             continue
@@ -1146,6 +1183,7 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
         head.evidence = notes.duration_evidence(binary, head, il)
         head.evidence.hollow = True
         head.big_ring = big_round                    # 칸보다 큰 동그라미: 옮겨 그릴 때도 그 크기로
+        head.need_dur = need_dur                     # 칸 안 구멍·기둥 없는 구멍으로만 찾은 것: AI가 이 길이 이상으로 읽어야 쓴다 (ai_unconfirmed)
         out.append(head)
     return out
 
@@ -1241,28 +1279,61 @@ def ai_extra_hollow(heads: list[Notehead], measures: list, il: float, staff: Sta
     """AI 전사에 없는 기둥 없는 속 빈 머리: 오선 끝에서 다음 줄로 넘어가는 붙임줄이 맨 윗줄 위에 만든 열린 고리, 8분쉼표 (주 이름 찬양,
     주님 한 분만으로). 크기·고리·자리로는 흐린 진짜 2분음표(검출 상자가 머리 옆으로 비낀 점2분음표)와 안 갈린다.
     ai_hollow_fix처럼 머리 열과 AI 음표 열을 음높이로 맞춰, AI에 짝이 없거나 짝의 음높이가 다르고 2분음표보다 짧은 것
-    (주 이름 찬양: 고리를 F5로, AI는 그 자리를 D♯5 8분음표로 읽었다) 중 앞뒤 짝(있는 쪽)이 음높이까지 맞은 것만 고른다."""
+    (주 이름 찬양: 고리를 F5로, AI는 그 자리를 D♯5 8분음표로 읽었다) 중 앞뒤 짝(있는 쪽)이 맞은 것만 고른다.
+    "맞다"는 음높이가 같거나 한 칸 차이다: 번진 캡처는 AI와 한 칸씩 어긋난 오선이 있다 (이 세상의 부요함보다 끝줄: 2번 괄호
+    첫머리의 붙임줄 끝이 맨 아랫줄과 만든 고리를 D4 2분음표로 옮겨 그렸다)."""
     from . import hybrid
     ai_notes = [x for m in measures for x in m.notes if x.step]
     if not ai_notes or not heads:
         return []
     hp = [step_pitch(int(round((staff.bottom - h.y) / (il / 2)))) for h in heads]
-    cost = lambda a, b: 0.0 if a == (b.step, b.octave) else (0.6 if a[0] == b.step else 1.0)
+    letters = "CDEFGAB"
+    diff = lambda a, b: (b.octave * 7 + letters.index(b.step)) - (a[1] * 7 + letters.index(a[0]))
+    cost = lambda a, b: 0.0 if diff(a, b) == 0 else (0.5 if abs(diff(a, b)) == 1 else 1.0)
     pairs = hybrid.align(hp, ai_notes, cost, 0.6, 0.6)
-    exact = [i is not None and j is not None and hp[i] == (ai_notes[j].step, ai_notes[j].octave) for i, j in pairs]
-    if sum(exact) < 0.7 * len(heads):
+    close = [i is not None and j is not None and abs(diff(hp[i], ai_notes[j])) <= 1 for i, j in pairs]
+    if sum(close) < 0.7 * len(heads):
         return []
     out = []
     for k, (i, j) in enumerate(pairs):
-        if i is None or exact[k] or (j is not None and ai_notes[j].duration >= 2):
+        if i is None or close[k] or (j is not None and ai_notes[j].duration >= 2):
             continue
         h = heads[i]
         if not (h.evidence and h.evidence.hollow and not h.evidence.stem):
             continue
-        near = [exact[k + d] for d in (-1, 1) if 0 <= k + d < len(pairs) and pairs[k + d][0] is not None and pairs[k + d][1] is not None]
+        near = [close[k + d] for d in (-1, 1) if 0 <= k + d < len(pairs) and pairs[k + d][0] is not None and pairs[k + d][1] is not None]
         if near and all(near):
             out.append(h)
     return out
+
+
+def ai_unconfirmed(heads: list[Notehead], measures: list, il: float, staff: Staff) -> list[Notehead]:
+    """AI 확인이 필요한 머리(find_hole_heads의 need_dur: 칸 안 구멍, 기둥 없는 구멍) 중 쓰지 않을 것. 번진 2분음표(주 이름 찬양 끝에서 둘째 줄,
+    이 세상의 부요함보다, 주님은 산 같아서: 옮겨지지 않고 남았다)와 꼬리가 기둥으로 말려 닫힌 고리·기둥 사이 칸은 모양으로
+    못 가른다. 받는 것: 머리 열과 AI 음표 열을 음높이로 맞춰(ai_hollow_fix처럼) 짝이 need_dur(2분음표·온음표) 이상이고 음높이가 같거나 한 칸
+    차이이며, 다른 머리가 가로 1.8il 안에 없다 (가짜는 모두 제 음표 머리·기둥 바로 옆이다). 음높이는 구멍대로 둔다: 두 줄 사이를
+    꽉 채운 고리라 칸 음이 확실하고, 한 칸 차이는 AI가 틀린 것이다 (주 이름 찬양: C♯5를 D5로). 앞뒤 짝이나 오선 전체
+    일치율은 안 본다: 번진 캡처는 AI와 음높이가 한 칸씩 어긋난 오선이 있다."""
+    from . import hybrid
+    cand = [h for h in heads if getattr(h, "need_dur", 0)]
+    ai_notes = [x for m in measures for x in m.notes if x.step]
+    if not cand or not ai_notes:
+        return cand
+    hp = [step_pitch(int(round((staff.bottom - h.y) / (il / 2)))) for h in heads]
+    letters = "CDEFGAB"
+    def diff(a, b) -> int:                       # 칸 수 차이 (AI − 머리)
+        return (b.octave * 7 + letters.index(b.step)) - (a[1] * 7 + letters.index(a[0]))
+    cost = lambda a, b: 0.0 if diff(a, b) == 0 else (0.5 if abs(diff(a, b)) == 1 else 1.0)
+    pairs = hybrid.align(hp, ai_notes, cost, 0.6, 0.6)
+    keep = set()
+    for k, (i, j) in enumerate(pairs):
+        if i is None or j is None or not getattr(heads[i], "need_dur", 0) or ai_notes[j].duration < heads[i].need_dur:
+            continue
+        d = diff(hp[i], ai_notes[j])
+        if abs(d) > 1 or any(abs(o.x - heads[i].x) < 1.8 * il for o in heads if not getattr(o, "need_dur", 0)):
+            continue
+        keep.add(i)
+    return [h for i, h in enumerate(heads) if getattr(h, "need_dur", 0) and i not in keep]
 
 
 ARC_LOG: list[tuple] = []     # find_arcs가 후보마다 (x0, y0, x1, y1, 판정) 을 남긴다 (디버깅용)
@@ -1305,7 +1376,58 @@ def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: lis
                 vrun[y - run + 1:y + 1, x] = run
     thin = ((cut0 > 0) & (vrun <= 0.4 * il)).astype(np.uint8)
     _, tlab = cv2.connectedComponents(thin, connectivity=8)
+    # 꽉 찬 머리 타원 안은 곡선이 아니다: 흐린 머리의 가장자리가 열림을 견뎌 곡선 끝에 붙어 오면, 옮길 때 머리 조각이 따라가
+    # 새 머리 옆에 갈고리처럼 남는다 (주 이름 찬양 다섯째 줄 첫 두 음의 이음줄). 머리는 따로 다시 그린다
+    in_heads = np.zeros(cut0.shape, np.uint8)
+    for h in heads:
+        if not (h.evidence and h.evidence.hollow):
+            cv2.ellipse(in_heads, (int(round(h.x)) - x0, int(round(h.y)) - y0), (int(h.w / 2) + 1, int(h.h / 2) + 1), 0, 0, 360, 1, -1)
+    in_heads = in_heads > 0
+    # 속 빈 머리까지, 둘레 0.3il 여유 (굵은 잉크를 곡선에 붙일 때 고리나 번진 머리 윗부분을 데려가지 않게: 모든 능력 다섯째 줄)
+    any_head = np.zeros(cut0.shape, np.uint8)
+    for h in heads:
+        cv2.ellipse(any_head, (int(round(h.x)) - x0, int(round(h.y)) - y0), (int(h.w / 2 + 0.3 * il), int(h.h / 2 + 0.3 * il)), 0, 0, 360, 1, -1)
+    any_head = any_head > 0
+    _, clab = cv2.connectedComponents(cut0, connectivity=8)
+    on_lines = np.zeros(cut0.shape[0], bool)
+    for ly in staff.lines:
+        on_lines[max(0, ly - y0 - t_line // 2 - 1):max(0, ly - y0 + (t_line + 1) // 2 + 1)] = True
     out = []
+    loose = []                                       # 끝이 머리에서 먼 토막: 다른 토막에 이어지는지 마지막에 본다
+
+    def take(bx: int, by: int, bw: int, bh: int, comp: np.ndarray) -> None:
+        gx0, gy0 = bx + x0, by + y0
+        ids = set(np.unique(tlab[by:by + bh, bx:bx + bw][comp])) - {0}
+        full = np.isin(tlab, list(ids)) if ids else np.zeros_like(thin, bool)
+        full[by:by + bh, bx:bx + bw] |= comp
+        # 곡선 상자 안에서 곡선에 붙은 굵은 잉크(오선 줄에 닿아 두꺼워진 꼭대기: 머리 타원 열림에 빠졌다)도 곡선이다. 머리 타원,
+        # 오선 줄 행, 1.2il 넘는 세로선(기둥)은 빼고 (이 세상의 부요함보다 두 음 위 이음줄: 꼭대기가 제자리에 남아 패여 보였다)
+        ids2 = set(np.unique(clab[full])) - {0}
+        if ids2:
+            ya, yb = max(0, by - int(0.5 * il)), min(full.shape[0], by + bh + int(0.5 * il))
+            xa, xb = max(0, bx - int(0.3 * il)), min(full.shape[1], bx + bw + int(0.3 * il))
+            sub = np.isin(clab[ya:yb, xa:xb], list(ids2)) & ~any_head[ya:yb, xa:xb] & ~on_lines[ya:yb, None] \
+                & (vrun[ya:yb, xa:xb] > 0.4 * il) & (vrun[ya:yb, xa:xb] <= 1.2 * il)    # 두꺼운 것만: 얇은 고리 획은 안 데려간다
+            full[ya:yb, xa:xb] |= sub
+        # 줄 빼기가 곡선이 오선 줄을 가로지르는 곳을 비워 둔다: 반 칸 옮기면 그 빈 곳이 줄 사이로 나와 곡선이 패여 보인다
+        # (이 세상의 부요함보다: 두 음 위 이음줄). 줄 띠 바로 위·아래 둘 다 곡선인 열은 띠를 채운다
+        for ly in staff.lines:
+            a, b = ly - y0 - t_line // 2 - 1, ly - y0 + (t_line + 1) // 2 + 1
+            if 1 <= a and b < full.shape[0]:
+                cross = full[a - 1] & full[b]
+                full[a:b, cross] = True
+        full &= ~in_heads
+        if not full.any():
+            ARC_LOG[-1] = (gx0, gy0, gx0 + bw, gy0 + bh, "in-head")
+            return
+        comp = comp & full[by:by + bh, bx:bx + bw]
+        ys_, xs_ = np.nonzero(full)
+        fy0, fy1, fx0, fx1 = ys_.min(), ys_.max() + 1, xs_.min(), xs_.max() + 1
+        if fx1 - fx0 > 2.5 * bw or fy1 - fy0 > 2 * il:            # 가는 잉크를 따라 엉뚱한 데까지 번졌다: 원래 덩어리만
+            out.append((gy0, gx0, comp.astype(np.uint8)))
+        else:
+            out.append((y0 + fy0, x0 + fx0, full[fy0:fy1, fx0:fx1].astype(np.uint8)))
+
     for i in range(1, n):
         bx, by, bw, bh, area = stt[i]
         gx0, gy0 = bx + x0, by + y0
@@ -1352,25 +1474,31 @@ def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: lis
                 if not all(nh or nb for nh, nb in zip(near_heads, near_bars)):
                     tag = "loose"
                 else:
-                    # 머리 아래의 곡선은 아래로(가운데가 끝보다 낮게), 위의 곡선은 위로 불러야 한다
+                    # 머리 아래의 곡선은 아래로(가운데가 끝보다 낮게), 위의 곡선은 위로 불러야 한다. 한 끝이 마디줄인 토막은 마디줄에서
+                    # 잘린 반쪽 활이라 2차식으로 휜 방향을 못 잰다 (주 이름 찬양 다섯째 줄: E로 가는 붙임줄의 뒤 토막만 남았다)
                     ref = [h.y for nh in near_heads for h in nh]
-                    if ref:
+                    if ref and not any(near_bars):
                         below = np.mean([ey for _, ey in ends]) > float(np.mean(ref))
                         mid_lower = a < 0                        # y는 아래로 커진다: a<0 이면 가운데가 더 낮다
                         if below != mid_lower:
                             tag = "bulge"
+        if tag == "loose":
+            loose.append((bx, by, bw, bh, comp, ends))
         if tag:
             ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, tag)); continue
         ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, "ok"))
-        ids = set(np.unique(tlab[by:by + bh, bx:bx + bw][comp])) - {0}
-        full = np.isin(tlab, list(ids)) if ids else np.zeros_like(thin, bool)
-        full[by:by + bh, bx:bx + bw] |= comp
-        ys_, xs_ = np.nonzero(full)
-        fy0, fy1, fx0, fx1 = ys_.min(), ys_.max() + 1, xs_.min(), xs_.max() + 1
-        if fx1 - fx0 > 2.5 * bw or fy1 - fy0 > 2 * il:            # 가는 잉크를 따라 엉뚱한 데까지 번졌다: 원래 덩어리만
-            out.append((gy0, gx0, comp.astype(np.uint8)))
-        else:
-            out.append((y0 + fy0, x0 + fx0, full[fy0:fy1, fx0:fx1].astype(np.uint8)))
+        take(bx, by, bw, bh, comp)
+    # 기둥이 가로질러 둘로 갈린 이음줄은 한 토막의 끝이 머리에서 멀어 loose가 된다 (이 세상의 부요함보다 끝 두 줄: 반만 옮겨져
+    # 조각났다). 그 끝이 받아들인 토막의 끝과 가로 1il·세로 0.5il 안에서 마주 보면 같은 곡선이다 (옮긴 뒤 move_arcs가 잇는다)
+    done = []
+    for oy, ox, m in out:
+        cols = np.flatnonzero(m.any(axis=0))
+        if cols.size:
+            done += [(ox + c, oy + float(np.flatnonzero(m[:, c]).mean())) for c in (cols[0], cols[-1])]
+    for bx, by, bw, bh, comp, ends in loose:
+        if any(abs(ex - dx) <= 1.0 * il and abs(ey - dy) <= 0.5 * il for ex, ey in ends for dx, dy in done):
+            ARC_LOG.append((bx + x0, by + y0, bx + x0 + bw, by + y0 + bh, "loose-joined"))
+            take(bx, by, bw, bh, comp)
     return out
 
 
@@ -1445,15 +1573,45 @@ def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int,
     H, W = img.shape[:2]
     if avoid is None:
         avoid = np.zeros((H, W), bool)
+    line_rows = np.zeros(H, bool)
+    for ly in staff.lines:
+        line_rows[max(0, ly - t_line // 2 - 1):min(H, ly + (t_line + 1) // 2 + 1)] = True
+    # 기둥·마디줄이 가로지른 곡선은 그 세로선에서 두 토막으로 갈려, 세로선 둘레 꼭대기는 어느 토막에도 없다: 옮기면 그 자리가
+    # 끊기고 옛 자리에는 그 조각이 남는다 (주 이름 찬양 다섯째 줄 E로 가는 붙임줄: 평평하고 굵은 꼭대기는 빔 열림에도 깎여
+    # 1.25il이 빈다; 이 세상의 부요함보다: 기둥이 가른 이음줄의 가운데가 남아 패여 보였다). 끝이 가로 1.5il·세로 0.6il 안에서
+    # 마주 보는 두 토막은 사이의 옛 잉크(세로선과 오선 줄은 빼고)를 지우고, 옮긴 뒤 잇는다. 두 음을 잇는 서로 다른 곡선은 그
+    # 사이에 머리가 있어 더 떨어진다
+    il = staff.interline
+    ends = []
+    for y0, x0, m in arcs:
+        cols = np.flatnonzero(m.any(axis=0))
+        if cols.size < 2:
+            continue
+        thick = max(1, int(round(float(np.median(m[:, cols].astype(bool).sum(axis=0))))))
+        ends.append((x0 + cols[0], y0 + float(np.flatnonzero(m[:, cols[0]]).mean()),
+                     x0 + cols[-1], y0 + float(np.flatnonzero(m[:, cols[-1]]).mean()), thick))
+    bridges = [((int(ax1), ay1), (int(bx0), by0), max(at, bt)) for ax0, ay0, ax1, ay1, at in ends for bx0, by0, bx1, by1, bt in ends
+               if 0 < bx0 - ax1 <= 1.5 * il and abs(by0 - ay1) <= 0.6 * il]
+    for (xa, ya), (xb, yb), t in bridges:
+        # 틈에 남은 꼭대기는 줄에 붙어 두꺼운 덩어리라 두 토막 끝 안쪽까지 걸친다 (이 세상의 부요함보다: 양옆 0.4il씩)
+        gy0, gy1 = max(0, int(min(ya, yb) - t)), min(H, int(max(ya, yb) + t) + 1)
+        for x in range(max(0, xa + 1 - int(0.4 * il)), min(W, xb + int(0.4 * il))):
+            col = img[:, x] < 128
+            run_a = run_b = (gy0 + gy1) // 2
+            while run_a > 0 and col[run_a - 1]:
+                run_a -= 1
+            while run_b < H - 1 and col[run_b + 1]:
+                run_b += 1
+            if col[(gy0 + gy1) // 2] and run_b - run_a >= 1.2 * il:          # 기둥·마디줄
+                continue
+            rows = np.arange(gy0, gy1)
+            rows = rows[~line_rows[rows] & ~avoid[rows, x]]
+            img[rows, x] = 255
     for y0, x0, m in arcs:
         h, w = m.shape
         md = (cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0) & ~avoid[y0:y0 + h, x0:x0 + w]
         region = img[y0:y0 + h, x0:x0 + w]
-        keep = np.zeros(h, bool)
-        for ly in staff.lines:
-            a, b = max(y0, ly - t_line // 2 - 1), min(y0 + h, ly + (t_line + 1) // 2 + 1)
-            if b > a:
-                keep[a - y0:b - y0] = True
+        keep = line_rows[y0:y0 + h]
         region[md & ~keep[:, None]] = 255
         for r in np.flatnonzero(keep):
             cs = np.flatnonzero(md[r])
@@ -1468,6 +1626,10 @@ def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int,
             continue
         dst = img[ny + sy0:ny + sy1, x0:x0 + w]
         dst[(m[sy0:sy1] > 0) & ~avoid[ny + sy0:ny + sy1, x0:x0 + w]] = 0
+    for (xa, ya), (xb, yb), t in bridges:
+        p0, p1 = (xa, int(round(ya + dy))), (xb, int(round(yb + dy)))
+        if 0 <= p0[1] < H and 0 <= p1[1] < H and not avoid[p0[1], p0[0]] and not avoid[p1[1], p1[0]]:
+            cv2.line(img, p0, p1, 0, t)
 
 
 def on_barline(ink: np.ndarray, staff: Staff, x: float, il: float) -> bool:
@@ -1504,6 +1666,9 @@ def find_whole_notes(binary: np.ndarray, sys_: System, il: float, heads: list[No
         if inner >= 0.45 or ring < 0.5 or notes.has_stem(ink, h, il) or not ring_closed(ink, h):
             continue
         if any(abs(hx - o.x) < 0.8 * il and abs(hy - o.y) < 0.8 * il for o in heads):
+            continue
+        # 기둥 없는 구멍 머리(AI 확인 대기)가 가까우면 그쪽이 맞다: 이음줄이 붙은 덩어리는 상자가 비낀다
+        if any(getattr(o, "need_dur", 0) == 4 and abs(hx - o.x) < 2 * il and abs(hy - o.y) < 1.5 * il for o in heads):
             continue
         if any(flag_hook(hx, hy, o, il) for o in heads):
             continue
@@ -1724,6 +1889,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 old_spacing = (kboxes[1][0] + kboxes[1][2] - kboxes[0][0] - kboxes[0][2]) / 2
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
+    PLAN_LOG.clear()
     # 머리 크기를 못 잰 오선(잴 머리가 모자람)은 쪽의 다른 오선에서 잰 크기를 쓴다: 한 쪽 안에서 머리 크기가 들쭉날쭉하지 않게
     shapes = [x for s_, syms_ in zip(systems, symbols)
               if (x := head_shape(ink, syms_.noteheads, s_.staff, line_thickness(ink, s_.staff), il))]
@@ -1781,12 +1947,21 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         heads = [h for h in heads if (h.evidence and h.evidence.hollow) or column_fill(ink, h) >= 0.78]
         # 줄에 매달린 온쉼표·줄에 얹힌 2분쉼표를 꽉 찬 머리로 읽은 것
         if head_h:
-            heads = [h for h in heads if not bar_rest(h, st, head_h)]
+            # 빔 토막(16분음표의 짧은 둘째 빔)을 기둥 달린 꽉 찬 머리로 읽은 것: 높이가 쪽 머리의 0.7배 아래 (이 세상의 부요함보다
+            # 끝 두 줄: 0.63, 오선 아래 머리로 옮겨 그려지고 빔이 사라졌다; 13곡의 진짜 꽉 찬 머리는 0.76 넘게)
+            rests = [h for h in heads if bar_rest(h, st, head_h)
+                     or (not (h.evidence and h.evidence.hollow) and h.h < 0.7 * head_h)]
+            heads = [h for h in heads if not any(h is r for r in rests)]
+            rep.state.setdefault("dropped", []).extend((si, h.x, h.y) for h in rests)
         # 점2분음표 상자가 고리 오른쪽(기둥과 점 위)에 잡힌 것: 고리 가운데로 옮기고 점을 단다. 높이도 고리에 맞춘다 (옛 상자
         # 높이로 지우면 고리 아랫부분이 짧은 선으로 남았다)
-        for h in heads:
+        for h in list(heads):
+            if not any(o is h for o in heads):
+                continue
             if h.evidence and h.evidence.hollow and (r := ring_left(ink, h, il)):
                 h.x, h.y, h.evidence.dot, h.dot_box = r[0], r[1], True, r[2]
+                # 같은 고리를 구멍으로 따로 찾은 머리가 있으면 그것은 뺀다 (두 번 그리지 않게)
+                heads = [o for o in heads if o is h or not (abs(o.x - h.x) < 0.5 * il and abs(o.y - h.y) < 0.5 * il)]
         # 검수가 정한 수정: 못 찾은 머리 더하기, 음표가 아닌 것 빼기
         for fsi, fx, fy in fixes.get("drop_heads", []):
             if fsi == si:
@@ -1822,6 +1997,12 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         if ai_t is not None:
             extra = ai_extra_hollow(heads, [m for m in ai_t.measures if m.system == si], il, st)
             heads = [h for h in heads if h not in extra]
+            rep.state.setdefault("dropped", []).extend((si, h.x, h.y) for h in extra)
+        drop = ai_unconfirmed(heads, [m for m in ai_t.measures if m.system == si], il, st) if ai_t is not None \
+            else [h for h in heads if getattr(h, "need_dur", 0)]
+        heads = [h for h in heads if h not in drop]
+        # 일부러 뺀 머리 (쉼표, AI가 아니라고 한 것): 결과 검수가 '안 움직인 머리'로 다시 넣지 않게 남긴다
+        rep.state.setdefault("dropped", []).extend((si, h.x, h.y) for h in drop)
         if ai_t is not None and blurry:
             n_fix = ai_hollow_fix(heads, bars, [m for m in ai_t.measures if m.system == si], il, st, AI_HOLLOW_RUN)
             if n_fix:
@@ -1876,6 +2057,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             plans.append(plan)
             prev_right = int(h.x + h.w / 2)
         plans_all.append((sys_, plans))
+        PLAN_LOG.extend((si, round(p.head.x), round(p.head.y), p.hollow, p.step_old, p.step_new) for p in plans)
         rep.state.setdefault("bars", []).append(bars)
         rep.state.setdefault("zone", []).append(max(zone, after_time_signature(ink, st, il, kend) if si == 0 else zone))
         rep.heads += len(plans)
@@ -2072,6 +2254,12 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     # 6. 이음줄·붙임줄은 맨 나중에 옮긴다: 위로 올라간 이음줄이 코드 상자에 들면 코드 지우기가 잘라 먹는다 (모든 능력 4째 줄).
     #    새 코드 글자 둘레(0.15il)는 지우지도 찍지도 않는다: 곡선이 글자 뒤로 지나가게 (이 세상: 올라간 붙임줄이 새 E♭·C를 덮었다)
     avoid = cv2.dilate(letters_new.astype(np.uint8), np.ones((max(3, int(0.3 * il)) | 1,) * 2, np.uint8)) > 0
+    # 새로 그린 머리도 건드리지 않는다: 반 칸만 옮긴 곡선의 옛 자리가 새 머리와 겹치면 지우기가 새 고리를 갉아 먹었다
+    # (주 이름 찬양 다섯째 줄: E로 가는 붙임줄이 새 2분음표 고리를 반쯤 지웠다)
+    heads_new = np.zeros(avoid.shape, np.uint8)
+    for hx, hy, hw, hh, _ in drawn_heads:
+        cv2.ellipse(heads_new, (int(round(hx)), int(round(hy))), (int(hw / 2) + 1, int(hh / 2) + 1), 0, 0, 360, 1, -1)
+    avoid |= heads_new > 0
     for arcs, dy, st_, t_ in arc_jobs:
         move_arcs(img, arcs, dy, st_, t_, avoid)
 

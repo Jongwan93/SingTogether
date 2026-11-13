@@ -80,8 +80,10 @@ def unmoved_heads(state: dict, loose: bool = False) -> list[tuple[int, float, fl
         heads = [p.head for p in plans]
         min_x = max(state["zone"][si] + 0.3 * il, (min(h.x for h in heads) - 1.0 * il) if heads else 0)
         moved = [(p.head.x, p.head.y) for p in plans] + [(p.head.x, st.bottom - p.step_new * il / 2) for p in plans]
+        # AI 확인이 필요한 구멍 후보(칸 안 구멍, 기둥 없는 구멍: need_dur)는 뺀다 — 제자리 이조에서도 AI가 확인한 것만 쓰고, 여기서는
+        # 기둥 사이 칸·마디줄 옆 칸이 '안 움직인 머리'로 잡혀 고친 것처럼 보고됐다 (이 세상의 부요함보다: 7개)
         found = [h for h in inplace.find_hole_heads(same, sys_, il, heads, min_x, t_line)
-                 if not any(abs(h.x - o.x) < 0.7 * il and abs(h.y - o.y) < 0.7 * il for o in heads)]
+                 if not getattr(h, "need_dur", 0) and not any(abs(h.x - o.x) < 0.7 * il and abs(h.y - o.y) < 0.7 * il for o in heads)]
         found += [h for h in inplace.find_whole_notes(same, sys_, il, heads + found, min_x)]
         # 꽉 찬 머리: 오선 줄을 뺀 '둘 다 검은' 잉크를 머리 크기 타원으로 열어 남는 것, 기둥이 있어야
         y0, y1 = max(0, int(st.top - 1.6 * il)), min(page.binary.shape[0], int(st.bottom + 1.6 * il))
@@ -112,9 +114,14 @@ def unmoved_heads(state: dict, loose: bool = False) -> list[tuple[int, float, fl
             h.evidence = notes.duration_evidence(page.binary, h, il)
             h.evidence.hollow = False
             found.append(h)
+        dropped = [(x, y) for s_, x, y in state.get("dropped", []) if s_ == si]
         for h in found:
             if any(abs(h.x - mx) < 0.7 * il and abs(h.y - my) < 0.7 * il for mx, my in moved):
                 LOG.append(("unmoved-skip", si, round(h.x), round(h.y)))
+                continue
+            # 제자리 이조가 일부러 뺀 머리(쉼표, AI가 아니라고 한 고리): 다시 넣으면 같은 규칙에 또 빠지는데 '고쳤다'고만 보고된다
+            if any(abs(h.x - dx) < 0.8 * il and abs(h.y - dy) < 0.8 * il for dx, dy in dropped):
+                LOG.append(("unmoved-dropped", si, round(h.x), round(h.y)))
                 continue
             if any(o[0] == si and abs(o[1] - h.x) < 0.6 * il and abs(o[2] - h.y) < 0.6 * il for o in out):
                 continue
@@ -226,8 +233,9 @@ def check(state: dict) -> tuple[list[Issue], dict]:
         issues.append(Issue("note_not_moved", si + 1, _measure_of(state, si, x), _to_original(state, b),
                             "a note left where it was", "the note moved like the others", "check", "fixed"))
 
-    # 2. 코드 다시 읽기
-    wrong, stale = reread_chords(state)
+    # 2. 코드 다시 읽기. AI가 코드 이름을 준 경로에서는 안 한다: 이름은 AI 것이고 글자는 우리가 그렸으니, Vision이 그 글자를
+    #    다시 읽어 대는 것은 Vision의 잘못 읽기뿐이다 (13곡에서 15건 모두 맞게 그린 코드: F#m을 E로, Cm7을 G7로)
+    wrong, stale = reread_chords(state) if state.get("ai") is None else ([], [])
     for si, box, seen, want in wrong:
         issues.append(Issue("chord", si + 1, _measure_of(state, si, box[0]), _to_original(state, box), seen, want, "check"))
     for si, box, old in stale:
