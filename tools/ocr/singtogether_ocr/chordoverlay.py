@@ -528,13 +528,16 @@ LOG: list[tuple] = []      # draw가 코드마다 (원래, 새 글자, 상자, �
 
 
 def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, obstacles=(),
-         uniform: bool = False, erase_box: bool = False) -> np.ndarray:
+         uniform: bool = False, erase_box: bool = False, heads=()) -> np.ndarray:
     """uniform: 모든 코드를 쪽 전체의 중앙값 높이로 쓴다 (오선 악보의 코드는 크기가 같다; 슬래시·윗첨자 상자가 커도 따라가지 않게).
-    erase_box: 글자 잉크만이 아니라 상자를 통째로 지운다 (흐린 그림은 잉크 둘레에 회색 테가 남아 옛 글자가 비친다)."""
+    erase_box: 글자 잉크만이 아니라 상자를 통째로 지운다 (흐린 그림은 잉크 둘레에 회색 테가 남아 옛 글자가 비친다).
+    heads: 새로 그린 음표 머리 상자 (x0, y0, x1, y1). 제자리 이조에서 올라간 머리가 코드 글자 자리에 들어오면 글자를 그 위로 올린다."""
     out = rgb.copy()
     h, w = ink.shape
     font_path = FONTS[font_name]
     LOG.clear()
+    draw.roots = []
+    draw.lifted = []                                       # 머리를 피해 위로 올려 쓴 코드의 상자 (x0, y0, x1, y1)
     draw.erased = []                                       # erase_box로 통째로 지운 상자들 (부르는 쪽이 상자에 휩쓸린 오선·머리를 되살린다)
     boxes = []
     for c in chords:
@@ -566,6 +569,22 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
     # 곡선이 붙어 대문자 키보다 큰 근음은 쪽 대문자 키로 다시 잰다
     parts = [_root_letter(ink, t, page_cap) if (p and p[0][3] - p[0][1] > 1.25 * page_cap) else p for p, t in zip(parts, boxes)]
     roots = [p[0] if p else None for p in parts]
+    # 그래도 대문자 키보다 큰 근음(빔이 글자 밑에 붙었는데 글자 폭 안이라 '긴 가로 획'으로 안 보인다 — 하나님은 너를 첫 줄
+    # E/D♯: 새 F♯/E♯이 빔 위에 내려 써졌다)은 같은 오선의 다른 근음들과 맞는 쪽 끝에서 대문자 키만큼만 글자로 본다
+    if uniform:
+        cap_i = int(round(page_cap))
+        for k, (c, r) in enumerate(zip(chords, roots)):
+            if not r or r[3] - r[1] <= 1.15 * page_cap:
+                continue
+            row = [q for c2, q in zip(chords, roots) if q and q is not r and c2.col == c.col and q[3] - q[1] <= 1.15 * page_cap]
+            if len(row) < 2:
+                continue
+            top, bot = float(np.median([q[1] for q in row])), float(np.median([q[3] for q in row]))
+            if abs(r[1] - top) <= 0.2 * page_cap and r[3] > bot + 0.15 * page_cap:
+                roots[k] = (r[0], r[1], r[2], r[1] + cap_i)
+            elif abs(r[3] - bot) <= 0.2 * page_cap and r[1] < top - 0.15 * page_cap:
+                roots[k] = (r[0], r[3] - cap_i, r[2], r[3])
+    draw.roots = list(roots)                               # 코드마다 근음 대문자 상자 (부르는 쪽이 글자 바닥 아래의 곡선을 되살릴 때 쓴다)
     # 근음 뒤 글자(sus4, 7, /C♯)가 윗첨자처럼 작은 악보인가: 글자가 둘 이상인 코드들의 다수결
     # 표는 근음 뒤에 숫자·♯♭이 있는 코드만 낸다 (C⁷·B♭²·Esus⁴): 슬래시·m만 있는 코드(E/D·Dm)는 윗첨자 악보에서도 바닥에 쓰여 반대표가 된다
     # (슬래시 베이스의 ♯도 바닥에 쓰는 악보가 있어 숫자만 센다)
@@ -647,8 +666,18 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             # 상자가 근음 왼쪽의 이음줄·빔 끝까지 품었으면(근음 왼쪽에 근음 키의 60% 넘는 덩어리가 없다) 근음 왼쪽 끝에 쓴다
             # (이 세상: B♭m⁷ 상자가 왼쪽 이음줄까지 넓어 새 Cm⁷이 이음줄 위에 2il 왼쪽으로 써졌다)
             if rx0 - x0 > 0.3 * (ry1 - ry0):
-                n_, _, st_, _ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:rx0].astype(np.uint8), 8)
-                if not any(st_[i][3] >= 0.6 * (ry1 - ry0) for i in range(1, n_)):
+                n_, lb_, st_, _ = cv2.connectedComponentsWithStats(ink[y0:y1, x0:rx0].astype(np.uint8), 8)
+                # 글자라면 세로획이 있다 (가장 긴 세로 런이 근음 키의 0.35배 넘게): 비스듬히 내려오는 이음줄은 키가 커도 런은 획
+                # 두께뿐이다 (이 세상의 부요함보다 끝 줄 Fm: 새 Gm이 이음줄 위에 2il 왼쪽으로 써졌다)
+                def v_run(i: int) -> int:
+                    c_ = lb_[st_[i][1]:st_[i][1] + st_[i][3], st_[i][0]:st_[i][0] + st_[i][2]] == i
+                    best = 0
+                    for col in c_.T:
+                        d_ = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+                        if (d_ == 1).any():
+                            best = max(best, int((np.flatnonzero(d_ == -1) - np.flatnonzero(d_ == 1)).max()))
+                    return best
+                if not any(st_[i][3] >= 0.6 * (ry1 - ry0) and v_run(i) >= 0.35 * (ry1 - ry0) for i in range(1, n_)):
                     px = rx0 - 1
         else:
             hgt = int(round(height_for(c, t))) + 1
@@ -675,6 +704,19 @@ def draw(rgb: np.ndarray, ink: np.ndarray, chords: list[Chord], font_name: str, 
             top_old = font.getbbox(c.text)[1] - font.getbbox(c.text[0])[1]   # 원래 글자에서 근음 윗선이 전체 윗선보다 얼마나 아래인가
             top_new = font.getbbox(c.new)[1] - font.getbbox(c.new[0])[1]
             py, px = y0 - 1 - top_old + top_new, x0 - 1            # 근음 대문자 윗선을 맞춘다
+        # 올라간 머리가 새 글자 자리에 들어왔으면 글자를 머리 위로 올린다 (이 세상의 부요함보다 끝 줄: 새 Gm이 2분음표 고리와
+        # 겹쳤다). 대문자 키의 1.6배까지만, 그리고 올라갈 자리(옛 상자 위)가 원본에서 비어 있을 때만
+        if roots[k] and heads:
+            capn = float(mask.shape[0])
+            bottom = roots[k][3]
+            hit = [b for b in heads if b[0] < px + mask.shape[1] - 0.1 * capn and b[2] > px + 0.1 * capn
+                   and b[1] < bottom - 0.1 * capn and b[3] > py]
+            if hit:
+                lift = int(round(bottom - min(b[1] for b in hit) + 0.15 * capn))
+                ya, yb = max(0, py - lift), max(0, min(py, y0 - 2))
+                if 0 < lift <= 1.6 * capn and (yb <= ya or ink[ya:yb, max(0, px):px + mask.shape[1]].sum() <= 0.02 * capn * capn):
+                    py -= lift
+                    draw.lifted.append((px, py, px + mask.shape[1], py + mask.shape[0]))
         mh, mw = mask.shape
         sy0, sx0 = max(0, -py), max(0, -px)
         py, px = max(0, py), max(0, px)

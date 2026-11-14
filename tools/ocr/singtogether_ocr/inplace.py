@@ -158,6 +158,47 @@ def erase(img: np.ndarray, box: tuple[int, int, int, int], staff: Staff, t_line:
     img[line_rows, x0:x1] = (np.median(around, axis=1).astype(np.uint8)[:, None] if around.shape[1] else 255)
 
 
+ORPHAN_LOG: list[tuple] = []   # drop_orphans가 지운 조각마다 (x0, y0, x1, y1) (디버깅용)
+
+
+def drop_orphans(img: np.ndarray, cut: np.ndarray, origin: tuple[int, int], box: tuple[int, int, int, int],
+                 others: list[tuple[int, int, int, int]], staff: Staff, t_line: int, il: float) -> None:
+    """지운 머리 상자에 붙어 있다가 상자 밖에 혼자 남은 작은 잉크 조각을 지운다: 흐린 캡처의 8분음표 꼬리 끝이 머리 옆까지
+    내려와 머리와 붙어 있으면, 머리를 지우고 옮긴 뒤 꼬리 끝만 옛 자리에 점처럼 남는다 (주 이름 찬양 둘째 줄). cut은 오선 줄을
+    뺀 원본 잉크(기둥은 줄을 지나도 이어져 있다), origin은 그 왼쪽 위. 조각은 상자 안 잉크와 이어져 있고, 한 변 0.9il·넓이
+    0.3il² 아래이며, others(다른 머리 상자와 점 상자)에는 안 닿는다: 이웃한 두 머리 사이의 짧은 붙임줄과 점은 둔다."""
+    ox, oy = origin
+    H, W = cut.shape
+    x0, y0, x1, y1 = box[0] - ox, box[1] - oy, box[2] - ox, box[3] - oy
+    pad = int(0.9 * il)
+    X0, Y0, X1, Y1 = max(0, x0 - pad), max(0, y0 - pad), min(W, x1 + pad), min(H, y1 + pad)
+    if X1 - X0 < 3 or Y1 - Y0 < 3:
+        return
+    sub = cut[Y0:Y1, X0:X1] > 0
+    inside = np.zeros(sub.shape, bool)
+    inside[max(0, y0 - Y0):max(0, y1 - Y0), max(0, x0 - X0):max(0, x1 - X0)] = True
+    core = sub & inside
+    if not core.any():
+        return
+    n, lab, stats, _ = cv2.connectedComponentsWithStats((sub & ~inside).astype(np.uint8), connectivity=8)
+    near = cv2.dilate(core.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    hh, ww = sub.shape
+    rows = np.zeros(img.shape[0], bool)
+    for ly in staff.lines:
+        rows[max(0, ly - t_line // 2 - 1):ly + (t_line + 1) // 2 + 1] = True
+    for i in set(np.unique(lab[near & ~inside]).tolist()) - {0}:
+        x, y, w, h, area = stats[i]
+        if w > 0.9 * il or h > 0.9 * il or area > 0.3 * il * il or x == 0 or y == 0 or x + w >= ww or y + h >= hh:
+            continue
+        gx0, gy0, gx1, gy1 = ox + X0 + x, oy + Y0 + y, ox + X0 + x + w, oy + Y0 + y + h
+        if any(gx0 <= b[2] + 1 and gx1 >= b[0] - 1 and gy0 <= b[3] + 1 and gy1 >= b[1] - 1 for b in others):
+            continue
+        m = cv2.dilate((lab[y:y + h, x:x + w] == i).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        region = img[gy0:gy1, gx0:gx1]
+        region[m & ~rows[gy0:gy1, None]] = 255
+        ORPHAN_LOG.append((gx0, gy0, gx1, gy1))
+
+
 HEAD_TILT = 22            # 머리 타원의 기울기 (도)
 
 
@@ -546,7 +587,8 @@ def cross_shaped(ink: np.ndarray, box: tuple[int, int, int, int]) -> bool:
     return False
 
 
-def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, il: float, x0: int, x1: int) -> None:
+def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, il: float, x0: int, x1: int,
+                   last_y: float | None = None) -> int | None:
     """음자리표 끝(x0)부터 x1까지의 옛 조표(와 박자표)를 지운다: 남길 것을 빼고 전부. 남기는 것은 음자리표(4il 넘게 키 큰 덩어리;
     조표가 거기 붙어 있으면 clef_keep_x 왼쪽만), 오선 위 코드 글자(바닥이 윗줄 위 0.3il보다 높은 덩어리: 찬양의 열기의 D),
     x1 너머에 중심이 있는 쉼표·첫 음. 덩어리는 오선 줄을 뺀 띠를 2px 깎아 가르고(붙은 글자들의 다리가 끊긴다) 도로 불린다;
@@ -565,6 +607,7 @@ def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, 
             x1 = min(x1, bx0 + bx - int(0.4 * il))
     keep_px = np.zeros_like(cut)
     ex0 = x0
+    kept_x = None                                    # 지울 자리 안에 남긴 쉼표의 왼쪽 끝 (새 조표는 그 앞까지만 쓴다)
     # 오선 줄을 지우기 전의 덩어리: 줄에 닿은 것은 줄과 함께 한 덩어리(키 큼)가 된다 — 윗줄 위로 솟은 ♯의 윗부분을 코드 글자와 가른다
     _, lab_full, stt_full, _ = cv2.connectedComponentsWithStats(band, connectivity=8)
     for i in range(1, n):
@@ -582,6 +625,11 @@ def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, 
             ex0 = min(ex0, bx0 + bx)
         elif not (x0 <= cx < x1):                                     # 지울 자리 밖에 중심이 있는 것
             keep_px[lab == i] = 1
+        elif last_y is not None and cx >= x1 - 0.6 * il and abs(y0 + by + bh / 2 - last_y) > 1.2 * il:
+            # 지울 끝 0.6il 안에서 마지막 옛 조표 글자와 높이가 다른 덩어리: 조표 바로 뒤 쉼표의 점이다. 번진 캡처는 마지막 ♯
+            # (윗줄 위 G♯)과 8분쉼표의 점(셋째 칸)이 가로로 겹쳐 열로는 못 가른다 (지금은 엘리야: 쉼표 점이 지워졌다)
+            keep_px[lab == i] = 1
+            kept_x = bx0 + bx if kept_x is None else min(kept_x, bx0 + bx)
         elif y0 + by + bh <= staff.top - 0.3 * il:                     # 코드 글자: 줄에 안 닿은 것만 (♯의 윗부분은 줄에 닿는다)
             full = lab_full[lab == i]
             full = full[full > 0]
@@ -605,6 +653,7 @@ def erase_key_area(img: np.ndarray, ink: np.ndarray, staff: Staff, t_line: int, 
         if cs.size:
             around = np.concatenate([img[y0 + r, max(0, ex0 - 6):ex0], img[y0 + r, x1:min(W, x1 + 6)]])
             region[r, cs] = int(np.median(around)) if around.size else 255
+    return kept_x
 
 
 def draw_time_signature(img: np.ndarray, staff: Staff, beats: int, beat_type: int, x: int, il: float, scale: float = 1.0) -> int:
@@ -836,7 +885,7 @@ def draw_key_signature(img: np.ndarray, staff: Staff, fifths: int, start_x: int,
     if n * spacing > avail and n > 1:
         spacing = max(0.5 * il, avail / n)
     # 글자가 더 많아져(3♯→5♯) 0.62il 간격으로도 안 들어가면 글자를 간격에 맞춰 줄인다 (박자표 위에 겹쳐 그리지 않게)
-    shrink = min(1.0, spacing / (0.62 * il))
+    shrink = max(0.8, min(1.0, spacing / (0.62 * il)))      # 0.8배 아래로는 안 줄인다: 원래 크기에서 획이 뭉친다. 그 아래는 겹쳐 쓴다
     mask = sample[0] if sample is not None else None
     if mask is not None and shrink < 1:
         mask = cv2.resize(mask, (max(2, int(mask.shape[1] * shrink)), max(2, int(mask.shape[0] * shrink))), interpolation=cv2.INTER_AREA)
@@ -846,7 +895,8 @@ def draw_key_signature(img: np.ndarray, staff: Staff, fifths: int, start_x: int,
         if mask is not None:
             stamp(img, mask, cx, staff.bottom - steps[k] * il / 2 + sample[1] * shrink)
         else:
-            draw_glyph(img, kind, cx, staff.bottom - steps[k] * il / 2 - (0.45 * il if kind == "flat" else 0), il * shrink, line)
+            draw_glyph(img, kind, cx, staff.bottom - steps[k] * il / 2 - (0.45 * il if kind == "flat" else 0), il * shrink,
+                       max(1, int(round(line * shrink))) if line else 0)
 
 
 def ring_closed(ink: np.ndarray, h: Notehead) -> bool:
@@ -985,7 +1035,7 @@ def bar_rest(h: Notehead, staff: Staff, head_h: float) -> bool:
 
 FILTER_LOG: list = []          # Vision 상자 거르기 뒤에 남은 (오선, 글자, x0, y1) (디버깅용)
 KEY_LOG: list[tuple] = []      # 조표 통째 지우기가 오선마다 (오선 번호, 음자리표 끝, 틈, 지운 끝, 첫 머리, 박자표 다시 씀, 상자)를 남긴다 (디버깅용)
-PLAN_LOG: list[tuple] = []     # transpose_in_place가 옮길 머리마다 (오선, x, y, 속 빔, 옛 칸, 새 칸)을 남긴다 (디버깅용, 부를 때마다 비운다)
+PLAN_LOG: list[tuple] = []     # transpose_in_place가 옮길 머리마다 (오선, x, y, 속 빔, 옛 칸, 새 칸, 점)을 남긴다 (디버깅용, 부를 때마다 비운다)
 HOLE_LOG: list[tuple] = []     # find_hole_heads가 후보마다 (x, y, 떨어진 검사 또는 "ok", 값)을 남긴다 (디버깅용)
 
 
@@ -1157,8 +1207,8 @@ def find_hole_heads(binary: np.ndarray, sys_: System, il: float, heads: list[Not
             HOLE_LOG.append((hx, hy, "ledger", 0))
             continue
         head_w, head_h = int(max(w + 0.4 * il, 1.2 * il)), int(max(h + 0.4 * il, 0.9 * il))   # 고리가 두꺼우면 구멍보다 머리가 훨씬 크다
-        if (cxm, cym) in in_space:                   # 두 줄에 닿는 번진 고리는 줄 밖까지 0.35il씩: 작게 지우면 고리 위아래가 남는다
-            head_w, head_h = int(w + 0.7 * il), int(h + 0.7 * il)
+        if (cxm, cym) in in_space:                   # 두 줄에 닿는 번진 고리는 줄 너머까지 굵다 (위아래 0.5il씩): 작게 지우면 줄 밑에 고리가 남는다
+            head_w, head_h = int(w + 0.7 * il), int(h + 1.0 * il)
         # 기둥이 없으면 온음표일 수 있다 (주님의 임재 앞에서 다섯째 줄: 이음줄 끝이 붙어 온음표 검출기는 상자를 1.3il 위로 잡았다).
         # 가로로 긴 구멍만, AI가 그 자리를 온음표로 읽어야 쓴다 (ai_unconfirmed)
         need_dur = 2 if (cxm, cym) in in_space else 0
@@ -1266,6 +1316,9 @@ def ai_hollow_fix(heads: list[Notehead], bars: list[float], measures: list, il: 
         if not all(0 <= k + d < len(pairs) and exact[k + d] for d in range(-run, run + 1) if d):
             continue
         h, a = heads[i], ai_notes[j]
+        # 이 긴 음표가 바로 옆의 속 빈 머리 것으로 이미 정해졌으면(ai_unconfirmed의 ai_long) 이 꽉 찬 머리는 그대로 둔다
+        if any(0 <= k + e < len(pairs) and pairs[k + e][0] is not None and getattr(heads[pairs[k + e][0]], "ai_long", False) for e in (-1, 1)):
+            continue
         if a.duration >= 2 and not (h.evidence and h.evidence.hollow):
             if h.evidence is None:
                 h.evidence = notes.DurationEvidence(False, False, 0, False)
@@ -1333,6 +1386,22 @@ def ai_unconfirmed(heads: list[Notehead], measures: list, il: float, staff: Staf
         if abs(d) > 1 or any(abs(o.x - heads[i].x) < 1.8 * il for o in heads if not getattr(o, "need_dur", 0)):
             continue
         keep.add(i)
+    # AI가 한 칸 어긋나게 읽은 오선에서는 긴 음표가 앞의 다른 머리와 짝지어지고 후보는 짝 없이 남는다 (이 세상의 부요함보다
+    # 다섯째 줄 Fm 마디: AI가 B♭4 온음표·C5 2분음표를 A4·B♭4로 읽어, 온음표가 그 앞 16분음표와, 2분음표가 온음표와 맞았다).
+    # 짝 없는 후보 둘레(앞뒤 두 짝)의 긴 AI 음표 수가 그 안의 속 빈 머리 수(후보까지) 이상이고, 그중 하나가 음높이 한 칸
+    # 안이면 받는다
+    for k, (i, j) in enumerate(pairs):
+        if i is None or j is not None or i in keep or not getattr(heads[i], "need_dur", 0):
+            continue
+        if any(abs(o.x - heads[i].x) < 1.8 * il for o in heads if not getattr(o, "need_dur", 0)):
+            continue
+        win = pairs[max(0, k - 2):k + 3]
+        longs = [ai_notes[j2] for _, j2 in win if j2 is not None and ai_notes[j2].duration >= heads[i].need_dur]
+        hollows = sum(1 for i2, _ in win if i2 is not None and (i2 == i or (
+            heads[i2].evidence and heads[i2].evidence.hollow and (not getattr(heads[i2], "need_dur", 0) or i2 in keep))))
+        if len(longs) >= hollows and any(abs(diff(hp[i], a)) <= 1 for a in longs):
+            keep.add(i)
+            heads[i].ai_long = True                  # ai_hollow_fix가 옆의 꽉 찬 머리를 속 빈 것으로 바꾸지 않게
     return [h for i, h in enumerate(heads) if getattr(h, "need_dur", 0) and i not in keep]
 
 
@@ -1409,13 +1478,26 @@ def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: lis
             sub = np.isin(clab[ya:yb, xa:xb], list(ids2)) & ~any_head[ya:yb, xa:xb] & ~on_lines[ya:yb, None] \
                 & (vrun[ya:yb, xa:xb] > 0.4 * il) & (vrun[ya:yb, xa:xb] <= 1.2 * il)    # 두꺼운 것만: 얇은 고리 획은 안 데려간다
             full[ya:yb, xa:xb] |= sub
-        # 줄 빼기가 곡선이 오선 줄을 가로지르는 곳을 비워 둔다: 반 칸 옮기면 그 빈 곳이 줄 사이로 나와 곡선이 패여 보인다
-        # (이 세상의 부요함보다: 두 음 위 이음줄). 줄 띠 바로 위·아래 둘 다 곡선인 열은 띠를 채운다
+        # 오선 줄 띠 안의 곡선은 줄과 섞여 안 보인다: 줄 빼기가 남긴 것은 믿을 수 없다. 줄에 닿기만 한 꼭대기의 열이 띠 높이만큼
+        # 남으면 옮긴 자리에 세로 토막으로 찍히고(이 세상의 부요함보다: 이음줄 위의 ㅗ), 비스듬히 지나는 곳이 비면 패인다.
+        # 띠를 비우고, 띠 바로 위·아래 행의 곡선 구간을 차례로 짝지어 그 사이를 비스듬히 채운다 (지나가는 곡선만 띠에 남는다)
+        def runs_(row: np.ndarray) -> list[tuple[int, int]]:
+            d = np.diff(np.r_[0, row.astype(np.int8), 0])
+            return list(zip(np.flatnonzero(d == 1).tolist(), np.flatnonzero(d == -1).tolist()))
         for ly in staff.lines:
             a, b = ly - y0 - t_line // 2 - 1, ly - y0 + (t_line + 1) // 2 + 1
             if 1 <= a and b < full.shape[0]:
-                cross = full[a - 1] & full[b]
-                full[a:b, cross] = True
+                up, dn = full[a - 1].copy(), full[b].copy()
+                full[a:b] = False
+                full[a:b, up & dn] = True
+                ra, rb = runs_(up), runs_(dn)
+                if ra and len(ra) == len(rb):
+                    for (a0, a1), (b0, b1) in zip(ra, rb):
+                        if abs(a0 - b0) <= 1.5 * il and abs(a1 - b1) <= 1.5 * il:
+                            for k_, r in enumerate(range(a, b)):
+                                f_ = (k_ + 1) / (b - a + 1)
+                                c0 = int(round(a0 + (b0 - a0) * f_))
+                                full[r, c0:max(c0 + 1, int(round(a1 + (b1 - a1) * f_)))] = True
         full &= ~in_heads
         if not full.any():
             ARC_LOG[-1] = (gx0, gy0, gx0 + bw, gy0 + bh, "in-head")
@@ -1484,6 +1566,11 @@ def find_arcs(binary: np.ndarray, staff: Staff, heads: list[Notehead], bars: lis
                             tag = "bulge"
         if tag == "loose":
             loose.append((bx, by, bw, bh, comp, ends))
+        # 코드 띠의 짧은 토막(1.5il 아래)은 곡선이 아니다: 코드 글자의 굽은 획(E♭의 ♭)이나, 글자에 붙은 긴 이음줄에서 떨어진
+        # 첫머리다. 그것만 옮기면 이음줄 첫머리가 지워지고 조각이 글자 옆에 찍힌다 (이 세상의 부요함보다 끝 줄 E♭)
+        if not tag and bw < 1.5 * il and gy0 + bh < staff.top - 0.2 * il and not any(
+                abs(h.x - (gx0 + bw / 2)) <= bw / 2 + 1.2 * il and h.y < staff.top + 0.5 * il for h in heads):
+            tag = "stub"
         if tag:
             ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, tag)); continue
         ARC_LOG.append((gx0, gy0, gx0 + bw, gy0 + bh, "ok"))
@@ -1609,8 +1696,17 @@ def move_arcs(img: np.ndarray, arcs: list[tuple[int, int, np.ndarray]], dy: int,
             img[rows, x] = 255
     for y0, x0, m in arcs:
         h, w = m.shape
-        md = (cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0) & ~avoid[y0:y0 + h, x0:x0 + w]
+        # 흐린 그림의 곡선은 회색 테가 2–3px 번져 있다: 마스크 둘레 1px만 지우면 옛 자리에 옅은 활이 남는다 (주 이름 찬양)
+        kd = max(3, int(0.25 * il)) | 1
+        pad_ = kd // 2
+        ya, yb, xa, xb = max(0, y0 - pad_), min(H, y0 + h + pad_), max(0, x0 - pad_), min(W, x0 + w + pad_)
+        big = np.zeros((yb - ya, xb - xa), np.uint8)
+        big[y0 - ya:y0 - ya + h, x0 - xa:x0 - xa + w] = m
+        y0, x0, h, w = ya, xa, yb - ya, xb - xa
         region = img[y0:y0 + h, x0:x0 + w]
+        # 바깥 테는 회색(90보다 밝은 것)만 지운다: 곡선에 닿은 기둥·머리의 진한 잉크는 둔다
+        md = ((cv2.dilate(big, np.ones((3, 3), np.uint8)) > 0) | ((cv2.dilate(big, np.ones((kd, kd), np.uint8)) > 0) & (region > 90))) \
+            & ~avoid[ya:yb, xa:xb]
         keep = line_rows[y0:y0 + h]
         region[md & ~keep[:, None]] = 255
         for r in np.flatnonzero(keep):
@@ -1695,6 +1791,41 @@ def find_dot(ink: np.ndarray, h: Notehead, il: float, reach: float = 1.6) -> tup
         return None
     x, y, w, hh = best
     return x0 + x, y0 + y, x0 + x + w, y0 + y + hh
+
+
+def find_dot_wide(ink: np.ndarray, h: Notehead, il: float, staff: Staff | None = None, t_line: int = 0) -> tuple[int, int, int, int] | None:
+    """길이 단서(notes.duration_evidence)가 못 본 부점. 그쪽은 머리 가운데에서 0.65–1.4il만 보는데, 흐린 캡처의 머리는 폭이 1.9il이라
+    점이 1.4il 밖에 찍힌다 (주 이름 찬양 둘째 줄: 점4분음표가 올라가고 점은 제자리에 남았다). 머리 오른쪽 끝에서 0.1–1.1il,
+    위아래 0.6il 안의 따로 떨어진 둥근 작은 덩어리(한 변 0.15–0.5il, 가로세로비 0.7–1.4, 채움 0.6 넘게). 도돌이표의 두 점
+    (1il 위나 아래에 같은 점)은 아니다. 오선 줄 행은 비우고 본다: 번진 점은 바로 밑의 줄에 닿아 줄과 한 덩어리가 된다
+    (주님의 임재 앞에서 다섯째 줄)."""
+    H, W = ink.shape
+    xr = h.x + h.w / 2
+    x0, x1 = max(0, int(xr - 0.1 * il)), min(W, int(xr + 1.5 * il))
+    y0, y1 = max(0, int(h.y - 1.0 * il)), min(H, int(h.y + 1.0 * il))
+    if x1 - x0 < 0.5 * il or y1 - y0 < il:
+        return None
+    win = ink[y0:y1, x0:x1].astype(np.uint8)
+    if staff is not None:
+        win = win.copy()
+        for ly in staff.lines:
+            win[max(0, ly - t_line // 2 - 2 - y0):max(0, ly + (t_line + 1) // 2 + 2 - y0)] = 0
+    n, _, stats, cents = cv2.connectedComponentsWithStats(win, connectivity=8)
+    best = None
+    for i in range(1, n):
+        x, y, w, hh, area = stats[i]
+        if x == 0 or y == 0 or x + w >= x1 - x0 or y + hh >= y1 - y0:
+            continue
+        if not (0.15 * il <= w <= 0.5 * il and 0.15 * il <= hh <= 0.5 * il and 0.7 <= w / hh <= 1.4 and area >= 0.6 * w * hh):
+            continue
+        cx, cy = x0 + cents[i][0], y0 + cents[i][1]
+        if not (xr + 0.1 * il <= cx <= xr + 1.1 * il and abs(cy - h.y) <= 0.6 * il):
+            continue
+        if any(0 <= int(cy + d) < H and ink[int(cy + d) - 1:int(cy + d) + 2, int(cx) - 1:int(cx) + 2].all() for d in (-il, il)):
+            continue
+        if best is None or cx < best[0]:
+            best = (cx, (x0 + x, y0 + y, x0 + x + w, y0 + y + hh))
+    return best[1] if best else None
 
 
 def harvest_glyph(ink: np.ndarray, box: tuple[int, int, int, int], staff: Staff | None = None, t_line: int = 1) -> np.ndarray:
@@ -1890,6 +2021,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
 
     plans_all: list[tuple[System, list[HeadPlan]]] = []
     PLAN_LOG.clear()
+    ORPHAN_LOG.clear()
     # 머리 크기를 못 잰 오선(잴 머리가 모자람)은 쪽의 다른 오선에서 잰 크기를 쓴다: 한 쪽 안에서 머리 크기가 들쭉날쭉하지 않게
     shapes = [x for s_, syms_ in zip(systems, symbols)
               if (x := head_shape(ink, syms_.noteheads, s_.staff, line_thickness(ink, s_.staff), il))]
@@ -1901,7 +2033,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     for si, (sys_, syms, (kf, kboxes, kstart, kend, real), (_, _, _, _, _, clef_right)) in enumerate(zip(systems, symbols, keysigs, read)):
         st = sys_.staff
         t_line = line_thickness(ink, st)
-        stroke = max(t_line, int(round(1.2 * page.scale)))   # 새로 그리는 ♯·♭ 세로획: 원래 크기로 줄여도 1px 넘게 (회색으로 안 흐려지게)
+        # 새로 그리는 ♯·♭ 세로획: 원래 크기로 줄였을 때 1px 남짓 (0.5px이면 회색으로 흐려지고, 번진 오선 줄 두께(1.5px)를 따르면
+        # 좁은 자리에 촘촘히 쓴 조표가 검은 덩어리가 된다 — 지금은 엘리야 A→B의 ♯ 다섯)
+        stroke = max(1, int(round(1.1 * page.scale))) if blurry else t_line
         # 음자리표·조표 자리에서 잡힌 가짜 머리(보혈을 지나: 음자리표 고리, 주를 위한 이곳에: 줄 위 ♯의 굵은 획)는 뺀다 — 옮겨 그려지고,
         # 첫 머리 자리가 조표 안이 되면 조표를 못 지운다. 글자를 믿는 오선은 조표 다음 잉크(kend)부터, 아니면 글자 수만큼 뒤부터
         zone = max(clef_right, kend - 0.3 * il if real else clef_right + (0.3 + 1.1 * abs(rep.old_fifths)) * il)
@@ -2024,6 +2158,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             plan = HeadPlan(h, step_old, step_old + rep.steps, hollow)
             if h.evidence and h.evidence.dot:
                 plan.dot = getattr(h, "dot_box", None) or find_dot(ink, h, il)
+            if not plan.dot:
+                plan.dot = find_dot_wide(ink, h, il, st, t_line)
             gap_x0, gap_x1 = max(prev_right, int(h.x - 2.6 * il)), int(h.x - h.w / 2 - 0.12 * il)
             if gap_x1 - gap_x0 >= 0.5 * il:
                 m = match_accidental(ink, gap_x0, gap_x1, h.y, il, st, t_line)
@@ -2057,7 +2193,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             plans.append(plan)
             prev_right = int(h.x + h.w / 2)
         plans_all.append((sys_, plans))
-        PLAN_LOG.extend((si, round(p.head.x), round(p.head.y), p.hollow, p.step_old, p.step_new) for p in plans)
+        PLAN_LOG.extend((si, round(p.head.x), round(p.head.y), p.hollow, p.step_old, p.step_new, bool(p.dot)) for p in plans)
         rep.state.setdefault("bars", []).append(bars)
         rep.state.setdefault("zone", []).append(max(zone, after_time_signature(ink, st, il, kend) if si == 0 else zone))
         rep.heads += len(plans)
@@ -2071,10 +2207,17 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
         else:
             arcs = []
         # 3. 지우기: 머리, 덧줄, 옛 임시표, 기둥의 옮길 구간, 옛 조표
-        for p in plans:
+        head_boxes = [(int(p.head.x - p.head.w / 2) - 2, int(p.head.y - p.head.h / 2) - 2,
+                       int(p.head.x + p.head.w / 2) + 3, int(p.head.y + p.head.h / 2) + 3) for p in plans]
+        dot_boxes = [tuple(int(v) for v in p.dot) for p in plans if p.dot]
+        cut_x0, cut_y0 = max(0, st.left - 2), max(0, int(st.top - 4 * il))
+        cut_st = strip_staff_lines(ink[cut_y0:int(st.bottom + 4 * il), cut_x0:st.right + 3].astype(np.uint8),
+                                   [y - cut_y0 for y in st.lines], t_line)
+        for pi, p in enumerate(plans):
             h = p.head
             pad = 2
             erase(img, (int(h.x - h.w / 2) - pad, int(h.y - h.h / 2) - pad, int(h.x + h.w / 2) + pad + 1, int(h.y + h.h / 2) + pad + 1), st, t_line)
+            drop_orphans(img, cut_st, (cut_x0, cut_y0), head_boxes[pi], head_boxes[:pi] + head_boxes[pi + 1:] + dot_boxes, st, t_line, il)
             # 덧줄: 오선 밖 줄 자리의 짧은 선을 머리 폭 안에서 지운다
             if p.step_old > 8 or p.step_old < 0:
                 rng = range(10, p.step_old + 2, 2) if p.step_old > 8 else range(-2, p.step_old - 2, -2)
@@ -2147,7 +2290,9 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
                 x_end, glued = ts_end, True
             x_end = max(clef_end + int(0.5 * il), x_end)
             KEY_LOG.append((si, clef_end, key_end, x_end, first, with_ts, kboxes[0]))
-            erase_key_area(img, ink, st, t_line, il, clef_end, x_end)
+            old_steps = TREBLE_SHARP_STEPS if rep.old_fifths > 0 else TREBLE_FLAT_STEPS
+            last_y = (st.bottom - old_steps[abs(rep.old_fifths) - 1] * il / 2) if (rep.old_fifths and si > 0 and not with_ts) else None
+            kept_x = erase_key_area(img, ink, st, t_line, il, clef_end, x_end, last_y)
             # 지운 뒤 지운 끝과 첫 머리 사이에 박자표가 남았으면 새로 안 쓴다 (주를 위한 이곳에: C 앞에 4/4가 끼었다). 첫 머리 왼쪽 끝
             # 앞까지만, 폭 0.4il 넘는 것만 본다 (이 세상: 첫 음의 기둥을 박자표로 봤다). 조표와 붙어 박자표까지 지운 경우(glued)는
             # 뒤에 쉼표가 오기도 해서(찬양의 열기) 위아래로 쌓인 숫자 둘이나 오선 높이만 한 덩어리만 박자표로 본다
@@ -2174,13 +2319,19 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             # 지운 폭 안에 넣느라 0.6배로 줄이고도 넘쳐 4/4가 첫 음에 겹쳤다 (주님 한 분만으로·지금은 엘리야 때처럼)
             room = max(x_end, min(first_ink(img, st, t_line, il, x_end, int(heads[0].x)) - int(0.3 * il),
                                   int(heads[0].x - heads[0].w / 2 - 0.15 * il)))
+            if kept_x is not None:                                     # 지운 끝 앞에 남긴 쉼표가 있으면 그 앞까지만
+                room = max(start + int(0.5 * il), min(room, kept_x - int(0.15 * il)))
             need = (0.3 + 0.7 * n_new + (1.4 if with_ts else 0)) * il
-            scale = max(0.6, min(1.0, (room - start) / need)) if need else 1.0
+            scale = max(0.6, min(1.0, (room - start) / need)) if need else 1.0          # 여백과 박자표
             x = start + 0.3 * il * scale
             if n_new:
-                draw_key_signature(img, st, rep.new_fifths, int(x), int(x + (0.7 * n_new * scale + 0.5) * il), il,
-                                   samples.get(new_kind), 0.7 * il * scale, stroke)
-                x += 0.7 * n_new * scale * il + 0.3 * il * scale
+                # 조표 글자는 0.8배까지만 줄이고 간격을 0.42il까지 좁힌다: ♯·♭은 위아래로 엇갈려 반쯤 겹쳐도 읽히지만, 0.6배로 줄인
+                # 글자는 원래 크기로 줄이면 폭 3px이라 획이 뭉쳐 검은 덩어리가 된다 (지금은 엘리야 A→B, 모든 능력)
+                step = (room - x - (1.4 * scale * il if with_ts else 0)) / n_new
+                step = max(0.42 * il, min(0.7 * il, step))
+                draw_key_signature(img, st, rep.new_fifths, int(x), int(x + n_new * step + 0.2 * il), il,
+                                   samples.get(new_kind), step, stroke)
+                x += n_new * step + 0.2 * il * scale
             if with_ts:
                 draw_time_signature(img, st, ai_t.beats, ai_t.beat_type, int(x), il, scale)
         else:
@@ -2199,12 +2350,24 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
             draw_ledgers(img, st, p.step_new, h.x, w, t_line)
             ev = h.evidence
             if ev and ev.stem:
-                t_stem = max(1, int(round(0.08 * il)))
-                sx = ev.stem_x
-                if ev.stem_dir < 0 and y_new > h.y:                   # 위로 뻗는 기둥인데 머리가 내려갔다: 아래로 잇는다
-                    cv2.line(img, (sx, int(h.y)), (sx, int(y_new)), 0, t_stem)
-                elif ev.stem_dir > 0 and y_new < h.y:                 # 아래로 뻗는 기둥인데 머리가 올라갔다: 위로 잇는다
-                    cv2.line(img, (sx, int(y_new)), (sx, int(h.y)), 0, t_stem)
+                # 기둥은 새 머리 가운데부터 지운 상자 끝(머리 상자 + 여유)까지 다시 긋는다: 머리 상자가 기둥의 머리 쪽 끝도
+                # 지웠는데 옛 머리 가운데까지만 이으면 그 밖이 빈다 (이 세상의 부요함보다: 아래로 뻗는 기둥이 올라간 머리에서
+                # 0.5il 넘게 떨어졌다). 굵기와 x는 상자 밖에 남은 기둥에서 잰다
+                sx, t_stem = ev.stem_x, max(1, int(round(0.08 * il)))
+                edge = int(h.y + ev.stem_dir * (h.h / 2 + 3))
+                yp = int(h.y + ev.stem_dir * (h.h / 2 + 0.5 * il))
+                near = [c for c in sorted(range(sx - 3, sx + 4), key=lambda c: abs(c - sx))
+                        if 0 <= yp < ink.shape[0] and 0 <= c < ink.shape[1] and ink[yp, c]]
+                if near:
+                    l = r = sx = near[0]
+                    while l - 1 >= 0 and ink[yp, l - 1] and sx - l < 0.3 * il:
+                        l -= 1
+                    while r + 1 < ink.shape[1] and ink[yp, r + 1] and r - sx < 0.3 * il:
+                        r += 1
+                    if r - l + 1 <= 0.35 * il:                        # 빔·줄이 아닌 기둥 폭
+                        sx, t_stem = (l + r) // 2, max(t_stem, r - l + 1)
+                if (edge - y_new) * ev.stem_dir > 0:                  # 새 머리가 남은 기둥 끝보다 안쪽일 때만 (넘어갔으면 기둥은 그대로 있다)
+                    cv2.line(img, (sx, int(y_new)), (sx, edge), 0, t_stem)
             draw_head(img, h.x, y_new, w, hh, p.hollow, il)
             drawn_heads.append((h.x, y_new, w, hh, p.hollow))
             if p.dot and p.step_new != p.step_old:                     # 점은 칸에 둔다: 줄 위 음이면 바로 위 칸
@@ -2246,7 +2409,8 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
     letters_new = np.zeros(img.shape[:2], bool)
     try:
         before_chords = img.copy()
-        rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced)
+        rep.chords = _rewrite_chords(page, semitones, img, chord_boxes, forced,
+                                     [(hx - hw / 2, hy - hh / 2, hx + hw / 2, hy + hh / 2) for hx, hy, hw, hh, _ in drawn_heads])
         letters_new = img.astype(np.int16) - before_chords.astype(np.int16) < -60    # 새 코드 글자 잉크
         _restore_after_chords(img, before_chords, systems, ink, drawn_heads, il)
     except Exception as e:                                            # 코드가 안 되어도 음표는 낸다
@@ -2265,6 +2429,7 @@ def transpose_in_place(src: Path, semitones: int, out: Path, llm_name: str = "no
 
     moved_arcs = [(x0, y0, x0 + m.shape[1], y0 + m.shape[0], dy) for arcs, dy, _, _ in arc_jobs for y0, x0, m in arcs]
     rep.state.update(result=img.copy(), drawn_chords=getattr(_rewrite_chords, "drawn", []), semitones=semitones, src=src, ai=ai_t,
+                     lifted_chords=getattr(_rewrite_chords, "lifted", []),
                      moved_arcs=moved_arcs)
     final = compose_output(page, img, src)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -2672,6 +2837,9 @@ def compose_output(page, img: np.ndarray, src: Path) -> np.ndarray:
     return final
 
 
+TIP_LOG: list = []            # _restore_after_chords가 되살린 기둥 끝마다 (x0, y0, x1, y1) (디버깅용)
+
+
 def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.ndarray, drawn_heads, il: float) -> None:
     """코드는 상자째 지우고 다시 쓴다 (흐린 그림의 회색 테 때문). 상자는 글자에 붙은 잉크까지 자라서 오선 줄·머리·기둥·이음줄도
     같이 지워졌다 (이 세상: 맨 윗줄에 붙은 코드 11곳에서 줄이 끊기고, C7 밑 머리가 반만 남았다). 코드 쓰기가 밝게 만든 점 중
@@ -2711,9 +2879,17 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
     # Vision이 글자를 읽은 상자 안은 되살리지 않는다 (그 안의 옮긴 머리는 3에서 다시 그린다)
     letters = np.zeros(img.shape, bool)
     lboxes = []
-    for _, x0, y0, x1, y1, old, new_ in getattr(_rewrite_chords, "drawn", []):
+    roots_ = getattr(_rewrite_chords, "roots", [])
+    for k_, (_, x0, y0, x1, y1, old, new_) in enumerate(getattr(_rewrite_chords, "drawn", [])):
         if new_ and new_ != old:
-            lboxes.append((max(0, int(y0) - 1), int(y1) + 2, max(0, int(x0) - 1), int(x1) + 2))
+            # 글자는 근음 대문자 바닥 위에 있다 (g·j·p·y·/ 가 있으면 0.3배 더 아래까지). 상자가 글자 밑의 이음줄까지 품었으면 바닥
+            # 아래는 글자가 아니라 곡선이다 (이 세상의 부요함보다 끝 줄 E♭: 두 이음줄이 겹친 굵은 첫머리가 상자째 지워졌다)
+            yb = int(y1) + 2
+            r_ = roots_[k_] if k_ < len(roots_) else None
+            if r_:
+                drop = 0.3 if any(ch in old for ch in "gjpy/") else 0.08
+                yb = min(yb, int(r_[3] + drop * (r_[3] - r_[1])) + 2)
+            lboxes.append((max(0, int(y0) - 1), max(int(y0), yb), max(0, int(x0) - 1), int(x1) + 2))
             letters[lboxes[-1][0]:lboxes[-1][1], lboxes[-1][2]:lboxes[-1][3]] = True
     # Vision 상자가 글자 일부만 잡으면(지금은 엘리야 E: 아래 절반) 글자가 지운 상자 밖으로 나가 기둥처럼 보인다.
     # 글자만 한 덩어리가 글자 상자에 걸리면 옛 글자다 (빔·긴 이음줄처럼 큰 것은 글자에 걸려도 되살린다)
@@ -2748,7 +2924,7 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
                 m[ya:yb, xa:xb] |= part & lit_b
             else:
                 # 글자가 붙은 덩어리(이 세상: 이음줄이 Fm의 F에 닿는다)는 상자 밖에서 들어오는 가는 곡선을 따라 상자 안의 가는 잉크
-                # (세로 런 0.4il 이하)만 잇는다. 글자 기둥은 굵어서 거기서 멈춘다
+                # (세로 런 0.5il 이하)만 잇는다. 글자 기둥은 굵어서 거기서 멈춘다
                 g0, g1, h0, h1 = max(0, ya - 2), min(labels.shape[0], yb + 2), max(0, xa - 2), min(labels.shape[1], xb + 2)
                 comp = labels[g0:g1, h0:h1] == i
                 cvr = np.zeros(comp.shape, np.int32)
@@ -2758,7 +2934,7 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
                         d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
                         for a_, b_ in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
                             cvr[a_:b_, c] = b_ - a_
-                thin_ = comp & (cvr <= 0.4 * il)
+                thin_ = comp & (cvr <= 0.5 * il)                      # 비스듬히 내려가는 곡선은 세로 런이 두께보다 길다 (0.4il이면 끊겼다)
                 inner = np.zeros_like(thin_)
                 inner[ya - g0:yb - g0, xa - h0:xb - h0] = True
                 seed = thin_ & ~inner                              # 상자 바로 밖(2px 테)의 가는 곡선
@@ -2771,7 +2947,47 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
                 if not ids_:
                     continue
                 grow = np.isin(tl, list(ids_)) & inner
+                # 글자 기둥이 곡선을 가로지른 곳은 굵어서 가는 틈(기둥 폭)으로 끊긴다: 양옆이 곡선인 0.3il 안의 옛 잉크는 잇는다
+                kx = max(3, int(0.3 * il)) | 1
+                grow |= (cv2.morphologyEx(grow.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((1, kx), np.uint8)) > 0) & comp & inner
                 m[g0:g1, h0:h1] |= grow & sub_lit[g0:g1, h0:h1]
+    # 기둥 끝: 오선 위로 나온 위로 뻗는 기둥의 끝이 코드 글자 옆에 있으면 상자째 지워지고, 글자에 닿아 있어 옛 글자로 보고 안
+    # 되살렸다 (지금은 엘리야 다섯째 줄: A 옆 2분음표 기둥 끝). 맨 윗줄 바로 위에서 지워진 잉크의 좁은 열 묶음(폭 0.35il 아래) 중,
+    # 줄 밑으로 같은 열에 잉크가 0.8il 넘게 이어지되 오선을 다 가로지르지는 않는 것(마디줄이 아니다)은 기둥이다: 줄에서 위로
+    # 이어진 세로 런만 되살린다 (옆에 붙은 글자 획은 다른 열이다)
+    for sys_ in systems:
+        st = sys_.staff
+        top = st.lines[0]
+        ra = top
+        while ra - 1 >= 0 and rows[ra - 1] and top - ra < 8:
+            ra -= 1
+        rb = top
+        while rb + 1 < img.shape[0] and rows[rb + 1] and rb - top < 8:
+            rb += 1
+        if not (Y0 < ra - 2 and rb + 2 < Y1):
+            continue
+        above = lit[max(0, ra - int(0.5 * il)):ra].any(axis=0)          # 지운 상자가 줄 바로 위까지 안 올 수도 있다
+        above[:X0] = False
+        above[X1:] = False
+        # 열마다: 줄 밑으로 잉크가 0.8il 넘게 이어지되 오선을 다 가로지르지는 않는다 (글자 발이 줄에 닿은 열은 밑이 희다)
+        sh = int(st.bottom - st.top)
+        for c in np.flatnonzero(above):
+            col = before[rb + 1:rb + 1 + sh, c] < 128
+            run = int(np.argmin(col)) if not col.all() else len(col)
+            above[c] = 0.8 * il <= run < 0.85 * sh
+        d = np.diff(np.r_[0, above.astype(np.int8), 0])
+        for c0, c1 in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
+            if c1 - c0 > 0.35 * il:
+                continue
+            col_above = (before[max(0, ra - int(3 * il)):ra, c0:c1] < 150).any(axis=1)      # 흐린 기둥은 가운데 한두 열만 어둡다
+            up = 0
+            while up < len(col_above) and col_above[len(col_above) - 1 - up]:
+                up += 1
+            if up:
+                seg = np.zeros(m.shape, bool)
+                seg[ra - up - Y0:ra - Y0, c0 - X0:c1 - X0] = True
+                m |= seg & sub_lit
+                TIP_LOG.append((int(c0), int(ra - up), int(c1), int(ra)))
     # 새 코드 글자 하나하나의 상자(+0.15il)는 되살리지 않는다: 새 글자가 옛 것보다 넓으면 되살린 이음줄이 글자를 긋는다
     # (모든 능력 C♯m⁷: 옮기지 못한 붙임줄이 C의 몸통을 지났다). 곡선은 글자 뒤로 지나가게 끊긴다. 글자마다 따로 잰다: 코드 전체
     # 상자로 하면 키 작은 m 위를 지나는 이음줄까지 비었다 (이 세상 Gm)
@@ -2805,7 +3021,7 @@ def _restore_after_chords(img: np.ndarray, before: np.ndarray, systems, ink: np.
             draw_head(img, hx_, hy_, hw_, hh_, hollow_, il)
 
 
-def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes, forced: dict | None = None) -> int:
+def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes, forced: dict | None = None, heads=()) -> int:
     from . import chordoverlay
     from .chordoverlay import Chord
     forced = forced or {}
@@ -2825,7 +3041,9 @@ def _rewrite_chords(page, semitones: int, img: np.ndarray, boxes, forced: dict |
     ink = (page.binary < 128).astype(np.uint8)
     rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     font = chordoverlay.pick_font(ink, chords)
-    rgb = chordoverlay.draw(rgb, ink, chords, font, uniform=True, erase_box=page.scale > 1.5)
+    rgb = chordoverlay.draw(rgb, ink, chords, font, uniform=True, erase_box=page.scale > 1.5, heads=heads)
     img[:] = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     _rewrite_chords.drawn = [(c.col, c.x0, c.y0, c.x1, c.y1, c.text, c.new) for c in chords]
+    _rewrite_chords.roots = list(getattr(chordoverlay.draw, "roots", []))
+    _rewrite_chords.lifted = list(getattr(chordoverlay.draw, "lifted", []))
     return sum(1 for c in chords if c.new and c.new != c.text)

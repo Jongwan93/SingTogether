@@ -45,7 +45,7 @@ def _run(img: Path, semitones: int, llm: str, work: Path) -> dict:
     res = st["result"]
     if res.ndim == 3:
         res = cv2.cvtColor(res, cv2.COLOR_BGR2GRAY)
-    return {"page": st["page"], "systems": st["systems"], "il": st["il"], "plans": st["plans_all"], "keysigs": st["keysigs"], "arcs": st.get("moved_arcs", []), "result": res,
+    return {"page": st["page"], "systems": st["systems"], "il": st["il"], "plans": st["plans_all"], "keysigs": st["keysigs"], "arcs": st.get("moved_arcs", []), "lifted": st.get("lifted_chords", []), "result": res,
             "drawn": list(st.get("drawn_chords", [])), "erased": list(getattr(chordoverlay.draw, "erased", [])),
             "source": rep.chord_source}
 
@@ -114,6 +114,8 @@ def check_symbols(truth: list[dict], allow: list, r: dict, f: float) -> list[dic
     for box in allow:
         x0, y0, x1, y1 = _scaled(box, f)
         skip[max(0, y0):y1, max(0, x0):x1] = True
+    for x0, y0, x1, y1 in r.get("lifted", []):        # 올라온 머리를 피해 위로 올려 쓴 코드 글자
+        new_text[max(0, int(y0) - pad):int(y1) + pad, max(0, int(x0) - pad):int(x1) + pad] = True
     for (s, plans), ks in zip(r["plans"], r["keysigs"]):   # 조표·박자표를 다시 쓰는 자리: 오선 왼쪽 끝 ~ 첫 음표 앞 (♯·♭이 오선 위로 나온다)
         first = min((p.head.x for p in plans), default=ks[3] + 2 * il)
         # 새 조표가 더 길고 박자표도 다시 쓴다: 자리가 좁으면 첫 머리 위까지 쓴다 (주님 한 분만으로: 1♯ → 3♯, 셋째 ♯이 첫 음 위).
@@ -130,10 +132,16 @@ def check_symbols(truth: list[dict], allow: list, r: dict, f: float) -> list[dic
             ya, yb = min(h.y, y_new) - 0.8 * il, max(h.y, y_new) + 0.8 * il
             if ya < s.staff.top:
                 yb = max(yb, s.staff.top)
-            skip[max(0, int(ya)):int(yb), max(0, int(h.x - 1.1 * il)):int(h.x + 1.1 * il)] = True
+            # 오선 위로 올라가 덧줄이 생긴 머리는 덧줄 폭만큼 (머리 폭 + 양쪽 0.5il)
+            half = (h.w / 2 + 0.7 * il) if y_new < s.staff.top - 0.75 * il else 1.1 * il
+            skip[max(0, int(ya)):int(yb), max(0, int(h.x - half)):int(h.x + half)] = True
             for b in (p.acc_old[1] if p.acc_old else None, p.dot):
                 if b:
                     skip[max(0, b[1] - pad):b[3] + pad, max(0, b[0] - pad):b[2] + pad] = True
+            if p.dot and p.step_new != p.step_old:        # 점의 새 자리: 칸 (줄 위 음이면 바로 위 칸). 오선 위로 올라가면 코드 띠에 든다
+                cy = s.staff.bottom - (p.step_new if p.step_new % 2 else p.step_new + 1) * il / 2
+                hh = (p.dot[3] - p.dot[1]) / 2 + pad
+                skip[max(0, int(cy - hh)):int(cy + hh) + 1, max(0, p.dot[0] - pad):p.dot[2] + pad] = True
     out = []
     min_area = 0.06 * il * il
     # 새 코드 글자가 실제로 차지한 상자 (+0.15il): 거기서 지나가던 곡선이 끊긴 것은 글자 뒤로 지나가게 일부러 비운 것이다
