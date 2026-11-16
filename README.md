@@ -14,14 +14,6 @@ Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) al
 
 ![Hold Shift, drag a score onto the ring of −5 … +5, drop it on −2: the score is read and Song (-2, F).png appears next to the original](docs/ring-semitones.gif)
 
-```
-Song.txt       →  drop on +2  →  Song (+2, A).txt
-Song.musicxml  →  drop on −3  →  Song (-3, E).musicxml
-Song.png       →  drop on −2  →  Song (-2, F).png   (notes, key signature and chords moved on the picture)
-Song.pdf       →  drop on −2  →  Song (-2, F).png
-Chart.jpg      →  drop on +2  →  Chart (+2, A).jpg   (same image, new chords)
-```
-
 ## Install
 
 **You need a Mac with Apple Silicon (M1 or later) and macOS 14 (Sonoma) or later.**
