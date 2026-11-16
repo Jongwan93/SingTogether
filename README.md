@@ -12,7 +12,7 @@ A macOS menu bar app that transposes sheet music to the key you can actually sin
 Drag a score, pick a key, and a transposed copy appears next to the original. The original is never touched.
 Text chord sheets, MusicXML, and pictures of scores (web images, scans, PDFs) all work.
 
-![Hold Shift, drag a score onto the ring, drop it on −2: Song (-2, F).png appears next to the original](docs/ring.gif)
+![Hold Shift, drag a score onto the ring of −5 … +5, drop it on −2: the score is read and Song (-2, F).png appears next to the original](docs/ring.gif)
 
 ```
 Song.txt       →  drop on +2  →  Song (+2, A).txt
