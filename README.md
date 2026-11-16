@@ -27,7 +27,7 @@ Intel Macs are not supported.
    - macOS 15 or later: double-click the app, click **Done**, then open **System Settings → Privacy & Security**,
      scroll down to *"SingTogether" was blocked* and click **Open Anyway**.
    - macOS 14: right-click the app and choose **Open**, then **Open** again.
-4. A ♪ icon appears in the menu bar. Everything needed to read image scores is inside the app.
+4. A ♪ icon appears in the menu bar. For image scores, also set up an [AI reader](#ai-reader-for-chords-and-lyrics).
    If the app was opened from Downloads or the disk image, it offers to move itself to Applications.
 
 macOS may ask once for permission to access the Desktop or Documents folder.
@@ -53,9 +53,9 @@ For images and PDFs the app first has to find the notes and read the chords, whi
 
 Nothing to try it on? [`samples/`](samples/) has three public-domain hymns as clean score images: Amazing Grace, Silent Night and Holy, Holy, Holy. Drop one on the ring.
 
-## AI reader for chords and lyrics (optional)
+## AI reader for chords and lyrics
 
-Notes are always found on your Mac. Chords (and the lyrics of chord charts) are read much more accurately when an AI command-line tool is installed and signed in:
+Image scores need an AI command-line tool, installed and signed in. Notes are found on your Mac; the AI reads the chords (and the lyrics of chord charts). Use one of:
 
 - **Claude:** [Claude Code](https://claude.com/claude-code) (`claude`), signed in with a Claude account.
 - **ChatGPT:** OpenAI [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), signed in with a ChatGPT account (`codex login`).
@@ -77,7 +77,7 @@ With **Apple Vision only**, nothing leaves your Mac except a once-a-day version 
 - **Open the review window after reading an image score**, and **play a sound** when a file is created.
 - **Check for updates when the app starts.**
 - **Transposing:** when the new key can be written both ways (F♯ or G♭), follow the original (a ♯ score gets F♯, a ♭ score gets G♭), always sharps, or always flats. And whether the result of an image score is checked against the original and fixed.
-- **Reading image scores:** Claude, ChatGPT, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics-optional)), with the sign-in status and a **Check sign-in** button.
+- **Reading image scores:** Claude, ChatGPT, Gemini, or Apple Vision only (see [AI reader](#ai-reader-for-chords-and-lyrics)), with the sign-in status and a **Check sign-in** button.
 - **Recognition cache:** how much space the remembered AI readings and chord charts take, and a button to clear it.
 
 ## License
