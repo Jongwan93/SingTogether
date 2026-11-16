@@ -1,47 +1,68 @@
-SingTogether License
+SingTogether
+Copyright (c) 2026 Jongwan Hur
 
-Copyright (c) 2026 Jongwan Hur. All rights reserved.
+Jongwan Hur, the licensor, makes SingTogether available under the PolyForm Strict License 1.0.0, which follows.
+Software by others that comes with SingTogether is licensed by its authors under their own terms: see THIRD_PARTY.md.
+To ask for any other permission, for example commercial use, open an issue at https://github.com/Jongwan93/SingTogether/issues.
 
-This license applies to SingTogether 0.5.9 and every later version: the application, its source
-code and its documentation ("the Software"). Versions 0.1 to 0.5.8 were published under the GNU
-Affero General Public License v3.0 and stay available under that license; this license does not
-change the terms of those versions.
+---
 
-1. Use.
-   You may download, install and use the Software free of charge, as it is published by the
-   copyright holder. You may also build it from the source code published by the copyright
-   holder, for your own use.
+# PolyForm Strict License 1.0.0
 
-2. What you may not do.
-   Without written permission from the copyright holder, you may not
-   (a) distribute, publish, sublicense, sell, rent or lease the Software or any copy of it, in
-       whole or in part, alone or as part of another product or service;
-   (b) modify the Software or create works derived from it;
-   (c) remove or change any copyright, license or attribution notice in the Software.
-   The source code is published so that it can be read and so that the Software can be built for
-   the use allowed in section 1. Publishing it grants no other right.
+<https://polyformproject.org/licenses/strict/1.0.0>
 
-3. Third-party software.
-   The Software is distributed together with software written by others, which is licensed by
-   its authors under their own terms. That software and its licenses are listed in
-   THIRD_PARTY.md. Nothing in this license limits the rights you have under those terms.
+## Acceptance
 
-4. Your scores.
-   The copyright holder claims no rights in the scores you give to the Software or in the files
-   it makes from them. You are responsible for having the right to use those scores.
+In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
 
-5. No warranty.
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-   BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-   NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR
-   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-   IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+## Copyright License
 
-6. End of the license.
-   Your rights under this license end automatically if you do not keep to it.
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose, other than distributing the software or making changes or new works based on the software.
 
-7. Later versions.
-   The copyright holder may publish later versions of the Software under other terms. This
-   license keeps applying to the versions you received under it.
+## Patent License
 
-To ask for permission, open an issue at https://github.com/Jongwan93/SingTogether/issues.
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
+
+## Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+## Personal Uses
+
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
+
+**You** refers to the individual or entity agreeing to these terms.
+
+**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the software under these terms.
+
+**Use** means anything you do with the software requiring one of your licenses.

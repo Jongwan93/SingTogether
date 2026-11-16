@@ -1,6 +1,6 @@
 # Third-party software
 
-SingTogether itself is © Jongwan Hur, all rights reserved, under the terms in [LICENSE](LICENSE) (versions up to 0.5.8: AGPL-3.0).
+SingTogether itself is © Jongwan Hur, licensed under the PolyForm Strict License 1.0.0 (see [LICENSE](LICENSE)).
 The distributed app (`./dist.sh`) bundles the following packages. This file and LICENSE are in the app under
 `Contents/Resources/`; the packages' own license texts are under
 `Contents/Resources/python/lib/python3.13/site-packages/` (`*.dist-info/` and `cv2/`).

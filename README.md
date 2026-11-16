@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/Jongwan93/SingTogether/releases/latest"><img src="https://img.shields.io/github/v/release/Jongwan93/SingTogether?label=download&color=7c3aed&style=flat-square" alt="Download the latest release"></a>
   <img src="https://img.shields.io/badge/macOS%2014%2B-Apple%20Silicon-1e1b4b?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 or later, Apple Silicon">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-free%20to%20use-4f46e5?style=flat-square" alt="Free to use, all rights reserved"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-4f46e5?style=flat-square" alt="PolyForm Strict License 1.0.0"></a>
 </p>
 
 A macOS menu bar app that transposes sheet music to the key you can actually sing.
@@ -169,9 +169,9 @@ Useful `singtogether-ocr` options:
 
 ## License
 
-SingTogether is free to use, and from version 0.5.9 it is not open source: © 2026 Jongwan Hur, all rights reserved.
-You may download and use the app free of charge. You may not redistribute, modify or sell it without permission.
-The full terms are in [LICENSE](LICENSE).
+© 2026 Jongwan Hur. SingTogether is licensed under the [PolyForm Strict License 1.0.0](LICENSE): you may download and use it
+free of charge for any noncommercial purpose, which includes personal use, worship and use by churches, schools and other
+charitable organizations. You may not redistribute it, change it or build on it. For anything else, such as commercial use,
+ask for permission by [opening an issue](https://github.com/Jongwan93/SingTogether/issues).
 
-Versions 0.1 to 0.5.8 were published under the GNU Affero General Public License v3.0 and stay available under it.
 See [THIRD_PARTY.md](THIRD_PARTY.md) for the software by others that the app ships with, and their licenses.
