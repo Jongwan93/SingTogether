@@ -55,14 +55,17 @@ Nothing to try it on? [`samples/`](samples/) has three public-domain hymns as cl
 
 ## AI reader for chords and lyrics
 
-Image scores need an AI command-line tool, installed and signed in. Notes are found on your Mac; the AI reads the chords (and the lyrics of chord charts). Use one of:
+Image scores need an AI command-line tool, signed in with your own account. Notes are found on your Mac; the AI reads the chords (and the lyrics of chord charts). Use one of:
 
 - **Claude:** [Claude Code](https://claude.com/claude-code) (`claude`), signed in with a Claude account.
-- **ChatGPT:** OpenAI [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), signed in with a ChatGPT account (`codex login`).
-- **Gemini:** Google [Antigravity](https://antigravity.google) (`agy`), or the Gemini CLI (`gemini`) on a paid plan.
+- **ChatGPT:** OpenAI [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), signed in with a ChatGPT account.
+- **Gemini:** Google [Antigravity CLI](https://antigravity.google/product/antigravity-cli) (`agy`), signed in with a Google account.
 
-When the app starts it asks *Which AI should read your scores?* with a button for each, then checks that the one you picked is signed in.
-If it is not, the app tells you how to sign in and uses Apple Vision alone until you do. Change the choice later with **Reading with … — Change…** in the ♪ menu or in Settings.
+You do not have to install anything yourself. When the app starts it asks *Which AI should read your scores?* with a button for each.
+If the one you pick is not on your Mac, the app downloads it from its maker (a minute or two). Then it opens a Terminal window
+that signs you in: for Claude and ChatGPT the sign-in page opens in your browser, for Gemini you sign in when Antigravity asks
+and close the window once its agent starts. The app notices when you are signed in. Until then it uses Apple Vision alone.
+Change the choice later with **Reading with … — Change…** in the ♪ menu or in Settings.
 If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 
 **Privacy:** with an AI reader, the score image is sent to that service (Anthropic, OpenAI or Google) under your own account.

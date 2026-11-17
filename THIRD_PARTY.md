@@ -79,5 +79,6 @@ or tort (including negligence or otherwise) arising in any way out of
 the use of this software, even if advised of the possibility of such damage.
 ```
 
-Not bundled: the AI readers (Claude Code, Codex CLI, Antigravity, Gemini CLI) are installed and signed in by the user.
+Not bundled: the AI readers (Claude Code, Codex CLI, Antigravity CLI). When the user picks one, the app downloads it from its
+maker into `~/.local/bin`, under the maker's own terms, and the user signs in with their own account.
 macOS frameworks (Vision, Quartz, PDFKit, Accelerate) are part of the system.
