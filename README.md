@@ -23,14 +23,41 @@ Intel Macs are not supported.
 
 1. Download `SingTogether-<version>.dmg` from the [latest release](https://github.com/Jongwan93/SingTogether/releases/latest).
 2. Open it and drag SingTogether to Applications.
-3. The first time, macOS blocks the app because it is not notarized. Allow it once:
-   - macOS 15 or later: double-click the app, click **Done**, then open **System Settings → Privacy & Security**,
-     scroll down to *"SingTogether" was blocked* and click **Open Anyway**.
-   - macOS 14: right-click the app and choose **Open**, then **Open** again.
+3. The first time, macOS stops the app with *"SingTogether" Not Opened*. This is expected. Allow it once as described in
+   [Opening the app the first time](#opening-the-app-the-first-time).
 4. A ♪ icon appears in the menu bar. For image scores, also set up an [AI reader](#ai-reader-for-chords-and-lyrics).
    If the app was opened from Downloads or the disk image, it offers to move itself to Applications.
 
 macOS may ask once for permission to access the Desktop or Documents folder.
+
+### Opening the app the first time
+
+<img src="docs/not-opened.png" width="257" align="right" alt="&quot;SingTogether&quot; Not Opened. Apple could not verify &quot;SingTogether&quot; is free of malware that may harm your Mac or compromise your privacy. Done">
+
+The first time you open SingTogether, macOS shows *"SingTogether" Not Opened: Apple could not verify "SingTogether" is
+free of malware that may harm your Mac or compromise your privacy.*
+
+macOS shows this for every app that Apple has not checked in advance (this check is called notarization).
+SingTogether is not notarized yet, so you see this message. It does not mean macOS found anything wrong with the app.
+You allow the app once, and after that it opens like any other app.
+
+**macOS 15 (Sequoia) or later**
+
+1. Double-click SingTogether in Applications. When *"SingTogether" Not Opened* appears, click **Done**.
+2. Open **System Settings → Privacy & Security** and scroll down to **Security**.
+3. Next to *"SingTogether" was blocked to protect your Mac*, click **Open Anyway**.
+   macOS asks once more: click **Open Anyway** and confirm with your Mac password or Touch ID.
+
+![System Settings, Privacy & Security: "SingTogether" was blocked to protect your Mac, with the Open Anyway button](docs/open-anyway.png)
+
+The *was blocked* line stays there for about an hour after you tried to open the app. If you do not see it, double-click
+the app again, click **Done** and go back to **Privacy & Security**. You do not need to change *Allow applications from*.
+
+**macOS 14 (Sonoma)**
+
+Control-click (or right-click) SingTogether in Applications, choose **Open**, then click **Open** in the message.
+
+When you install a new version from a new disk image, macOS may ask again. Do the same steps.
 
 ## How to use
 
