@@ -89,9 +89,10 @@ Image scores need an AI command-line tool, signed in with your own account. Note
 - **Gemini:** Google [Antigravity CLI](https://antigravity.google/product/antigravity-cli) (`agy`), signed in with a Google account.
 
 You do not have to install anything yourself. When the app starts it asks *Which AI should read your scores?* with a button for each.
-If the one you pick is not on your Mac, the app downloads it from its maker (a minute or two). Then it opens a Terminal window
-that signs you in: for Claude and ChatGPT the sign-in page opens in your browser, for Gemini you sign in when Antigravity asks
-and close the window once its agent starts. The app notices when you are signed in. Until then it uses Apple Vision alone.
+If the one you pick is not on your Mac, the app downloads it from its maker (a minute or two). Then the sign-in page opens
+in your browser and you sign in with your own account. No Terminal is needed. If the page shows a code instead, paste it into
+the small SingTogether window. Gemini's sign-in page waits one minute; if it expires, click **Try Again**.
+The app notices when you are signed in. Until then it uses Apple Vision alone.
 Change the choice later with **Reading with … — Change…** in the ♪ menu or in Settings.
 If the AI answers with something that does not match the image (a different song, made-up chords), the answer is discarded and Apple Vision is used for that score.
 
